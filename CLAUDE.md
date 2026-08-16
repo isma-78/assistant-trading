@@ -201,7 +201,7 @@ Traiter ce fichier avec une vigilance renforcée :
       VPS** (`scripts/backup_and_sync.sh`, cron quotidien 03:00, Scaleway
       Object Storage — voir détail ci-dessus)
 
-## Palier P1 — en cours (ingestion, classification, extraction, audit)
+## Palier P1 — terminé et vérifié sur données réelles (16/08/2026)
 
 Voir `docs/DECISIONS.md` pour le raisonnement détaillé de chaque écart au
 CDC listé ci-dessous.
@@ -271,7 +271,7 @@ CDC listé ci-dessous.
 - Le listener tourne en direct sur le VPS (`tmux telegram_listener`),
   en observation, prêt à capturer le prochain vrai message.
 
-### À surveiller dans les prochains jours (pas d'action requise pour l'instant)
+### À surveiller (hérité de P1, toujours ouvert)
 
 - La prochaine vraie Matinale, pour calibrer `extract_matinale()` sur le
   format actuel (celui du backfill, fév-mars 2025, était un simple titre
@@ -280,6 +280,88 @@ CDC listé ci-dessous.
 - Calibration empirique GOLD/US100/US30 (`calibrate_pip_value.py`) un
   jour de semaine, marché fermé le week-end (déjà noté au palier P0).
 - Exemples du canal "éducatif" à fournir par Ismaël quand disponibles.
+
+## Palier P2 — en cours (exécution démo autonome, analyse de trade)
+
+Écart de phasage assumé, pas choisi seul : le §4.8 du CDC prévoit pour
+P2 une "exécution démo avec validation manuelle (rodage)" — l'autonomie
+complète sans validation par trade est une demande explicite d'Ismaël
+pour ce palier (16/08/2026), pas une décision d'architecture prise en
+autonomie. Voir `docs/DECISIONS.md` pour cette entrée et toutes les
+autres de ce palier (client Capital.com, ordres limite, péremption,
+schéma DB, bug de verrou SQLite trouvé et corrigé, etc.).
+
+### Fait
+
+- `src/capital_client.py` (nouveau) : client HTTP Capital.com,
+  factorise la logique déjà dupliquée dans 3 scripts P0. `requests`
+  passe de dépendance de fait à dépendance déclarée. 23 tests.
+- `src/market_data.py` : prix courant, bougies, ATR(14) de Wilder,
+  moyenne mobile, conversion EUR **en direct** (lève le TODO bloquant de
+  `asset_whitelist.py` — `build_asset_whitelist()` accepte désormais des
+  taux rafraîchis via `market_data.get_eur_conversion_rate()`). 13 tests
+  + 2 sur `asset_whitelist`.
+- `src/validator.py` — **module critique, 100% de couverture** :
+  revalidation d'un signal juste avant exécution (liste blanche, marché
+  ouvert, péremption §2.8 — tolérance = 50% de la distance de stop,
+  valeur non fixée par le CDC, choix documenté). 11 tests.
+- `src/capital_manager.py` étendu : `apply_trade_result()` — règle de
+  réinvestissement des 50% (§2.3, gain → moitié enveloppe / moitié
+  réserve globale sanctuarisée). Toujours 100% couvert.
+- `src/envelope_store.py` (nouveau) : persistance DB des enveloppes et
+  de la réserve globale (`envelopes`, `envelope_ledger`,
+  `reserve_ledger`), sans modifier `capital_manager.py` lui-même. 6 tests.
+- `src/risk_engine.py` étendu : `compute_r_multiple`/
+  `compute_weighted_r_multiple` (§2.1, §2.10) — un seul endroit pour
+  tout calcul de R, jamais dupliqué dans `executor.py`. Toujours 100%
+  couvert.
+- **Étape 0 — migration DB** : `trades.deal_id` ajouté (identifiant
+  broker, absent du §4.5 — oubli du schéma d'origine) ; nouvelle table
+  `trade_analysis` (partie déterministe + narratif LLM, colonnes
+  séparées pour qu'aucune confusion ne soit possible entre les deux,
+  invariant #9).
+- `src/executor.py` (nouveau, le plus gros module) : ordres **limite
+  uniquement** (§2.8, jamais au marché — vérifié en direct sur le
+  compte démo avant implémentation), gestion TP1(50%)/TP2(30%)/TP3(20%
+  sous trailing 2×ATR, §2.10), SL au breakeven dès TP1, détection de
+  remplissage d'ordre, annulation des ordres périmés. Partie
+  décision/calcul (`decide_entry`, `compute_tp_allocations`,
+  `evaluate_position_management`, `compute_trailing_stop_level`) à
+  **100% de couverture** (demande explicite d'Ismaël) ; orchestration
+  I/O à 92% (cohérent avec le traitement déjà appliqué à
+  `telegram_listener.run_listener`). 29 tests. Bug réel trouvé et
+  corrigé par ces tests : verrou SQLite (`database is locked`) causé par
+  une `connection_scope` imbriquée dans une autre.
+- `src/trade_analyzer.py` (nouveau) : correspond au module
+  `post_trade_review` du CDC (§4.4, §3.10) sous un autre nom.
+  `compute_trade_features()` déterministe (R-multiple lu, jamais
+  recalculé, denouement, durée, écart signal/exécution, contexte) +
+  `generate_narrative_summary()` (Anthropic, modèle rapide/économique
+  `claude-haiku-4-5-20251001` — §3.1) avec garde-fou de sortie
+  déterministe (`_check_narrative_guardrail`, motifs de jugement
+  interdits, testé y compris pour ne jamais bloquer le vocabulaire
+  neutre du CDC comme "trade gagnant"). 19 tests.
+- `anthropic` et `requests` ajoutés à `requirements.txt` (déclarés,
+  installés localement et sur le VPS).
+- 211 tests passent, aucune régression. Couverture 100% vérifiée sur
+  `risk_engine`/`capital_manager`/`go_nogo`/`validator`.
+
+### Pas encore fait / vérifié
+
+- **Déploiement VPS et démarrage de la boucle autonome** : le code est
+  prêt et testé localement, reste à déployer sur le VPS et à décider
+  avec Ismaël du moment de démarrage effectif de `run_executor_loop`
+  (pas encore écrite comme point d'entrée `if __name__ == "__main__"` —
+  seules les fonctions qu'elle appellerait sont construites et testées).
+- **Détection de remplissage d'ordre limite non revalidée sur un
+  remplissage réel** : `check_pending_fills` suppose que Capital.com
+  conserve le même `dealId` entre l'ordre limite et la position
+  résultante (observé lors des tests manuels de placement/annulation,
+  mais aucun ordre n'a réellement été rempli pendant ces tests — le
+  niveau était toujours choisi pour ne pas se déclencher). À confirmer
+  au premier remplissage réel avant de faire confiance à la boucle sans
+  supervision prolongée.
+- Calibration GOLD/US100/US30 toujours bloquée le week-end (hérité de P0/P1).
 
 ## Ce qu'il ne faut jamais faire
 

@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS suivi_events (
 CREATE TABLE IF NOT EXISTS trades (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     signal_id INTEGER REFERENCES signals(id),
+    deal_id TEXT,                  -- ajout P2 hors §4.5 : id broker (Capital.com), voir docs/DECISIONS.md
     source TEXT NOT NULL,
     actif TEXT NOT NULL,
     mode TEXT NOT NULL,            -- "demo" | "reel"
@@ -299,6 +300,38 @@ CREATE TABLE IF NOT EXISTS go_nogo_events (
     checked_at TEXT NOT NULL,
     allowed INTEGER NOT NULL,
     reason TEXT NOT NULL
+);
+
+-- ---------------------------------------------------------------------
+-- Analyse de trade — ajout P2, hors §4.5 (voir docs/DECISIONS.md).
+-- Deux parties strictement séparées dans le même schéma pour qu'aucune
+-- confusion ne soit possible entre les deux (invariant #9) : les
+-- colonnes déterministes sont calculées par trade_analyzer.py sans LLM ;
+-- resume_narratif est produit par un LLM à partir de CES valeurs déjà
+-- calculées, jamais l'inverse, et ne doit jamais contenir de jugement.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS trade_analysis (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id INTEGER NOT NULL REFERENCES trades(id),
+    signal_id INTEGER REFERENCES signals(id),
+
+    -- Partie déterministe (calculée, jamais par un LLM)
+    r_multiple_realise REAL NOT NULL,
+    denouement TEXT NOT NULL,            -- "sl_hit" | "tp1_hit" | "tp2_hit" | "tp3_hit" | "cloture_manuelle"
+    duree_secondes INTEGER NOT NULL,
+    ecart_signal_execution REAL,         -- prix_entree_reel - prix d'entrée du signal
+    actif TEXT NOT NULL,
+    confiance_signal REAL,
+    heure_ouverture INTEGER NOT NULL,    -- 0-23, UTC
+    jour_semaine INTEGER NOT NULL,       -- 0=lundi ... 6=dimanche
+    boosted INTEGER NOT NULL,
+
+    -- Partie LLM (narrative uniquement — jamais un jugement, invariant #9)
+    resume_narratif TEXT,
+    resume_genere_at TEXT,
+    resume_modele TEXT,
+
+    created_at TEXT NOT NULL
 );
 """
 

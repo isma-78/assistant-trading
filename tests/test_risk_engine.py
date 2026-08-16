@@ -12,6 +12,8 @@ from src.risk_engine import (
     RiskEngine,
     RiskRejectionReason,
     TradeSignal,
+    compute_r_multiple,
+    compute_weighted_r_multiple,
 )
 
 
@@ -324,3 +326,51 @@ def test_stop_update_internal_error_is_caught_fail_safe():
     decision = engine.evaluate_stop_update(current_stop="abc", new_stop=1.1010, direction="long")
     assert decision.approved is False
     assert decision.reason == RiskRejectionReason.INTERNAL_ERROR
+
+
+# --- compute_r_multiple / compute_weighted_r_multiple (§2.1, §2.10) ---
+
+def test_compute_r_multiple_long_stop_hit_is_minus_one():
+    r = compute_r_multiple("long", entry_price=100.0, stop_price=99.0, exit_price=99.0)
+    assert r == pytest.approx(-1.0)
+
+
+def test_compute_r_multiple_long_two_r_target_hit():
+    r = compute_r_multiple("long", entry_price=100.0, stop_price=99.0, exit_price=102.0)
+    assert r == pytest.approx(2.0)
+
+
+def test_compute_r_multiple_short_stop_hit_is_minus_one():
+    r = compute_r_multiple("short", entry_price=100.0, stop_price=101.0, exit_price=101.0)
+    assert r == pytest.approx(-1.0)
+
+
+def test_compute_r_multiple_short_profit_target():
+    r = compute_r_multiple("short", entry_price=100.0, stop_price=101.0, exit_price=97.0)
+    assert r == pytest.approx(3.0)
+
+
+def test_compute_r_multiple_zero_stop_distance_raises():
+    with pytest.raises(ValueError):
+        compute_r_multiple("long", entry_price=100.0, stop_price=100.0, exit_price=101.0)
+
+
+def test_compute_r_multiple_unknown_direction_raises():
+    with pytest.raises(ValueError):
+        compute_r_multiple("sideways", entry_price=100.0, stop_price=99.0, exit_price=101.0)
+
+
+def test_compute_weighted_r_multiple_tp1_tp2_tp3_split():
+    # §2.10 : TP1=50% à +1R, TP2=30% à +2R, TP3=20% à +3R
+    r_total = compute_weighted_r_multiple([(0.5, 1.0), (0.3, 2.0), (0.2, 3.0)])
+    assert r_total == pytest.approx(0.5 * 1.0 + 0.3 * 2.0 + 0.2 * 3.0)
+
+
+def test_compute_weighted_r_multiple_single_full_close():
+    r_total = compute_weighted_r_multiple([(1.0, -1.0)])
+    assert r_total == pytest.approx(-1.0)
+
+
+def test_compute_weighted_r_multiple_fractions_not_summing_to_one_raises():
+    with pytest.raises(ValueError):
+        compute_weighted_r_multiple([(0.5, 1.0), (0.3, 2.0)])

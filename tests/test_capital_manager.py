@@ -5,7 +5,7 @@ exigée avant toute exécution même en démo (invariant #2 du projet).
 
 import pytest
 
-from src.capital_manager import CapitalManager
+from src.capital_manager import CapitalManager, apply_trade_result
 
 
 def test_init_valid():
@@ -63,3 +63,44 @@ def test_is_depleted_true_and_false():
     assert cm.is_depleted() is False
     cm.apply_trade_pnl(-500.0, note="épuisement")
     assert cm.is_depleted() is True
+
+
+def test_apply_trade_result_winning_trade_splits_50_50():
+    envelope = CapitalManager(initial_balance=500.0)
+
+    reserve_share, reserve_total = apply_trade_result(envelope, pnl=20.0, reserve_total_before=0.0, note="trade gagnant")
+
+    assert envelope.balance == 510.0  # +50% du gain
+    assert reserve_share == 10.0
+    assert reserve_total == 10.0
+
+
+def test_apply_trade_result_losing_trade_fully_imputed_to_envelope():
+    envelope = CapitalManager(initial_balance=500.0)
+
+    reserve_share, reserve_total = apply_trade_result(envelope, pnl=-30.0, reserve_total_before=100.0, note="trade perdant")
+
+    assert envelope.balance == 470.0
+    assert reserve_share == 0.0
+    assert reserve_total == 100.0  # jamais touchée par une perte
+
+
+def test_apply_trade_result_reserve_never_reduced_by_subsequent_loss():
+    # Garde-fou explicite du §2.3 : la réserve est "sanctuarisée
+    # définitivement, même en cas de série de pertes ultérieure".
+    envelope = CapitalManager(initial_balance=500.0)
+
+    _, reserve_after_gain = apply_trade_result(envelope, pnl=40.0, reserve_total_before=0.0, note="gain")
+    _, reserve_after_loss = apply_trade_result(envelope, pnl=-1000.0, reserve_total_before=reserve_after_gain, note="grosse perte")
+
+    assert reserve_after_loss == reserve_after_gain
+
+
+def test_apply_trade_result_zero_pnl_treated_as_no_gain():
+    envelope = CapitalManager(initial_balance=500.0)
+
+    reserve_share, reserve_total = apply_trade_result(envelope, pnl=0.0, reserve_total_before=100.0, note="breakeven")
+
+    assert envelope.balance == 500.0
+    assert reserve_share == 0.0
+    assert reserve_total == 100.0

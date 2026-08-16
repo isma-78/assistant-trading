@@ -20,7 +20,7 @@ Ce module ne touche jamais au broker. Il produit des décisions
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 class RiskRejectionReason(str, Enum):
@@ -265,3 +265,41 @@ class RiskEngine:
                 reason=RiskRejectionReason.INTERNAL_ERROR,
                 detail=f"Erreur interne bloquante, mise à jour refusée par sécurité : {exc}",
             )
+
+
+def compute_r_multiple(direction: str, entry_price: float, stop_price: float, exit_price: float) -> float:
+    """R-multiple d'une sortie unique (§2.1) : distance parcourue
+    favorable, exprimée en multiples du risque initial (distance
+    entrée-stop). Un stop touché vaut par définition -1R.
+
+    Lève ValueError sur une entrée incohérente (stop_distance <= 0,
+    direction inconnue) plutôt que de renvoyer un chiffre trompeur —
+    l'appelant (executor.py) est responsable de traiter cette erreur
+    comme un échec de clôture à investiguer, jamais comme un R silencieux."""
+    stop_distance = abs(entry_price - stop_price)
+    if stop_distance <= 0:
+        raise ValueError("stop_distance doit être > 0 pour calculer un R-multiple")
+    if direction == "long":
+        moved = exit_price - entry_price
+    elif direction == "short":
+        moved = entry_price - exit_price
+    else:
+        raise ValueError(f"direction inconnue : {direction!r}")
+    return moved / stop_distance
+
+
+def compute_weighted_r_multiple(partial_r_multiples: List[Tuple[float, float]]) -> float:
+    """R total sur clôtures partielles (§2.10) : R_total = Σ(fraction ×
+    R atteint au palier) — jamais recalculé sur le risque restant après
+    une clôture partielle, toujours sur le risque initial (chaque
+    R-multiple d'entrée doit déjà avoir été calculé via
+    compute_r_multiple avec l'entry_price/stop_price d'origine).
+
+    `partial_r_multiples` est une liste de (fraction, r_multiple) ; les
+    fractions doivent sommer à 1.0 (position entièrement close) à
+    1e-6 près — sinon ValueError plutôt qu'un total silencieusement
+    incomplet ou en double-comptage."""
+    total_fraction = sum(fraction for fraction, _ in partial_r_multiples)
+    if abs(total_fraction - 1.0) > 1e-6:
+        raise ValueError(f"Les fractions doivent sommer à 1.0, obtenu {total_fraction}")
+    return sum(fraction * r for fraction, r in partial_r_multiples)

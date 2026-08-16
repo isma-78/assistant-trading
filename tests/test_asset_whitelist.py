@@ -6,7 +6,7 @@ que la liste blanche est structurellement cohérente avec le CDC v4 §1.2 et
 les invariants du projet.
 """
 
-from src.asset_whitelist import ASSET_WHITELIST
+from src.asset_whitelist import ASSET_WHITELIST, build_asset_whitelist
 
 EXPECTED_ASSETS = {
     "GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD",
@@ -32,3 +32,17 @@ def test_all_specs_construct_validly():
     for spec in ASSET_WHITELIST.values():
         assert spec.min_units > 0
         assert spec.pip_value_per_unit > 0
+
+
+def test_build_asset_whitelist_uses_provided_rates():
+    whitelist = build_asset_whitelist(usd_to_eur=0.9, jpy_to_eur=0.006)
+    assert set(whitelist.keys()) == EXPECTED_ASSETS
+    assert whitelist["GOLD"].pip_value_per_unit == 0.9
+    assert whitelist["EURUSD"].pip_value_per_unit == 0.9
+    assert whitelist["USDJPY"].pip_value_per_unit == 0.006
+
+
+def test_build_asset_whitelist_preserves_min_units_from_default():
+    whitelist = build_asset_whitelist(usd_to_eur=1.0, jpy_to_eur=1.0)
+    for symbol, spec in whitelist.items():
+        assert spec.min_units == ASSET_WHITELIST[symbol].min_units

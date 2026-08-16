@@ -313,6 +313,134 @@ ce type d'instruction.
 
 ---
 
+## 2026-08-16 — Palier P2 : architecture executor/validator/market_data
+
+Autonomie déléguée exercée sur l'ensemble de cette section — aucune de
+ces décisions n'a été validée au préalable, conformément au mandat
+d'Ismaël. Regroupées ici pour éviter une dizaine d'entrées séparées sur
+une seule session de travail.
+
+**Écart de phasage assumé, pas choisi** : le §4.8 du CDC prévoit pour P2
+une "exécution démo avec validation manuelle (rodage)" — l'autonomie
+complète sans validation par trade est explicitement demandée par
+Ismaël pour ce palier, pas une décision prise seul. Notée ici pour la
+traçabilité, conformément à la règle du mandat ("documenter chaque
+écart notable au CDC littéral").
+
+**`src/capital_client.py`** (nouveau) : factorise la logique Capital.com
+déjà dupliquée trois fois (session, GET/POST/DELETE/PUT, le piège
+`affectedDeals[0].dealId`) dans les scripts P0. `requests` passe de
+dépendance de fait (non déclarée) à dépendance déclarée dans
+`requirements.txt` — utilisée par 3 scripts existants sans jamais avoir
+été ajoutée officiellement.
+
+**Ordres limite, jamais au marché (§2.8)** : `place_limit_order()` via
+`POST /workingorders`, vérifié en direct sur le compte démo (ordre placé,
+visible dans `/workingorders`, annulé proprement) avant toute
+implémentation dans `executor.py` — `open_position()` (marché) reste
+disponible mais réservée aux scripts de calibration ponctuels, jamais
+utilisée par l'exécuteur.
+
+**Fenêtre de péremption d'ordre limite = 15 minutes**
+(`LIMIT_ORDER_EXPIRY_SECONDS`) : le CDC ne fixe pas de chiffre pour la
+durée de vie d'un ordre limite non exécuté. Choix documenté : au-delà
+de la latence structurelle (10-60s, §2.8), un ordre qui traîne des
+heures n'a plus de rapport avec le signal qui l'a généré — 15 minutes
+laisse une marge réaliste pour qu'un prix atteigne une zone d'entrée
+proche sans laisser un engagement fantôme indéfiniment. Ajustable sans
+migration (constante).
+
+**Tolérance de péremption de signal = 50% de la distance de stop**
+(`validator.STALENESS_FRACTION_OF_STOP_DISTANCE`) : le CDC fixe le
+principe (§2.8) sans valeur chiffrée. Choix documenté dans le docstring
+de `validator.py` : si le marché a déjà parcouru la moitié du risque
+prévu avant l'entrée, le rapport gain/risque planifié n'est plus celui
+du signal d'origine.
+
+**R-multiple dans `risk_engine.py`, pas `executor.py` ni
+`trade_analyzer.py`** : `compute_r_multiple`/`compute_weighted_r_multiple`
+ajoutées au module déjà critique et 100% couvert plutôt qu'à un nouveau
+module — un seul endroit pour tout calcul financier dont un bug se
+traduit directement en perte (§4.7), pas de duplication de la formule
+entre l'ouverture/gestion de position et l'analyse post-trade (qui *lit*
+`trades.r_multiple_total` déjà calculé, ne le recalcule jamais).
+
+**Réserve globale (§2.3) : pas un `CapitalManager`** : `apply_trade_result()`
+ajoutée à `capital_manager.py` (fonction, pas méthode — une instance de
+`CapitalManager` représente une seule enveloppe, jamais la réserve
+globale partagée entre tous les actifs). La réserve elle-même n'est pas
+un objet `CapitalManager` : son solde est un simple total, persisté via
+`reserve_ledger.reserve_totale` (`envelope_store.py`) — réutiliser
+`CapitalManager` échouait dès la construction (`initial_balance > 0`
+exigé, alors qu'une réserve démarre légitimement à 0€).
+
+**`trades.deal_id` ajouté hors §4.5** : le schéma CDC des `trades` ne
+prévoit aucune colonne pour l'identifiant de position côté broker —
+`executor.py` ne peut piloter (clôturer, resserrer le stop) une position
+ouverte sans lui. Oubli du schéma d'origine, pas un choix délibéré du
+CDC ; corrigé.
+
+**TP1/TP2 lus depuis `signals`, leur statut "touché" dérivé de
+`trade_partials`** : pas de colonnes dupliquées sur `trades` — l'état
+"quel palier est déjà passé" est entièrement reconstructible depuis
+l'historique déjà écrit (`trade_partials`), évite une source de vérité
+parallèle qui pourrait diverger.
+
+**Détection de remplissage d'ordre limite (`check_pending_fills`)** :
+suppose que Capital.com conserve le même `dealId` entre l'ordre limite
+et la position qui en résulte — comportement observé lors des tests
+manuels de ce palier, **non revalidé sur un remplissage réel** (les
+tests ont porté sur le placement/l'annulation d'ordres qui ne se
+déclenchent jamais, pas sur un déclenchement effectif — voir le rapport
+de fin de tâche). Point explicite à confirmer avant de faire confiance
+à la boucle sans supervision prolongée.
+
+**Bug réel trouvé pendant les tests — verrou SQLite** :
+`_apply_management_action` appelait `envelope_store.persist_trade_result`
+(qui ouvre sa propre transaction) depuis l'intérieur d'un
+`with connection_scope(...)` déjà ouvert → `sqlite3.OperationalError:
+database is locked`. Corrigé en séparant strictement les transactions
+séquentielles, jamais imbriquées. Aucune transaction imbriquée n'existe
+plus ailleurs dans `executor.py` (vérifié).
+
+**Couverture** : les fonctions de décision/calcul pures d'`executor.py`
+(`decide_entry`, `compute_tp_allocations`, `evaluate_position_management`
+et ses fonctions internes, `compute_trailing_stop_level`) sont à 100%
+(demande explicite d'Ismaël). L'orchestration I/O (`open_signal`,
+`manage_open_trades`, `check_pending_fills`, `cancel_stale_working_orders`)
+est à 92% de couverture globale du fichier — chemins d'erreur réseau et
+cas de repli non exhaustivement testés, cohérent avec le traitement déjà
+appliqué à `telegram_listener.run_listener()` au palier P1.
+
+---
+
+## 2026-08-16 — `go_nogo.py` non appelé dans la boucle démo
+
+**Constat** : `risk_engine.evaluate_new_entry` prend `go_nogo_ok` comme
+paramètre obligatoire et rejette toute entrée si `False`
+(`GO_NOGO_LOCKED`). Appeler `go_nogo.evaluate_go_nogo()` dans
+`run_executor_loop` (mode démo) bloquerait **systématiquement** toute
+entrée, car sa condition `configured_environment == "live"` n'est
+jamais vraie avec `CAPITAL_ENVIRONMENT=demo`.
+
+**Décision** : `run_executor_loop` construit explicitement
+`GoNoGoStatus(allowed=True, reason="mode démo — verrou réel non
+applicable")` plutôt que d'appeler `evaluate_go_nogo()`. Justifié par le
+diagramme d'architecture du CDC lui-même (§4.1) : le verrou Go/No-Go
+n'est représenté que sur la branche "EXÉCUTION RÉELLE", jamais sur
+"EXÉCUTION DÉMO continue" — les deux branches sont architecturalement
+distinctes dès la conception du CDC, ce n'est pas une réinterprétation.
+
+**Garde-fou structurel associé** : `run_executor_loop` utilise une
+constante `_DEMO_BASE_URL` codée en dur, jamais dérivée de
+`config.capital_environment` — ce module ne contient tout simplement
+aucun chemin de code vers l'API réelle Capital.com, quelle que soit la
+configuration. Le jour où un exécuteur réel sera construit (post Porte
+B, §4.8), ce sera un module séparé avec son propre appel explicite à
+`go_nogo.evaluate_go_nogo()`, pas une bascule de paramètre sur celui-ci.
+
+---
+
 ## Rappel — écarts déjà actés au palier P0 (détail dans `CLAUDE.md`)
 
 - **Broker OANDA → Capital.com** : entités OANDA UE routées vers OANDA TMS

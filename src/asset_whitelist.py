@@ -27,74 +27,74 @@ Aucun marché "_W" (week-end synthétique) n'est utilisé ici, conformément à
 la consigne projet : discover_instruments.py écarte systématiquement ces
 epics du candidat principal.
 
-TODO BLOQUANT AVANT TOUTE EXÉCUTION RÉELLE (noté le 16/08/2026) :
-_USD_TO_EUR et _JPY_TO_EUR ci-dessous sont des constantes figées au
-16/08/2026, acceptables pour la décision de liste blanche (voir
-justification ci-dessus — marge de ~20x) mais PAS pour le dimensionnement
-réel des positions (evaluate_new_entry dans risk_engine.py les utilise
-directement pour calculer `units`). Un taux figé qui dérive de la réalité
-fausse le sizing en conditions réelles, même si l'inclusion/exclusion des
-actifs reste correcte. À remplacer par un taux rafraîchi dynamiquement via
-market_data.py (module prévu dans la structure du CDC v4, pas encore
-écrit) avant tout passage en mode réel (invariant #4, verrou go_nogo.py).
+TODO BLOQUANT LEVÉ le 16/08/2026 (palier P2) : _USD_TO_EUR et _JPY_TO_EUR
+ci-dessous restent des constantes figées, désormais utilisées UNIQUEMENT
+comme valeur par défaut de `ASSET_WHITELIST` (décision de liste blanche —
+marge de ~20x, sans impact sur cette décision-là, justification ci-dessus
+inchangée). Pour tout dimensionnement réel de position, l'exécuteur doit
+appeler `build_asset_whitelist()` ci-dessous avec des taux rafraîchis en
+direct via `src/market_data.py` (`get_eur_conversion_rate`) — jamais les
+constantes statiques seules. Voir docs/DECISIONS.md (palier P2).
 """
+
+from typing import Dict
 
 from src.risk_engine import AssetSpec
 
 # Taux de change spot observés le 16/08/2026 lors de l'extraction Capital.com
-# (voir data/instrument_specs.json). Snapshot statique, pas un flux live —
-# voir TODO bloquant ci-dessus avant toute exécution réelle.
+# (voir data/instrument_specs.json). Snapshot statique, valeur par défaut
+# uniquement — voir build_asset_whitelist() pour le taux dynamique.
 _EURUSD_SPOT = 1.1570
 _USDJPY_SPOT = 159.30
 
-_USD_TO_EUR = 1 / _EURUSD_SPOT                     # ≈ 0.8643 EUR pour 1 USD
-_EURJPY_SPOT = _EURUSD_SPOT * _USDJPY_SPOT          # ≈ 184.32
-_JPY_TO_EUR = 1 / _EURJPY_SPOT                      # ≈ 0.005426 EUR pour 1 JPY
+_USD_TO_EUR = 1 / _EURUSD_SPOT                     # environ 0.8643 EUR pour 1 USD
+_EURJPY_SPOT = _EURUSD_SPOT * _USDJPY_SPOT          # environ 184.32
+_JPY_TO_EUR = 1 / _EURJPY_SPOT                      # environ 0.005426 EUR pour 1 JPY
 
-# pip_value_per_unit = valeur EUR d'un mouvement de prix de 1.0 unité brute,
-# pour size=1. Pour tous les instruments cotés en USD (or, indices, FX vs
-# USD, crypto), size=1 unité brute x 1.0 USD de mouvement = 1 USD de profit,
-# donc la même constante _USD_TO_EUR s'applique. Seul USD/JPY (coté en JPY)
-# diffère.
-ASSET_WHITELIST = {
-    "GOLD": AssetSpec(
-        symbol="GOLD",
-        min_units=0.01,
-        pip_value_per_unit=_USD_TO_EUR,
-    ),
-    "US100": AssetSpec(
-        symbol="US100",
-        min_units=0.001,
-        pip_value_per_unit=_USD_TO_EUR,
-    ),
-    "US30": AssetSpec(
-        symbol="US30",
-        min_units=0.001,
-        pip_value_per_unit=_USD_TO_EUR,
-    ),
-    "EURUSD": AssetSpec(
-        symbol="EURUSD",
-        min_units=100,
-        pip_value_per_unit=_USD_TO_EUR,
-    ),
-    "GBPUSD": AssetSpec(
-        symbol="GBPUSD",
-        min_units=100,
-        pip_value_per_unit=_USD_TO_EUR,
-    ),
-    "USDJPY": AssetSpec(
-        symbol="USDJPY",
-        min_units=100,
-        pip_value_per_unit=_JPY_TO_EUR,
-    ),
-    "BTCUSD": AssetSpec(
-        symbol="BTCUSD",
-        min_units=0.0001,
-        pip_value_per_unit=_USD_TO_EUR,
-    ),
-    "ETHUSD": AssetSpec(
-        symbol="ETHUSD",
-        min_units=0.001,
-        pip_value_per_unit=_USD_TO_EUR,
-    ),
+# Taille minimale (min_units) : constante par actif, indépendante du taux de
+# change — vient des specs réelles Capital.com (minDealSize), pas concernée
+# par le TODO bloquant ci-dessus.
+_MIN_UNITS = {
+    "GOLD": 0.01,
+    "US100": 0.001,
+    "US30": 0.001,
+    "EURUSD": 100,
+    "GBPUSD": 100,
+    "USDJPY": 100,
+    "BTCUSD": 0.0001,
+    "ETHUSD": 0.001,
 }
+
+# Devise de cotation par actif : détermine quel taux de conversion EUR
+# s'applique à pip_value_per_unit. Pour tous les instruments cotés en USD
+# (or, indices, FX vs USD, crypto), size=1 unité brute x 1.0 USD de
+# mouvement = 1 USD de profit, donc _USD_TO_EUR s'applique. Seul USD/JPY
+# (coté en JPY) diffère.
+_QUOTE_CURRENCY = {
+    "GOLD": "USD", "US100": "USD", "US30": "USD",
+    "EURUSD": "USD", "GBPUSD": "USD", "USDJPY": "JPY",
+    "BTCUSD": "USD", "ETHUSD": "USD",
+}
+
+
+def build_asset_whitelist(usd_to_eur: float, jpy_to_eur: float) -> Dict[str, AssetSpec]:
+    """Construit la liste blanche avec des taux de conversion EUR fournis
+    par l'appelant (typiquement `market_data.get_eur_conversion_rate()`
+    en direct). C'est la fonction à utiliser pour tout dimensionnement
+    réel — jamais `ASSET_WHITELIST` seul, qui reste figé au 16/08/2026."""
+    rates = {"USD": usd_to_eur, "JPY": jpy_to_eur}
+    return {
+        symbol: AssetSpec(
+            symbol=symbol,
+            min_units=min_units,
+            pip_value_per_unit=rates[_QUOTE_CURRENCY[symbol]],
+        )
+        for symbol, min_units in _MIN_UNITS.items()
+    }
+
+
+# Valeur par défaut, figée aux taux du 16/08/2026 — suffisante pour la
+# décision d'inclusion/exclusion (§1.2) et les tests, PAS pour le
+# dimensionnement réel de position (voir TODO ci-dessus et
+# build_asset_whitelist()).
+ASSET_WHITELIST = build_asset_whitelist(_USD_TO_EUR, _JPY_TO_EUR)

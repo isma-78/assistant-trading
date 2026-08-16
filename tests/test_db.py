@@ -19,7 +19,7 @@ EXPECTED_TABLES = {
     "confidence_scores", "allocations",
     "post_trade_review", "causal_analysis_log", "hypotheses",
     "metrics_snapshot", "rule_changes", "logs",
-    "risk_decisions", "go_nogo_events",
+    "risk_decisions", "go_nogo_events", "trade_analysis",
 }
 
 
