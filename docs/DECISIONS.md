@@ -233,6 +233,37 @@ elle-même et fonctionne avec la version de Telethon déjà choisie.
 
 ---
 
+## 2026-08-16 — Résolution du canal Station X par id numérique, pas par `@username`
+
+**Constat** : premier test réel du backfill → `UsernameInvalidError` en
+tentant de résoudre `@station_x`. Diagnostic (lecture des canaux de
+diffusion du compte via la session déjà authentifiée, jamais les groupes
+ni les conversations privées — voir garde-fou dans le code du
+diagnostic) : Station X est un **canal privé rejoint par lien
+d'invitation**, sans `@username` public résolvable — cohérent avec le
+pivot Telegram déjà documenté (lien d'invitation irrécupérable pour un
+nouveau compte). `TELEGRAM_CHANNEL=@station_x` dans `.env` était un
+placeholder jamais remplacé par le véritable identifiant, pas une valeur
+vérifiée.
+
+**Décision** : `TELEGRAM_CHANNEL` passe à l'id numérique du canal
+(`-1002481537588`, obtenu via `iter_dialogs()`), en local et sur le VPS.
+`telegram_listener.py` accepte désormais les deux formats (id numérique
+ou `@username`) — tente `int(...)`, retombe sur la chaîne sinon — pour
+rester robuste si Station X gagnait un jour un username public, ou pour
+tout autre canal source ajouté plus tard (§0.3 : sources interchangeables
+par design).
+
+**Risque déjà présent, révélé ici** : le listener "en direct" tournait
+depuis le tour précédent avec la même valeur cassée — il n'a
+vraisemblablement jamais reçu un seul événement du bon canal (silence
+total, aucune exception visible, car `events.NewMessage(chats=...)`
+échoue différemment de `iter_messages()` face à un identifiant
+invalide). Le zéro-message constaté n'était donc pas dû au calme
+dominical, mais à ce bug. Corrigé et redéployé avant tout nouveau test.
+
+---
+
 ## Rappel — écarts déjà actés au palier P0 (détail dans `CLAUDE.md`)
 
 - **Broker OANDA → Capital.com** : entités OANDA UE routées vers OANDA TMS

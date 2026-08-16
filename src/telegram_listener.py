@@ -157,22 +157,28 @@ def _handle_suivi(conn, raw_message_id, reply_to_msg_id, raw_text, received_at):
     )
 
 
-async def _backfill_history(client, channel: str, limit: int, db_path: str, bot_token, chat_id) -> int:
+async def _backfill_history(
+    client, channel_entity, channel_label: str, limit: int, db_path: str, bot_token, chat_id
+) -> int:
     """Traite les `limit` derniers messages déjà présents dans le canal
     (plus ancien -> plus récent), via le même client/session déjà
     authentifié — pas de deuxième connexion, pas de risque de conflit
     d'accès concurrent au fichier .session (voir docs/DECISIONS.md).
-    Idempotent comme process_message() : sans effet sur un message déjà
-    capturé par ailleurs. audit_all=False : pas de notification pour de
-    l'historique, seules les contradictions Matinale (§3.4, toujours
-    notifiées) le seraient. Retourne le nombre de messages traités."""
+    `channel_entity` (résolu, éventuellement un id numérique) sert à
+    interroger Telethon ; `channel_label` (la valeur brute de config,
+    lisible) est celle stockée en base — cohérent avec ce que fait le
+    listener en direct. Idempotent comme process_message() : sans effet
+    sur un message déjà capturé par ailleurs. audit_all=False : pas de
+    notification pour de l'historique, seules les contradictions Matinale
+    (§3.4, toujours notifiées) le seraient. Retourne le nombre de messages
+    traités."""
     count = 0
-    async for message in client.iter_messages(channel, limit=limit, reverse=True):
+    async for message in client.iter_messages(channel_entity, limit=limit, reverse=True):
         count += 1
         try:
             process_message(
                 db_path=db_path,
-                channel=channel,
+                channel=channel_label,
                 telegram_msg_id=message.id,
                 reply_to_msg_id=message.reply_to_msg_id,
                 raw_text=message.raw_text or "",
@@ -216,7 +222,16 @@ def run_listener(
         session_path, int(config.telegram_api_id), config.telegram_api_hash, loop=loop
     )
 
-    @client.on(events.NewMessage(chats=config.telegram_channel))
+    # TELEGRAM_CHANNEL peut être un @username (canal public) ou un id
+    # numérique (canal privé rejoint par lien d'invitation, sans username
+    # résolvable — cas de Station X, voir docs/DECISIONS.md). Telethon
+    # n'accepte un id que sous forme d'int Python, jamais de chaîne.
+    try:
+        channel_entity = int(config.telegram_channel)
+    except ValueError:
+        channel_entity = config.telegram_channel
+
+    @client.on(events.NewMessage(chats=channel_entity))
     async def _on_message(event):
         try:
             process_message(
@@ -248,7 +263,7 @@ def run_listener(
         logger.info("Backfill des %d derniers messages de %s...", backfill_limit, config.telegram_channel)
         n = loop.run_until_complete(
             _backfill_history(
-                client, config.telegram_channel, backfill_limit, db_path,
+                client, channel_entity, config.telegram_channel, backfill_limit, db_path,
                 config.telegram_bot_token, config.telegram_chat_id,
             )
         )
