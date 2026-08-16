@@ -70,9 +70,36 @@ signaler la contradiction avant d'agir plutôt que d'appliquer silencieusement.
   ```
   pytest --cov=src.risk_engine --cov=src.capital_manager --cov=src.go_nogo --cov-report=term-missing --cov-fail-under=100 tests/
   ```
-- Dépôt Git **local** initialisé le 16/08/2026 (`git init` + commits) — aucun
-  remote configuré, rien poussé nulle part. Vérifier `.env` et secrets absents
-  du staging avant tout commit futur.
+- Dépôt Git initialisé le 16/08/2026 (`git init` + commits). Dépôt **distant**
+  privé créé sur GitHub (`https://github.com/isma-78/assistant-trading.git`)
+  le 16/08/2026, remote `origin` configuré, `main` synchronisée (poussé
+  jusqu'au commit `2427da9`). Historique vérifié avant push : `.env` jamais
+  commité, aucun secret en clair dans les diffs (seuls des noms de variables
+  vides dans `.env.example` et des appels `_require(...)` dans `src/config.py`).
+  Continuer à vérifier `.env` et secrets absents du staging avant tout commit
+  futur.
+- **VPS de production déployé** le 16/08/2026 : `assistant@163.172.189.239`
+  (Ubuntu 26.04 LTS, Scaleway, hostname `scw-musing-kalam`), accès SSH par
+  clé (pas de mot de passe). Dépôt cloné dans
+  `/home/assistant/assistant-trading`, venv Python créé (`venv/`,
+  Python 3.14.4), `requirements.txt` installé dedans. `.env` déposé
+  manuellement par Ismaël en SSH direct (jamais transmis à/par un LLM),
+  permissions `600`. **Durcissement complet du VPS selon le guide P0 §4.2
+  (pare-feu, fail2ban, etc.) non vérifié à ce stade** — seul l'accès SSH par
+  clé était déjà en place ; à auditer avant d'y faire tourner quoi que ce
+  soit de sensible en continu.
+- **Sauvegarde SQLite automatique avec synchronisation hors VPS** opérationnelle
+  depuis le 16/08/2026 : `scripts/backup_and_sync.sh` (committé) enchaîne
+  `scripts/backup_db.py` puis `rclone sync` vers Scaleway Object Storage
+  (remote rclone `scaleway`, bucket `assistant-trading-backups`, région
+  `fr-par`, configuré manuellement par Ismaël en SSH — jamais par un LLM,
+  identifiants jamais vus). Cron VPS : `0 3 * * *`, logs dans
+  `logs/backup_cron.log`. Bug corrigé pendant la mise en place : sans base
+  SQLite existante, `data/backups/` n'était jamais créé et `rclone sync`
+  échouait (`directory not found`) — le script crée désormais
+  systématiquement le dossier avant la synchronisation. Testé de bout en
+  bout avec une base factice (fichier confirmé apparu puis supprimé du
+  bucket) avant d'activer le cron sans supervision.
 
 ### Pivot important : broker
 
@@ -155,13 +182,16 @@ Traiter ce fichier avec une vigilance renforcée :
       abonnement Station X depuis ce compte + `api_id`/`api_hash` Telethon
 - [ ] Bot de contrôle Telegram (`chat_id`)
 - [ ] Clés API modèles (extraction + Anthropic), plafonds de dépense fixés
-- [ ] VPS Linux sécurisé (Ubuntu 24.04, durci selon guide P0 §4.2 — attention
-      particulière aux permissions du fichier `.session` Telethon, voir pivot
-      Telegram ci-dessus)
-- [x] Dépôt Git local initialisé (`.gitignore` vérifié, aucun secret commité) —
-      reste à faire : dépôt **distant** privé (GitHub/GitLab) quand Ismaël en
-      crée un
-- [x] Sauvegardes automatiques de la base SQLite (`scripts/backup_db.py`)
+- [ ] VPS Linux **provisionné** (Ubuntu 26.04, Scaleway, `163.172.189.239`,
+      code déployé, `.env` en place) — reste à faire : durcissement complet
+      selon guide P0 §4.2 (pare-feu, fail2ban, etc., non audité), et
+      permissions du futur fichier `.session` Telethon quand il existera
+      (voir pivot Telegram ci-dessus)
+- [x] Dépôt Git local **et distant** (GitHub privé, `origin` configuré et
+      synchronisé le 16/08/2026, `.gitignore` vérifié, aucun secret commité)
+- [x] Sauvegardes automatiques de la base SQLite **avec synchronisation hors
+      VPS** (`scripts/backup_and_sync.sh`, cron quotidien 03:00, Scaleway
+      Object Storage — voir détail ci-dessus)
 
 ## Ce qu'il ne faut jamais faire
 
