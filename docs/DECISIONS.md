@@ -561,11 +561,15 @@ cet appel. `run_executor_loop` construit le client Anthropic une seule
 fois au démarrage (`config.anthropic_api_key`) et le transmet à travers
 `manage_open_trades`.
 
-**À valider sur le trade réel** : le trade BTCUSD déjà fermé pendant ce
-test (avant ce correctif) n'a pas de ligne `trade_analysis` — à générer
-manuellement une fois ce correctif déployé, pour confirmer que
-`analyze_closed_trade()` produit une analyse cohérente sur un trade
-réel plutôt que seulement sur les doubles de test.
+**Validé sur le trade réel** : `analyze_closed_trade()` relancé
+manuellement sur le trade BTCUSD (fermé avant ce correctif, donc sans
+ligne `trade_analysis` au moment de la clôture) — partie déterministe
+correcte (r_multiple=-0.034, denouement=sl_hit, durée=535s, jour_semaine
+correctement dimanche) et résumé narratif factuel, sans jugement :
+« Un signal d'entrée avec confiance maximale (1.0) a été exécuté le
+samedi à 18h UTC [...]. Le stop loss a été atteint après 535 secondes
+[...], générant une perte de -0.03R sur le risque défini. » Notification
+envoyée via `audit_notifier`.
 
 ---
 
