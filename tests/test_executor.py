@@ -412,7 +412,13 @@ def test_check_pending_fills_transitions_to_ouvert(tmp_path):
 
     client = MagicMock()
     client.get_working_orders.return_value = []  # plus dans les ordres en attente
-    client.get_open_positions.return_value = [{"position": {"dealId": "deal-xyz", "level": 99.98}}]
+    # Bug réel trouvé le 16/08/2026 : la position obtient un NOUVEAU
+    # dealId, différent de celui de l'ordre limite d'origine — le seul
+    # champ qui relie les deux est position.workingOrderId (voir
+    # docs/DECISIONS.md et executor.check_pending_fills).
+    client.get_open_positions.return_value = [
+        {"position": {"dealId": "position-nouveau-id", "workingOrderId": "deal-xyz", "level": 99.98}}
+    ]
 
     filled = check_pending_fills(db_path, client)
 
@@ -421,6 +427,11 @@ def test_check_pending_fills_transitions_to_ouvert(tmp_path):
     try:
         trade = conn.execute("SELECT * FROM trades WHERE id = ?", (trade_id,)).fetchone()
         assert trade["statut"] == "ouvert"
+        # deal_id doit être réécrit avec celui de la POSITION, pas
+        # laissé à celui de l'ordre limite d'origine — sinon toute
+        # gestion ultérieure (clôture, stop) référencerait un deal_id
+        # qui n'existe plus côté broker.
+        assert trade["deal_id"] == "position-nouveau-id"
         assert trade["prix_entree_reel"] == 99.98
     finally:
         conn.close()

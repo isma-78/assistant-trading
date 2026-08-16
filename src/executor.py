@@ -460,36 +460,54 @@ def _load_open_trade_state(conn, trade_row) -> OpenTradeState:
 
 def check_pending_fills(db_path: str, client: CapitalClient) -> int:
     """Détecte les ordres limite (statut='en_attente') qui ont été
-    exécutés depuis le dernier passage : plus dans /workingorders, mais
-    présents dans /positions avec le même deal_id (Capital.com conserve
-    le même dealId de l'ordre à la position résultante — comportement
-    observé lors de la validation manuelle de ce module, voir
-    docs/DECISIONS.md ; à re-confirmer si Capital.com change ce
-    comportement). Retourne le nombre de trades passés à 'ouvert'."""
-    open_position_ids = {p.get("position", {}).get("dealId") for p in client.get_open_positions()}
+    exécutés depuis le dernier passage.
+
+    Bug réel trouvé le 16/08/2026 pendant le test encadré : Capital.com
+    N'attribue PAS le même dealId à l'ordre limite et à la position
+    résultante — vérifié en observant un remplissage réel (voir
+    docs/DECISIONS.md). Le dealId de la position est nouveau ; l'ancien
+    dealId de l'ordre limite (celui stocké dans trades.deal_id au
+    moment du placement) réapparaît côté position sous
+    `position.workingOrderId`, jamais sous `position.dealId`. Le
+    rapprochement se fait donc sur ce champ, et `trades.deal_id` est
+    RÉÉCRIT avec le nouveau dealId de la position — indispensable, car
+    toute gestion ultérieure (clôture, mise à jour de stop) référence la
+    position par ce nouveau deal_id, jamais par celui de l'ordre.
+
+    Retourne le nombre de trades passés à 'ouvert'."""
+    positions = client.get_open_positions()
+    positions_by_working_order_id = {p.get("position", {}).get("workingOrderId"): p for p in positions}
     working_order_ids = {o.get("workingOrderData", {}).get("dealId") for o in client.get_working_orders()}
 
     filled = 0
-    now = _now()
     with connection_scope(db_path) as conn:
         pending = conn.execute("SELECT * FROM trades WHERE statut = 'en_attente'").fetchall()
         for trade_row in pending:
-            deal_id = trade_row["deal_id"]
-            if deal_id in working_order_ids:
+            order_deal_id = trade_row["deal_id"]
+            if order_deal_id in working_order_ids:
                 continue  # toujours en attente, rien à faire
-            if deal_id not in open_position_ids:
+
+            position = positions_by_working_order_id.get(order_deal_id)
+            if position is None:
                 continue  # ni en attente ni ouvert : probablement annulé (péremption) — laissé tel quel pour audit
-            position = next(
-                p for p in client.get_open_positions() if p.get("position", {}).get("dealId") == deal_id
-            )
-            entry_level = position.get("position", {}).get("level")
+
+            position_data = position.get("position", {})
+            entry_level = position_data.get("level")
+            new_deal_id = position_data.get("dealId")
             conn.execute(
                 "UPDATE trades SET statut = 'ouvert', prix_entree_reel = ?, "
-                "slippage_entree = ? WHERE id = ?",
-                (entry_level, (entry_level - trade_row["prix_entree_prevu"]) if entry_level is not None else None, trade_row["id"]),
+                "slippage_entree = ?, deal_id = ? WHERE id = ?",
+                (
+                    entry_level,
+                    (entry_level - trade_row["prix_entree_prevu"]) if entry_level is not None else None,
+                    new_deal_id, trade_row["id"],
+                ),
             )
             filled += 1
-            logger.info("Ordre limite exécuté : trade_id=%s, deal_id=%s, niveau=%s", trade_row["id"], deal_id, entry_level)
+            logger.info(
+                "Ordre limite exécuté : trade_id=%s, deal_id ordre=%s -> deal_id position=%s, niveau=%s",
+                trade_row["id"], order_deal_id, new_deal_id, entry_level,
+            )
     return filled
 
 

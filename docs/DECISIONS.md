@@ -500,6 +500,47 @@ corriger dans l'autre sens.
 
 ---
 
+## 2026-08-16 — Bug critique confirmé pendant le test réel encadré : dealId de la position ≠ dealId de l'ordre
+
+**Constat** : lors du test réel encadré demandé par Ismaël (démarrage de
+`run_executor_loop` sous supervision directe, un signal de test placé
+manuellement sur BTCUSD proche du marché pour observer un remplissage
+réel), l'ordre limite s'est bien exécuté — mais `check_pending_fills`
+ne l'a jamais détecté. Vérification directe côté API
+(`get_open_positions()`) : la position résultante a un `dealId` **différent**
+de celui de l'ordre limite d'origine. Le seul lien entre les deux est
+le champ `position.workingOrderId`, qui contient l'ancien `dealId` de
+l'ordre. L'entrée `docs/DECISIONS.md` précédente sur ce point
+("Capital.com conserve le même dealId") était une hypothèse non
+vérifiée, explicitement signalée comme telle — elle s'est révélée
+fausse à l'épreuve du réel, exactement le scénario que le test encadré
+devait couvrir avant le passage en autonome.
+
+**Décision** : `check_pending_fills` rapproche désormais les trades en
+attente sur `position.workingOrderId` (pas `position.dealId`), et
+**réécrit `trades.deal_id`** avec le nouveau `dealId` de la position dès
+la détection du remplissage — indispensable, car toute gestion
+ultérieure (`manage_open_trades`, clôtures, mise à jour de stop)
+référence la position par ce `deal_id` stocké. Sans cette réécriture,
+la position serait restée gérable en apparence mais toute tentative
+de clôture/mise à jour aurait échoué contre un `dealId` inexistant.
+
+**Position réelle concernée** : un trade BTCUSD long a été ouvert sur le
+compte démo pendant ce test (taille ~0,029 BTC, stop garanti à 400
+points). Corrigé et repris en gestion normale après ce fix — aucune
+perte de suivi, la position était toujours réellement ouverte côté
+broker pendant toute la durée du bug, seul le suivi côté base de
+données était en retard.
+
+**Point mineur, sans conséquence** : pendant le diagnostic, une
+suppression manuelle inutile de 8 anciens signaux déjà `rejete` a
+laissé des références orphelines dans `risk_decisions.signal_id` (via
+la CLI sqlite3, hors contrainte de clé étrangère de l'application) —
+aucune donnée de valeur perdue, juste un lien cassé sur des lignes déjà
+terminales.
+
+---
+
 ## Rappel — écarts déjà actés au palier P0 (détail dans `CLAUDE.md`)
 
 - **Broker OANDA → Capital.com** : entités OANDA UE routées vers OANDA TMS
