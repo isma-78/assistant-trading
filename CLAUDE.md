@@ -240,17 +240,46 @@ CDC listé ci-dessous.
 - 93 tests passent, aucune régression. Couverture 100% toujours vérifiée
   sur `risk_engine`/`capital_manager`/`go_nogo`.
 
-### En cours / pas encore fait
+### Fait — validation en conditions réelles (16/08/2026)
 
-- **Authentification Telethon interactive** : premier lancement de
-  `run_listener()` sur le VPS = code Telegram (SMS/app) + mot de passe
-  2FA à saisir en direct par Ismaël. Ne peut pas être scripté sans sa
-  présence au clavier — bloquant, hors de mon autonomie (action, pas
-  juste une information).
-- Test en conditions réelles du listener contre le canal Station X en
-  direct (dépend du point précédent).
-- `telethon` ajouté à `requirements.txt`, installé en local — reste à
-  installer sur le VPS et déployer le code.
+- Authentification Telethon faite par Ismaël sur le VPS (session `tmux
+  telegram_listener`), canal Station X confirmé être un **canal privé
+  sans `@username` public** (id numérique `-1002481537588` — l'ancien
+  `@station_x` dans `.env` était un placeholder jamais corrigé, cause
+  du premier échec réel, voir `docs/DECISIONS.md`).
+- **Backfill de 50 messages réels** (`--backfill=N`, ajouté à
+  `telegram_listener.py`, utilise la session déjà authentifiée, aucun
+  risque de conflit) : 21 autre / 17 signal / 10 suivi / 2 matinale.
+  8 signaux extraits complets, 9 rejetés (tous des alertes `"... NOW !"`
+  légitimes sans prix). Threading (`reply_to_msg_id`) confirmé
+  fonctionnel sur un cas réel (TP1 touché lié au bon signal d'origine).
+- **Deux bugs réels trouvés et corrigés** sur `parser.py` en inspectant
+  ces données : séparateur de milliers "espace" non géré (prix
+  silencieusement faux) et tickers d'indices avec chiffres (NAS100/US100)
+  non capturés (échec silencieux). Détail et tests de régression dans
+  `docs/DECISIONS.md`. Base réinitialisée et recapturée après correctif.
+- Compat Telethon 1.36.0 / Python 3.14 : `RuntimeError: no running event
+  loop` au premier lancement (asyncio ne crée plus de boucle implicite) —
+  corrigé par une boucle explicite passée au constructeur. Détail dans
+  `docs/DECISIONS.md`.
+- **`audit_notifier` confirmé de bout en bout** : appel réel à l'API
+  Telegram Bot (pas un mock) depuis le VPS, réponse `ok=True`. Les 8
+  signaux du backfill n'ont volontairement déclenché aucune notification
+  (`audit_all=False` sur l'historique, choix documenté) — les captures
+  **en direct**, à partir de maintenant, utilisent `audit_all=True` par
+  défaut (§3.6, audit manuel intégral 3 semaines).
+- Le listener tourne en direct sur le VPS (`tmux telegram_listener`),
+  en observation, prêt à capturer le prochain vrai message.
+
+### À surveiller dans les prochains jours (pas d'action requise pour l'instant)
+
+- La prochaine vraie Matinale, pour calibrer `extract_matinale()` sur le
+  format actuel (celui du backfill, fév-mars 2025, était un simple titre
+  court, pas la version narrative détaillée — probablement un format qui
+  a évolué depuis).
+- Calibration empirique GOLD/US100/US30 (`calibrate_pip_value.py`) un
+  jour de semaine, marché fermé le week-end (déjà noté au palier P0).
+- Exemples du canal "éducatif" à fournir par Ismaël quand disponibles.
 
 ## Ce qu'il ne faut jamais faire
 
