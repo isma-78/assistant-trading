@@ -107,15 +107,25 @@ def _resolve_asset(raw_mention: str) -> Optional[str]:
 # Signal
 # ---------------------------------------------------------------------------
 
+# Nombre avec séparateur de milliers = espace/espace insécable ("91 950"),
+# formatage réel du canal — un \d+ simple ne capturait que les chiffres
+# avant le premier espace (91 950 -> "91"), corrompant silencieusement le
+# prix. Gère aussi le cas sans séparateur (4367) et la partie décimale
+# (comma ou point). Voir docs/DECISIONS.md.
+_NUMBER = r"\d+(?:[   ]\d{3})*(?:[.,]\d+)?"
+
 _STRUCTURED_SIGNAL = re.compile(
     r"\b(?P<action>je\s+vends?|vends?|vente|ach[eè]te?|achat)\b\s+"
-    r"(?P<asset>[A-Za-zÀ-ÿ/]{2,12})\s+"
-    r"à\s+(?P<price>\d+(?:[.,]\d+)?)",
+    # Les tickers d'indices contiennent des chiffres (NAS100, US30, US100) —
+    # la classe de caractères doit les inclure, sinon le regex échoue en
+    # silence sur ces actifs (voir docs/DECISIONS.md).
+    r"(?P<asset>[A-Za-zÀ-ÿ0-9/]{2,12})\s+"
+    rf"à\s+(?P<price>{_NUMBER})",
     re.IGNORECASE,
 )
 _ACTION_ONLY = re.compile(r"\b(je\s+vends?|vends?|vente|ach[eè]te?|achat)\b", re.IGNORECASE)
-_TP_LINE = re.compile(r"\bTP\s*([123])\s*:\s*(ouvert|open|\d+(?:[.,]\d+)?)", re.IGNORECASE)
-_SL_LINE = re.compile(r"\bSL\s*:\s*(\d+(?:[.,]\d+)?)", re.IGNORECASE)
+_TP_LINE = re.compile(rf"\bTP\s*([123])\s*:\s*(ouvert|open|{_NUMBER})", re.IGNORECASE)
+_SL_LINE = re.compile(rf"\bSL\s*:\s*({_NUMBER})", re.IGNORECASE)
 
 
 def _direction_from_action(action: str) -> Optional[str]:

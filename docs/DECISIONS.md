@@ -264,6 +264,55 @@ dominical, mais à ce bug. Corrigé et redéployé avant tout nouveau test.
 
 ---
 
+## 2026-08-16 — Deux bugs réels trouvés sur données de production (backfill)
+
+Pas des écarts au CDC, mais journalisés ici car découverts pendant la
+validation en conditions réelles et directement liés à la fiabilité de
+l'extraction déterministe (voir entrée principale ci-dessus).
+
+**Bug 1 — séparateur de milliers "espace" non géré.** Le canal formate
+les prix avec un espace (`"91 950"`), jamais rencontré dans les 2
+exemples fournis initialement (tous en dessous de 10 000, sans
+séparateur). Les regex de `_STRUCTURED_SIGNAL`/`_TP_LINE`/`_SL_LINE`
+capturaient seulement les chiffres avant le premier espace (`"91 950"` ->
+`91.0`) — un prix silencieusement faux plutôt qu'un échec explicite,
+le pire des deux cas. Détecté en inspectant un signal BTCUSD réel
+extrait avec `statut="a_valider"` mais des valeurs manifestement absurdes
+(stop à 92€ sur un prix d'entrée à 91€). Corrigé par un motif de nombre
+partagé (`_NUMBER`) gérant les groupes de 3 chiffres séparés par espace
+normal ou insécable.
+
+**Bug 2 — tickers d'indices avec chiffres non capturés.** La classe de
+caractères de l'actif dans `_STRUCTURED_SIGNAL` (`[A-Za-zÀ-ÿ/]`)
+excluait les chiffres : `NAS100`/`US100`/`US30` ne pouvaient jamais
+matcher entièrement, faisant échouer tout le regex structuré en silence
+(retombée sur le chemin "alerte incomplète" même pour un message
+parfaitement structuré). Détecté en retrouvant, parmi les signaux
+`statut="rejete"` du backfill, deux messages NAS100 pourtant complets
+(prix, TP1-3, SL). Corrigé en ajoutant `0-9` à la classe de caractères.
+
+**Pourquoi ces deux bugs n'ont pas été vus avant** : les 2 exemples
+fournis initialement ne couvraient ni un prix à 5 chiffres avec
+séparateur, ni un ticker contenant un chiffre — exactement le
+raisonnement anti-surapprentissage du CDC (§3.8) appliqué à du code de
+parsing plutôt qu'à des variables statistiques : un motif validé sur un
+petit échantillon peut échouer silencieusement sur un cas non couvert.
+Le backfill de 50 messages réels (demandé par Ismaël pour valider avant
+de faire confiance au flux automatique) a rempli exactement ce rôle.
+Base de données réinitialisée après correction — aucune donnée capturée
+avant ce correctif n'a de valeur (chiffres faux ou rejets erronés).
+
+**Point noté, non corrigé (hors périmètre demandé)** : un message réel
+`"Mettez votre SL BE ✅"` (instruction de resserrer le stop au
+breakeven, §2.10) est classé `"autre"` faute de motif dédié dans
+`message_classifier` — il ne rapporte ni un TP/SL touché ni un résultat
+en pips, les seuls motifs de `"suivi"` actuellement couverts. Sans
+impact en P1 (aucune action déclenchée sur `"suivi"` de toute façon,
+pur archivage), mais à couvrir si `executor` (P2+) doit un jour agir sur
+ce type d'instruction.
+
+---
+
 ## Rappel — écarts déjà actés au palier P0 (détail dans `CLAUDE.md`)
 
 - **Broker OANDA → Capital.com** : entités OANDA UE routées vers OANDA TMS

@@ -76,6 +76,48 @@ def test_extract_signal_buy_direction():
     assert result.stop_price == 1.08
 
 
+def test_extract_signal_thousands_separator_space():
+    # Format réel du canal (capturé en production le 16/08/2026, backfill
+    # historique) : "91 950" avec espace comme séparateur de milliers.
+    # Bug réel trouvé ici : un \d+ simple ne capturait que "91" avant
+    # l'espace, corrompant silencieusement le prix. Voir docs/DECISIONS.md.
+    text = (
+        "🛑 JE VENDS BTCUSD à 91 950\n\n"
+        "🎯 TP1 : 91 650\n"
+        "🎯 TP2 : 91 050\n"
+        "🎯 TP3 : Ouvert\n\n"
+        "🔒 SL : 92 170"
+    )
+    result = extract_signal(text)
+    assert result.asset == "BTCUSD"
+    assert result.direction == "short"
+    assert result.entry_price == 91950.0
+    assert result.stop_price == 92170.0
+    assert result.take_profits == [91650.0, 91050.0, None]
+    assert result.extraction_status == "ok"
+
+
+def test_extract_signal_ticker_with_digits():
+    # Bug réel trouvé sur données de production : la classe de caractères
+    # de l'actif excluait les chiffres, donc "NAS100" ne pouvait jamais
+    # matcher le regex structuré (échec silencieux -> incomplete alors que
+    # le message était complet). Voir docs/DECISIONS.md.
+    text = (
+        "🟢 J'ACHÈTE NAS100 à 20 270\n\n"
+        "🎯 TP1 : 20 320\n"
+        "🎯 TP2 : 20 420\n"
+        "🎯 TP3 : Ouvert\n\n"
+        "SL : 20 230 🔒"
+    )
+    result = extract_signal(text)
+    assert result.asset == "US100"
+    assert result.raw_asset_mention == "NAS100"
+    assert result.direction == "long"
+    assert result.entry_price == 20270.0
+    assert result.stop_price == 20230.0
+    assert result.extraction_status == "ok"
+
+
 def test_extract_signal_unresolved_asset_does_not_crash():
     result = extract_signal("🔴 JE VENDS SILVERUSD à 24.50\n🔒 SL : 25.00")
     assert result.asset is None
