@@ -9,7 +9,7 @@ réelle + CapitalClient simulé) mais sans viser la même exhaustivité —
 cohérent avec le traitement déjà appliqué à telegram_listener.run_listener.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -505,3 +505,50 @@ def test_manage_open_trades_closes_full_stop_and_updates_envelope(tmp_path):
     finally:
         conn.close()
     assert envelope_manager.balance == 490.0  # perte imputée en totalité (§2.3)
+
+
+def test_manage_open_trades_triggers_trade_analysis_on_full_close(tmp_path):
+    # Bug réel trouvé le 16/08/2026 pendant le test encadré : trade_analyzer.py
+    # était entièrement construit et testé mais jamais appelé depuis
+    # executor.py. Ce test vérifie que la clôture complète déclenche bien
+    # l'analyse post-trade (voir docs/DECISIONS.md).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-xyz', 'station_x', 'GOLD', 'demo', 'short', 0.01, 100.0, 101.0, 101.0, 10.0, 2.0, "
+            "'2026-08-16T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 101.0, "offer": 101.2, "marketStatus": "TRADEABLE"}}
+    client.get_prices.return_value = {"prices": []}
+
+    anthropic_client = MagicMock()
+    response = MagicMock()
+    response.content = [MagicMock(text="Le trade sur GOLD a touché le stop après une brève ouverture.")]
+    anthropic_client.messages.create.return_value = response
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0)
+    with patch("src.trade_analyzer.send_notification") as mock_notify:
+        manage_open_trades(
+            db_path, client, make_engine(),
+            envelope_managers={"GOLD": envelope_manager}, envelope_ids={"GOLD": envelope_id}, reserve_total=0.0,
+            anthropic_client=anthropic_client, bot_token="tok", chat_id="42",
+        )
+
+    conn = get_connection(db_path)
+    try:
+        analysis = conn.execute("SELECT * FROM trade_analysis WHERE trade_id = ?", (trade_id,)).fetchone()
+        assert analysis is not None
+        assert analysis["r_multiple_realise"] == pytest.approx(-1.0)
+        assert analysis["resume_narratif"] is not None
+    finally:
+        conn.close()
+    mock_notify.assert_called_once()

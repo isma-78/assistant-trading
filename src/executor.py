@@ -58,6 +58,7 @@ from src.risk_engine import (
     TradeSignal,
     compute_r_multiple,
 )
+from src.trade_analyzer import analyze_closed_trade
 from src.validator import ValidationResult, validate_signal
 
 logger = logging.getLogger(__name__)
@@ -514,13 +515,17 @@ def check_pending_fills(db_path: str, client: CapitalClient) -> int:
 def manage_open_trades(
     db_path: str, client: CapitalClient, risk_engine: RiskEngine,
     envelope_managers: dict, envelope_ids: dict, reserve_total: float,
+    anthropic_client=None, bot_token: Optional[str] = None, chat_id: Optional[str] = None,
 ) -> float:
     """Parcourt les trades ouverts, applique evaluate_position_management
     sur chacun, exécute les actions résultantes (clôture partielle/totale
     via l'API, mise à jour du stop). Retourne le nouveau total de
     réserve (§2.3) après application des trades clos pendant ce passage.
     `envelope_managers`/`envelope_ids` : dict {actif: (CapitalManager,
-    envelope_id)} déjà chargés par l'appelant."""
+    envelope_id)} déjà chargés par l'appelant. `anthropic_client`/
+    `bot_token`/`chat_id` : optionnels, transmis à trade_analyzer.
+    analyze_closed_trade() sur toute clôture complète — omis (None), le
+    trade se ferme quand même, seule l'analyse post-trade est sautée."""
     with connection_scope(db_path) as conn:
         open_trades = conn.execute("SELECT * FROM trades WHERE statut = 'ouvert'").fetchall()
 
@@ -538,6 +543,7 @@ def manage_open_trades(
 
             reserve_total = _apply_management_action(
                 db_path, client, state, action, envelope_managers, envelope_ids, reserve_total,
+                anthropic_client, bot_token, chat_id,
             )
         except Exception:
             logger.exception("Erreur non gérée en gérant le trade %s — passage au suivant", trade_row["id"])
@@ -545,7 +551,10 @@ def manage_open_trades(
     return reserve_total
 
 
-def _apply_management_action(db_path, client, state, action, envelope_managers, envelope_ids, reserve_total) -> float:
+def _apply_management_action(
+    db_path, client, state, action, envelope_managers, envelope_ids, reserve_total,
+    anthropic_client=None, bot_token=None, chat_id=None,
+) -> float:
     if action.action == ManagementActionType.UPDATE_TRAILING_STOP:
         client.update_position_stop(state.deal_id, action.new_stop_price)
         with connection_scope(db_path) as conn:
@@ -590,6 +599,21 @@ def _apply_management_action(db_path, client, state, action, envelope_managers, 
             conn.execute(
                 "UPDATE trades SET statut = 'ferme', ferme_at = ?, r_multiple_total = ?, pnl_net = ? WHERE id = ?",
                 (now, action.r_multiple, pnl_eur, state.trade_id),
+            )
+
+        # La clôture est déjà journalisée ci-dessus avant cet appel :
+        # un échec ici (LLM, réseau, garde-fou) ne doit jamais remettre
+        # en cause l'enregistrement du trade fermé, seule l'analyse
+        # post-trade est perdue pour ce cycle (bug réel trouvé le
+        # 16/08/2026 pendant le test encadré : trade_analyzer.py était
+        # entièrement construit et testé mais jamais appelé depuis
+        # executor.py — voir docs/DECISIONS.md).
+        try:
+            analyze_closed_trade(db_path, state.trade_id, anthropic_client, bot_token, chat_id)
+        except Exception:
+            logger.exception(
+                "Échec de l'analyse post-trade pour le trade %s — clôture déjà journalisée, sans impact",
+                state.trade_id,
             )
 
     return reserve_total
@@ -647,11 +671,14 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
     prochain cycle."""
     import time
 
+    import anthropic
+
     from src.asset_whitelist import build_asset_whitelist
     from src.market_data import get_eur_conversion_rate
 
     client = CapitalClient(config.capital_api_key, config.capital_identifier, config.capital_api_password, _DEMO_BASE_URL)
     client.login()
+    anthropic_client = anthropic.Anthropic(api_key=config.anthropic_api_key)
 
     caps = RiskCaps(
         risk_percent_default=config.risk_percent_default,
@@ -691,6 +718,7 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
 
             reserve_total = manage_open_trades(
                 db_path, client, risk_engine, envelope_managers, envelope_ids, reserve_total,
+                anthropic_client, config.telegram_bot_token, config.telegram_chat_id,
             )
         except Exception:
             logger.exception("Erreur non gérée dans la boucle d'exécution — nouvelle tentative au prochain cycle")

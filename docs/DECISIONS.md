@@ -541,6 +541,34 @@ terminales.
 
 ---
 
+## 2026-08-16 — Bug réel trouvé pendant le test encadré : `trade_analyzer` jamais appelé
+
+**Constat** : après avoir corrigé la détection de remplissage et laissé
+le trade BTCUSD réel se clôturer (via un stop resserré manuellement en
+base pour déclencher un vrai cycle de clôture sans attendre une
+fermeture naturelle), `trade_analysis` restait vide. `trade_analyzer.py`
+avait été entièrement construit et testé au tour précédent
+(19 tests, garde-fou de sortie validé), mais **jamais appelé depuis
+`executor.py`** — un oubli d'intégration, pas un défaut du module
+lui-même.
+
+**Décision** : `_apply_management_action` appelle
+`trade_analyzer.analyze_closed_trade()` juste après avoir journalisé la
+clôture complète (`statut = 'ferme'`), dans un `try/except` séparé : un
+échec de l'analyse post-trade (LLM, réseau, garde-fou) ne remet jamais
+en cause l'enregistrement de la clôture elle-même, déjà committée avant
+cet appel. `run_executor_loop` construit le client Anthropic une seule
+fois au démarrage (`config.anthropic_api_key`) et le transmet à travers
+`manage_open_trades`.
+
+**À valider sur le trade réel** : le trade BTCUSD déjà fermé pendant ce
+test (avant ce correctif) n'a pas de ligne `trade_analysis` — à générer
+manuellement une fois ce correctif déployé, pour confirmer que
+`analyze_closed_trade()` produit une analyse cohérente sur un trade
+réel plutôt que seulement sur les doubles de test.
+
+---
+
 ## Rappel — écarts déjà actés au palier P0 (détail dans `CLAUDE.md`)
 
 - **Broker OANDA → Capital.com** : entités OANDA UE routées vers OANDA TMS
