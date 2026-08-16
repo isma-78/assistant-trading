@@ -1,0 +1,33 @@
+# Secrets — JAMAIS commités
+.env
+*.session
+*.session-journal
+*.key
+*.pem
+
+# Données
+data/*.db
+data/*.db-journal
+data/backups/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Dashboard généré
+output/dashboard*.html
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code — préférences locales, jamais partagées
+.claude/settings.local.json

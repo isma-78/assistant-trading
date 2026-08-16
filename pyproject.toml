@@ -1,0 +1,15 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
+
+# Modules critiques (invariant #2 du projet) : 100% de couverture obligatoire
+# avant toute exécution, même en démo. config.py et db.py ne sont pas
+# soumis à cette règle (pas de calcul financier). Vérifier avec :
+#
+#   pytest --cov=src.risk_engine --cov=src.capital_manager --cov=src.go_nogo \
+#       --cov-report=term-missing --cov-fail-under=100 tests/
