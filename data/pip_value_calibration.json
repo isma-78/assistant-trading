@@ -1,0 +1,60 @@
+{
+  "run_at_utc": "2026-08-16T11:18:09.138059+00:00",
+  "results": {
+    "BTCUSD": {
+      "epic": "BTCUSD",
+      "skipped": false,
+      "closed": true,
+      "min_deal_size": 0.0001,
+      "test_size": 0.0009,
+      "entry_level": 62953.1,
+      "exit_level": 62903.2,
+      "price_movement": -49.900000000001455,
+      "balance_before": 1000.0,
+      "balance_after": 999.96,
+      "realized_pnl": -0.04,
+      "account_currency": "EUR",
+      "guaranteed_stop_used": true,
+      "live_upl_diagnostic": -0.04,
+      "empirical_pip_value_per_unit": 0.8906702293475581,
+      "coded_pip_value_per_unit": 0.8643042350907519,
+      "measured_at_utc": "2026-08-16T11:17:07.283433+00:00",
+      "discrepancy_pct": 3.05
+    },
+    "ETHUSD": {
+      "epic": "ETHUSD",
+      "skipped": false,
+      "closed": true,
+      "min_deal_size": 0.001,
+      "test_size": 0.031,
+      "entry_level": 1879.6,
+      "exit_level": 1877.85,
+      "price_movement": -1.75,
+      "balance_before": 999.96,
+      "balance_after": 999.91,
+      "realized_pnl": -0.05,
+      "account_currency": "EUR",
+      "guaranteed_stop_used": true,
+      "live_upl_diagnostic": -0.05,
+      "empirical_pip_value_per_unit": 0.9216589861751153,
+      "coded_pip_value_per_unit": 0.8643042350907519,
+      "measured_at_utc": "2026-08-16T11:18:08.434371+00:00",
+      "discrepancy_pct": 6.64
+    },
+    "GOLD": {
+      "epic": "GOLD",
+      "skipped": true,
+      "reason": "market_status=CLOSED"
+    },
+    "US100": {
+      "epic": "US100",
+      "skipped": true,
+      "reason": "market_status=CLOSED"
+    },
+    "US30": {
+      "epic": "US30",
+      "skipped": true,
+      "reason": "market_status=CLOSED"
+    }
+  }
+}
