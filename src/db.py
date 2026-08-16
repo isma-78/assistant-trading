@@ -1,9 +1,24 @@
 """
 db.py — Schéma et accès base de données (SQLite).
 
+Schéma aligné sur docs/CDC_v4.md §4.5, avec trois ajouts documentés dans
+docs/DECISIONS.md (aucun ne modifie une table existante du CDC, aucun ne
+touche un module critique déjà testé) :
+- `matinale_summaries` : le CDC ne prévoit aucune table pour le résumé par
+  actif d'une Matinale (biais du corps, tag Sentiment, contradiction) alors
+  que §3.8 (variable #1) et §3.4 en dépendent directement. Absent du §4.5,
+  ajouté ici.
+- `suivi_events` : idem pour les messages de suivi (§3.2) — aucune table
+  dédiée au CDC ; les rattacher aux trades (`trade_partials`) n'a de sens
+  qu'à partir de P2 (executor). En attendant, archivés ici pour ne pas
+  perdre d'historique (principe §3.8 : "l'historique a de la valeur").
+- `risk_decisions` et `go_nogo_events` : hérités du palier P0, absents du
+  §4.5 mais utiles à l'audit (invariant #5 : tout ordre journalisé) —
+  conservés, aucun conflit avec le schéma CDC.
+
 La base de données EST le projet : elle conditionne les décisions Go/No-Go
 et l'historique de confiance par actif/source. À sauvegarder quotidiennement
-hors du serveur (voir §7 du guide de démarrage P0).
+hors du serveur (§5.2 du CDC — voir scripts/backup_and_sync.sh).
 """
 
 import sqlite3
@@ -11,35 +26,263 @@ from contextlib import contextmanager
 from pathlib import Path
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS signals (
+-- ---------------------------------------------------------------------
+-- Ingestion (§4.4 telegram_listener, §4.5)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS raw_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_msg_id INTEGER NOT NULL,
+    reply_to_msg_id INTEGER,
+    channel TEXT NOT NULL,
     received_at TEXT NOT NULL,
-    source TEXT NOT NULL,
     raw_text TEXT NOT NULL,
-    asset TEXT,
-    direction TEXT,
-    entry_price REAL,
-    stop_price REAL,
-    take_profit_json TEXT,
-    classification TEXT,
-    extraction_status TEXT NOT NULL DEFAULT 'pending'
+    message_type TEXT NOT NULL,   -- "matinale" | "signal" | "suivi" | "autre"
+    processed INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (channel, telegram_msg_id)
 );
 
+-- ---------------------------------------------------------------------
+-- Signal (§3.2 : seul type exécutable, §4.5)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    raw_message_id INTEGER NOT NULL REFERENCES raw_messages(id),
+    source TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'signal',
+    actif TEXT,
+    sens TEXT,                    -- "long" | "short"
+    entree_min REAL,
+    entree_max REAL,
+    stop_loss REAL,
+    tp1 REAL,
+    tp2 REAL,
+    tp3 REAL,
+    confiance REAL,
+    statut TEXT NOT NULL DEFAULT 'a_valider',
+    raison_rejet TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS market_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id INTEGER NOT NULL REFERENCES signals(id),
+    bid REAL,
+    ask REAL,
+    spread REAL,
+    atr REAL,
+    ma_longue REAL,
+    tendance_fond TEXT,
+    captured_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS macro_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    datetime TEXT NOT NULL,
+    devise TEXT NOT NULL,
+    intitule TEXT NOT NULL,
+    impact TEXT NOT NULL,          -- "fort" | "moyen" | "faible"
+    source TEXT
+);
+
+-- ---------------------------------------------------------------------
+-- Matinale — ajout hors CDC (voir docs/DECISIONS.md)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS matinale_summaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    raw_message_id INTEGER NOT NULL REFERENCES raw_messages(id),
+    raw_asset_mention TEXT NOT NULL,
+    actif TEXT,
+    biais_corps TEXT NOT NULL,     -- "haussier" | "baissier" | "neutre" | "indetermine"
+    sentiment_tag TEXT,            -- "haussier" | "baissier" | "neutre" | NULL
+    contradiction_detectee INTEGER NOT NULL,
+    published_at TEXT NOT NULL
+);
+
+-- ---------------------------------------------------------------------
+-- Suivi — ajout hors CDC (voir docs/DECISIONS.md)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS suivi_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    raw_message_id INTEGER NOT NULL REFERENCES raw_messages(id),
+    reply_to_msg_id INTEGER,
+    event TEXT NOT NULL,           -- "sl_hit" | "tp1_hit" | "tp2_hit" | "tp3_hit" | "update"
+    pips REAL,
+    recorded_at TEXT NOT NULL
+);
+
+-- ---------------------------------------------------------------------
+-- Trades et capital (§2.3, §2.10, §4.5) — P2+
+-- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS trades (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     signal_id INTEGER REFERENCES signals(id),
-    asset TEXT NOT NULL,
-    direction TEXT NOT NULL,
-    units REAL NOT NULL,
-    entry_price REAL NOT NULL,
-    stop_price REAL NOT NULL,
-    opened_at TEXT NOT NULL,
-    closed_at TEXT,
-    pnl_eur REAL,
-    environment TEXT NOT NULL DEFAULT 'demo',
-    status TEXT NOT NULL DEFAULT 'open'
+    source TEXT NOT NULL,
+    actif TEXT NOT NULL,
+    mode TEXT NOT NULL,            -- "demo" | "reel"
+    direction TEXT NOT NULL,       -- "long" | "short"
+    taille_initiale REAL NOT NULL,
+    prix_entree_prevu REAL,
+    prix_entree_reel REAL,
+    slippage_entree REAL,
+    stop_loss_initial REAL NOT NULL,
+    stop_loss_courant REAL NOT NULL,
+    risque_eur REAL NOT NULL,
+    pourcentage_risque_applique REAL NOT NULL,
+    ouvert_at TEXT NOT NULL,
+    ferme_at TEXT,
+    r_multiple_total REAL,
+    pnl_brut REAL,
+    couts REAL,
+    pnl_net REAL,
+    statut TEXT NOT NULL DEFAULT 'ouvert'
 );
 
+CREATE TABLE IF NOT EXISTS trade_partials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id INTEGER NOT NULL REFERENCES trades(id),
+    palier TEXT NOT NULL,          -- "tp1" | "tp2" | "tp3" | "trailing" | "macro"
+    fraction REAL NOT NULL,
+    prix_sortie REAL NOT NULL,
+    r_atteint REAL NOT NULL,
+    motif TEXT,
+    executed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS trade_features (
+    trade_id INTEGER PRIMARY KEY REFERENCES trades(id),
+    align_matinale INTEGER,
+    align_tendance_fond INTEGER,
+    ratio_gain_risque_prevu REAL,
+    proximite_macro INTEGER,
+    volatilite_relative REAL
+);
+
+CREATE TABLE IF NOT EXISTS envelopes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actif TEXT NOT NULL,
+    mode TEXT NOT NULL,            -- "demo" | "reel"
+    capital_initial REAL NOT NULL,
+    capital_courant REAL NOT NULL,
+    nb_rechargements INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (actif, mode)
+);
+
+CREATE TABLE IF NOT EXISTS envelope_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    envelope_id INTEGER NOT NULL REFERENCES envelopes(id),
+    trade_id INTEGER REFERENCES trades(id),
+    montant_avant REAL NOT NULL,
+    montant_apres REAL NOT NULL,
+    type_mouvement TEXT NOT NULL,  -- "init" | "trade_pnl" | "reload"
+    recorded_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS reserve_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id INTEGER REFERENCES trades(id),
+    montant_ajoute REAL NOT NULL,
+    reserve_totale REAL NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+
+-- ---------------------------------------------------------------------
+-- Score de confiance et allocation (§2.4, §2.5) — P2+/P4
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS confidence_scores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actif TEXT NOT NULL,
+    calculated_at TEXT NOT NULL,
+    nb_trades INTEGER NOT NULL,
+    esperance REAL NOT NULL,
+    facteur_echantillon REAL NOT NULL,
+    facteur_stabilite REAL NOT NULL,
+    score REAL NOT NULL,
+    eligible INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS allocations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actif TEXT NOT NULL,
+    montant_alloue REAL NOT NULL,
+    motif TEXT NOT NULL,
+    decided_at TEXT NOT NULL
+);
+
+-- ---------------------------------------------------------------------
+-- Revue post-trade et analyse causale (§3.10, §3.11) — P3+/P5
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS post_trade_review (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id INTEGER NOT NULL REFERENCES trades(id),
+    faits_json TEXT NOT NULL,
+    analyse_texte TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS causal_analysis_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    declencheur TEXT NOT NULL,
+    trades_concernes_ids TEXT NOT NULL,
+    contexte_json TEXT NOT NULL,
+    categorie TEXT NOT NULL,       -- "anomalie_technique" | "evenement_marche" | "hypothese_pattern"
+    analyse_texte TEXT NOT NULL,
+    action_prise TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS hypotheses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    generated_at TEXT NOT NULL,
+    enonce TEXT NOT NULL,
+    justification_causale TEXT NOT NULL,
+    fenetre_test_debut TEXT NOT NULL,
+    nb_trades_test INTEGER,
+    resultat_stat TEXT,
+    statut TEXT NOT NULL DEFAULT 'en_attente',
+    promue_variable INTEGER NOT NULL DEFAULT 0,
+    decided_at TEXT
+);
+
+-- ---------------------------------------------------------------------
+-- Métriques et ajustements de règles (§2.4, §3.8) — P3+
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS metrics_snapshot (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actif TEXT NOT NULL,
+    source TEXT NOT NULL,
+    calculated_at TEXT NOT NULL,
+    nb_trades INTEGER NOT NULL,
+    esperance_r REAL NOT NULL,
+    profit_factor REAL,
+    drawdown_courant REAL,
+    drawdown_max REAL,
+    taux_reussite_indicatif REAL
+);
+
+CREATE TABLE IF NOT EXISTS rule_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    proposed_at TEXT NOT NULL,
+    variable TEXT NOT NULL,
+    constat_stat TEXT NOT NULL,
+    ajustement_propose TEXT NOT NULL,
+    statut TEXT NOT NULL DEFAULT 'propose',
+    validated_at TEXT,
+    applied_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    level TEXT NOT NULL,
+    module TEXT NOT NULL,
+    message TEXT NOT NULL
+);
+
+-- ---------------------------------------------------------------------
+-- Hérités de P0, hors §4.5, conservés pour l'audit (voir docs/DECISIONS.md)
+-- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS risk_decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     signal_id INTEGER REFERENCES signals(id),
@@ -49,15 +292,6 @@ CREATE TABLE IF NOT EXISTS risk_decisions (
     detail TEXT,
     units REAL,
     risk_amount_eur REAL
-);
-
-CREATE TABLE IF NOT EXISTS envelope_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    amount REAL NOT NULL,
-    balance_after REAL NOT NULL,
-    note TEXT
 );
 
 CREATE TABLE IF NOT EXISTS go_nogo_events (

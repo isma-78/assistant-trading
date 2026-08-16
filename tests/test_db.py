@@ -1,0 +1,134 @@
+"""
+Tests de db — schéma SQLite (§4.5 du CDC v4 + ajouts documentés dans
+docs/DECISIONS.md). Pas un module financier critique (pas d'exigence de
+100% de couverture), mais une base cassée compromettrait tout le reste :
+tests de fumée sur la création du schéma et le contexte transactionnel.
+"""
+
+import sqlite3
+
+import pytest
+
+from src.db import connection_scope, get_connection, init_db
+
+EXPECTED_TABLES = {
+    "raw_messages", "signals", "market_snapshots", "macro_events",
+    "matinale_summaries", "suivi_events",
+    "trades", "trade_partials", "trade_features",
+    "envelopes", "envelope_ledger", "reserve_ledger",
+    "confidence_scores", "allocations",
+    "post_trade_review", "causal_analysis_log", "hypotheses",
+    "metrics_snapshot", "rule_changes", "logs",
+    "risk_decisions", "go_nogo_events",
+}
+
+
+def _table_names(conn: sqlite3.Connection) -> set:
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    return {row["name"] for row in rows}
+
+
+def test_init_db_creates_all_expected_tables(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        assert EXPECTED_TABLES.issubset(_table_names(conn))
+    finally:
+        conn.close()
+
+
+def test_init_db_is_idempotent(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    init_db(db_path)  # ne doit pas lever
+    conn = get_connection(db_path)
+    try:
+        assert EXPECTED_TABLES.issubset(_table_names(conn))
+    finally:
+        conn.close()
+
+
+def test_get_connection_creates_parent_directory(tmp_path):
+    db_path = str(tmp_path / "nested" / "dir" / "test.db")
+    conn = get_connection(db_path)
+    conn.close()
+    assert (tmp_path / "nested" / "dir" / "test.db").exists()
+
+
+def test_get_connection_enables_foreign_keys(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    try:
+        fk_status = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+        assert fk_status == 1
+    finally:
+        conn.close()
+
+
+def test_connection_scope_commits_on_success(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO raw_messages "
+            "(telegram_msg_id, reply_to_msg_id, channel, received_at, raw_text, message_type) "
+            "VALUES (1, NULL, 'station_x', '2026-08-16T00:00:00Z', 'texte', 'autre')"
+        )
+
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute("SELECT COUNT(*) AS n FROM raw_messages").fetchone()
+        assert row["n"] == 1
+    finally:
+        conn.close()
+
+
+def test_connection_scope_rolls_back_on_exception(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        with connection_scope(db_path) as conn:
+            conn.execute(
+                "INSERT INTO raw_messages "
+                "(telegram_msg_id, reply_to_msg_id, channel, received_at, raw_text, message_type) "
+                "VALUES (1, NULL, 'station_x', '2026-08-16T00:00:00Z', 'texte', 'autre')"
+            )
+            # Violation de la contrainte UNIQUE(channel, telegram_msg_id) : provoque le rollback
+            conn.execute(
+                "INSERT INTO raw_messages "
+                "(telegram_msg_id, reply_to_msg_id, channel, received_at, raw_text, message_type) "
+                "VALUES (1, NULL, 'station_x', '2026-08-16T00:00:01Z', 'texte2', 'autre')"
+            )
+
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute("SELECT COUNT(*) AS n FROM raw_messages").fetchone()
+        assert row["n"] == 0
+    finally:
+        conn.close()
+
+
+def test_raw_messages_unique_constraint_prevents_duplicate_capture(tmp_path):
+    # Un même message Telegram (même canal, même id) ne doit jamais être
+    # capturé deux fois — protège telegram_listener contre un double
+    # traitement en cas de redémarrage/reprise.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO raw_messages "
+            "(telegram_msg_id, reply_to_msg_id, channel, received_at, raw_text, message_type) "
+            "VALUES (1, NULL, 'station_x', '2026-08-16T00:00:00Z', 'texte', 'autre')"
+        )
+        conn.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO raw_messages "
+                "(telegram_msg_id, reply_to_msg_id, channel, received_at, raw_text, message_type) "
+                "VALUES (1, NULL, 'station_x', '2026-08-16T00:00:01Z', 'texte2', 'autre')"
+            )
+    finally:
+        conn.close()

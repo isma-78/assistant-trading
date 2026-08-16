@@ -5,9 +5,17 @@ Ismaël est le porteur du projet, non technique. Modèle de travail : produire
 du code complet prêt à coller/exécuter et des instructions pas-à-pas,
 jamais de pseudo-code.
 
-Le cahier des charges v4 (CDC v4, détenu par Ismaël, pas dans ce dépôt) fait
-autorité. En cas de contradiction entre une demande ponctuelle et le CDC,
-signaler la contradiction avant d'agir plutôt que d'appliquer silencieusement.
+Le cahier des charges v4 fait autorité : `docs/CDC_v4.md` (ajouté au dépôt
+le 16/08/2026). Autonomie accordée par Ismaël le 16/08/2026 sur
+l'architecture, le découpage des modules, le choix déterministe vs LLM et
+la structure de données — seuls les 10 invariants de son §4.2 et la
+couverture 100% des modules financiers critiques (`risk_engine`,
+`capital_manager`, `go_nogo`, futur `executor`) sont non négociables.
+Tout écart notable au CDC littéral doit être journalisé dans
+`docs/DECISIONS.md` (raisonnement, alternative écartée) — pas de
+validation préalable requise, traçabilité obligatoire après coup. Pour
+toute autre contradiction (hors autonomie déléguée), la signaler avant
+d'agir plutôt que d'appliquer silencieusement.
 
 ## Invariants non négociables (jamais contournés, même sur demande explicite)
 
@@ -192,6 +200,57 @@ Traiter ce fichier avec une vigilance renforcée :
 - [x] Sauvegardes automatiques de la base SQLite **avec synchronisation hors
       VPS** (`scripts/backup_and_sync.sh`, cron quotidien 03:00, Scaleway
       Object Storage — voir détail ci-dessus)
+
+## Palier P1 — en cours (ingestion, classification, extraction, audit)
+
+Voir `docs/DECISIONS.md` pour le raisonnement détaillé de chaque écart au
+CDC listé ci-dessous.
+
+### Fait
+
+- `src/message_classifier.py` : classification déterministe en 4
+  catégories (matinale/signal/suivi/autre — "autre" ajoutée pour les
+  bilans auto-déclarés du canal, jamais nos métriques, §3.10). 10 tests.
+- `src/parser.py` : `extract_signal`, `extract_suivi`, `extract_matinale`
+  — 100% déterministe (écart documenté au §4.4 littéral qui prévoyait un
+  LLM ici, voir `docs/DECISIONS.md`). 14 tests, validés sur exemples réels
+  du canal.
+- **Étape 0 — réconciliation du schéma DB** : `src/db.py` réécrit pour
+  suivre `docs/CDC_v4.md` §4.5 littéralement, plus deux tables hors CDC
+  documentées (`matinale_summaries`, `suivi_events`) et deux tables P0
+  conservées (`risk_decisions`, `go_nogo_events`). Rien ne dépendait de
+  l'ancien schéma (vérifié avant réécriture) — aucune régression. 7 tests.
+- `src/audit_notifier.py` : notification Telegram vers le bot de contrôle
+  (§3.6, §7.2), portée volontairement réduite par rapport au
+  `control_bot` complet du CDC (les commandes du §7.1 dépendent de
+  modules qui n'existent pas encore — YAGNI, voir `docs/DECISIONS.md`).
+  8 tests.
+- **Étape 2 — `src/telegram_listener.py`** : `process_message()`
+  (logique métier pure, testable sans Telegram réel — routage
+  classifier → parser → DB → notification, idempotent) + `run_listener()`
+  (câblage Telethon, import différé). 8 tests sur `process_message`.
+  `run_listener` lui-même non testable unitairement (nécessite une
+  session Telethon réelle).
+- **Étape 4 — audit manuel** : `process_message` notifie chaque
+  signal/Matinale extrait pendant la fenêtre `audit_all=True` (§3.6, "3
+  premières semaines" — implémenté comme un paramètre simple, pas un
+  mécanisme de calendrier, à désactiver à la main plus tard). Les
+  contradictions Matinale (§3.4) sont notifiées en permanence, même après
+  désactivation de `audit_all`.
+- 93 tests passent, aucune régression. Couverture 100% toujours vérifiée
+  sur `risk_engine`/`capital_manager`/`go_nogo`.
+
+### En cours / pas encore fait
+
+- **Authentification Telethon interactive** : premier lancement de
+  `run_listener()` sur le VPS = code Telegram (SMS/app) + mot de passe
+  2FA à saisir en direct par Ismaël. Ne peut pas être scripté sans sa
+  présence au clavier — bloquant, hors de mon autonomie (action, pas
+  juste une information).
+- Test en conditions réelles du listener contre le canal Station X en
+  direct (dépend du point précédent).
+- `telethon` ajouté à `requirements.txt`, installé en local — reste à
+  installer sur le VPS et déployer le code.
 
 ## Ce qu'il ne faut jamais faire
 

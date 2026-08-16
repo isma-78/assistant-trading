@@ -6,7 +6,7 @@ pytest==8.3.3
 pytest-cov==5.0.0
 
 # --- Ajoutés au palier P1 (ingestion / extraction) ---
-# telethon==1.36.0
-# oandapyv20==0.7.2
-# anthropic==0.34.0
-# requests==2.32.3
+telethon==1.36.0
+# anthropic==0.34.0  # non utilisé en P1 : parser.py est déterministe (voir docs/DECISIONS.md)
+# oandapyv20 retiré : broker Capital.com, pas OANDA (pivot documenté dans CLAUDE.md)
+# requests non ajouté : audit_notifier.py utilise urllib (stdlib) pour un simple POST JSON
