@@ -50,6 +50,14 @@ signaler la contradiction avant d'agir plutôt que d'appliquer silencieusement.
   voir `calibrate_pip_value.py` et `data/pip_value_calibration.json`). GOLD/US100/US30
   restent à calibrer de la même façon un jour ouvré (marché fermé le dimanche
   16/08/2026 lors de l'extraction) — relancer simplement `calibrate_pip_value.py`.
+  **TODO BLOQUANT AVANT TOUTE EXÉCUTION RÉELLE** (noté le 16/08/2026) :
+  `_USD_TO_EUR`/`_JPY_TO_EUR` dans `asset_whitelist.py` sont des taux de
+  change figés au 16/08/2026 — acceptables pour la décision de liste
+  blanche, pas pour le dimensionnement réel des positions (dérive avec le
+  temps). À remplacer par un taux rafraîchi dynamiquement via
+  `market_data.py` (module prévu dans la structure CDC, pas encore écrit)
+  avant tout passage en mode réel.
+  16/08/2026 lors de l'extraction) — relancer simplement `calibrate_pip_value.py`.
 - `discover_instruments.py` : extraction reproductible des specs Capital.com
   (epic, minDealSize, dealingRules, etc.) → `data/instrument_specs.json`
 - `calibrate_pip_value.py` : calibration empirique de `pip_value_per_unit` par

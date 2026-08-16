@@ -26,12 +26,24 @@ constantes ci-dessous plutôt que la logique de RiskEngine.
 Aucun marché "_W" (week-end synthétique) n'est utilisé ici, conformément à
 la consigne projet : discover_instruments.py écarte systématiquement ces
 epics du candidat principal.
+
+TODO BLOQUANT AVANT TOUTE EXÉCUTION RÉELLE (noté le 16/08/2026) :
+_USD_TO_EUR et _JPY_TO_EUR ci-dessous sont des constantes figées au
+16/08/2026, acceptables pour la décision de liste blanche (voir
+justification ci-dessus — marge de ~20x) mais PAS pour le dimensionnement
+réel des positions (evaluate_new_entry dans risk_engine.py les utilise
+directement pour calculer `units`). Un taux figé qui dérive de la réalité
+fausse le sizing en conditions réelles, même si l'inclusion/exclusion des
+actifs reste correcte. À remplacer par un taux rafraîchi dynamiquement via
+market_data.py (module prévu dans la structure du CDC v4, pas encore
+écrit) avant tout passage en mode réel (invariant #4, verrou go_nogo.py).
 """
 
 from src.risk_engine import AssetSpec
 
 # Taux de change spot observés le 16/08/2026 lors de l'extraction Capital.com
-# (voir data/instrument_specs.json). Snapshot statique, pas un flux live.
+# (voir data/instrument_specs.json). Snapshot statique, pas un flux live —
+# voir TODO bloquant ci-dessus avant toute exécution réelle.
 _EURUSD_SPOT = 1.1570
 _USDJPY_SPOT = 159.30
 
