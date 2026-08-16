@@ -19,6 +19,7 @@ from src.envelope_store import load_or_create_envelope
 from src.executor import (
     ManagementActionType,
     OpenTradeState,
+    _compute_guaranteed_stop_distance,
     cancel_stale_working_orders,
     check_pending_fills,
     compute_tp_allocations,
@@ -233,6 +234,45 @@ def test_management_internal_error_is_caught_fail_safe():
     assert "erreur" in action.detail.lower() or "Erreur" in action.detail
 
 
+# --- _compute_guaranteed_stop_distance ------------------------------------
+
+def test_guaranteed_stop_not_required_returns_zero():
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"dealingRules": {}}
+    result = _compute_guaranteed_stop_distance(client, "EURUSD", entry_price=1.15, stop_price=1.14)
+    assert result == 0.0
+
+
+def test_guaranteed_stop_percentage_sufficient_distance_uses_signal_stop():
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 0.25}}
+    }
+    # entry=100000, min = 100000*0.0025 = 250 ; stop réel à 500 -> suffisant
+    result = _compute_guaranteed_stop_distance(client, "BTCUSD", entry_price=100000.0, stop_price=99500.0)
+    assert result == 500.0
+
+
+def test_guaranteed_stop_percentage_insufficient_distance_returns_none():
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 0.25}}
+    }
+    # entry=100000, min requis = 250 ; stop réel à seulement 50 -> insuffisant,
+    # jamais élargi silencieusement (augmenterait le risque au-delà du budget)
+    result = _compute_guaranteed_stop_distance(client, "BTCUSD", entry_price=100000.0, stop_price=99950.0)
+    assert result is None
+
+
+def test_guaranteed_stop_absolute_unit():
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "dealingRules": {"minGuaranteedStopDistance": {"unit": "POINTS", "value": 10.0}}
+    }
+    result = _compute_guaranteed_stop_distance(client, "GOLD", entry_price=2000.0, stop_price=1985.0)
+    assert result == 15.0
+
+
 # --- orchestration (DB réelle temporaire + CapitalClient simulé) ---------
 
 def _insert_signal(db_path, actif="GOLD", sens="short", entree=100.0, stop=101.0, tp1=98.0, tp2=96.0, tp3=None, confiance=1.0, statut="a_valider"):
@@ -298,6 +338,61 @@ def test_open_signal_approved_places_limit_order_and_records_trade(tmp_path):
         assert trade["statut"] == "en_attente"
     finally:
         conn.close()
+
+
+def test_open_signal_rejected_when_stop_too_tight_for_guaranteed_stop(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    # entree=100, stop=101 -> stop_distance=1, mais le broker exige un
+    # minimum de 5% * 100 = 5 -> insuffisant, doit être rejeté sans
+    # jamais élargir silencieusement le stop budgété par risk_engine.
+    signal_row = _insert_signal(db_path, confiance=1.0)
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"},
+        "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 5.0}},
+    }
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result is None
+    client.place_limit_order.assert_not_called()
+    conn = get_connection(db_path)
+    try:
+        signal = conn.execute("SELECT statut FROM signals WHERE id = ?", (signal_row["id"],)).fetchone()
+        assert signal["statut"] == "rejete"
+        assert conn.execute("SELECT COUNT(*) AS n FROM trades").fetchone()["n"] == 0
+    finally:
+        conn.close()
+
+
+def test_open_signal_with_guaranteed_stop_passes_correct_distance(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)  # entree=100, stop=101 -> distance=1
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"},
+        "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 0.5}},  # min = 0.5
+    }
+    client.place_limit_order.return_value = {"deal_id": "deal-xyz", "level": 100.0}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result == "deal-xyz"
+    call_kwargs = client.place_limit_order.call_args.kwargs
+    assert call_kwargs["guaranteed_stop"] is True
+    assert call_kwargs["stop_distance"] == 1.0
 
 
 def test_check_pending_fills_transitions_to_ouvert(tmp_path):

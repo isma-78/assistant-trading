@@ -467,6 +467,39 @@ dans `SCHEMA`.
 
 ---
 
+## 2026-08-16 — Bug réel trouvé avant démarrage : stop garanti manquant dans `open_signal`
+
+**Constat** : `CLAUDE.md` documentait déjà depuis le palier P0 que ce
+compte démo exige un stop garanti (`guaranteedStop: true` +
+`stopDistance`) pour les cryptos, avec la note "à vérifier si ça
+s'applique aussi aux autres classes d'actifs". Lors des tests d'ordre
+limite du palier P2 (voir entrée dédiée plus haut), la même exigence
+s'est manifestée sur EURUSD — confirmant qu'elle n'est pas propre aux
+cryptos. Or `executor.open_signal()` n'envoyait jamais `guaranteedStop`/
+`stopDistance` à `place_limit_order()` : chaque ouverture aurait échoué
+avec `error.vallidation.guaranteed-stop-loss.required`. Trouvé en
+vérifiant l'état réel du compte juste avant le test encadré demandé par
+Ismaël, pas par les tests automatisés (qui simulent l'API et n'avaient
+jamais rencontré cette erreur réelle).
+
+**Décision** : `_compute_guaranteed_stop_distance()` calcule la
+distance à partir du stop déjà dimensionné par `risk_engine` (jamais
+recalculé) et la compare au minimum imposé par `dealingRules` de
+l'instrument. Si le stop budgété est **plus serré** que ce minimum,
+retourne `None` et l'entrée est rejetée (`signals.statut = 'rejete'`)
+plutôt que d'élargir silencieusement le stop — élargir aurait
+directement augmenté le risque réel au-delà de ce que `risk_engine` a
+calculé et approuvé, une violation de fait de l'invariant #2 (calcul
+financier déterministe) même si le code semblait "juste s'adapter à une
+contrainte du broker".
+
+**Conséquence pratique** : certains signaux à stop très serré sur des
+actifs à minimum de stop garanti élevé seront systématiquement rejetés
+en l'état — un compromis assumé (sécurité du sizing) plutôt qu'un bug à
+corriger dans l'autre sens.
+
+---
+
 ## Rappel — écarts déjà actés au palier P0 (détail dans `CLAUDE.md`)
 
 - **Broker OANDA → Capital.com** : entités OANDA UE routées vers OANDA TMS

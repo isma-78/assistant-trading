@@ -285,6 +285,38 @@ def _evaluate_position_management(
 # Orchestration I/O — ouverture d'un signal validé
 # ---------------------------------------------------------------------------
 
+def _compute_guaranteed_stop_distance(client: CapitalClient, epic: str, entry_price: float, stop_price: float) -> Optional[float]:
+    """Ce compte démo exige un stop garanti sur certains instruments —
+    observé sur BTCUSD/ETHUSD dès le palier P0, confirmé aussi sur
+    EURUSD lors de la validation des ordres limite au palier P2 (pas
+    seulement les cryptos, voir docs/DECISIONS.md). Calcule la distance
+    à partir du stop déjà dimensionné par risk_engine.
+
+    Si le minimum imposé par le broker est plus large que ce stop,
+    retourne None plutôt que d'élargir silencieusement le stop (ce qui
+    augmenterait le risque réel au-delà de ce que risk_engine a
+    budgété) — l'appelant doit alors rejeter l'entrée, jamais
+    compromettre le sizing pour la faire passer.
+
+    Retourne 0.0 si aucun stop garanti n'est requis pour cet instrument
+    (guaranteed_stop=False côté appelant dans ce cas)."""
+    market = client.get_market_snapshot(epic)
+    dealing_rules = market.get("dealingRules", {})
+    min_gs = dealing_rules.get("minGuaranteedStopDistance", {})
+    if not min_gs.get("value"):
+        return 0.0
+
+    if min_gs.get("unit") == "PERCENTAGE":
+        min_distance = entry_price * (min_gs["value"] / 100.0)
+    else:
+        min_distance = min_gs["value"]
+
+    stop_distance = abs(entry_price - stop_price)
+    if stop_distance < min_distance:
+        return None
+    return stop_distance
+
+
 def open_signal(
     db_path: str, client: CapitalClient, signal_row, risk_engine: RiskEngine, whitelist: dict,
     envelope_manager: CapitalManager, envelope_id: int, confidence_threshold: float, go_nogo_status: GoNoGoStatus,
@@ -324,11 +356,22 @@ def open_signal(
         logger.info("Signal %s rejeté : %s", signal_row["id"], decision.detail)
         return None
 
+    stop_distance = _compute_guaranteed_stop_distance(client, epic, signal_row["entree_min"], signal_row["stop_loss"])
+    if stop_distance is None:
+        logger.warning(
+            "Signal %s : stop budgété (%s) plus serré que le stop garanti minimum de %s, rejeté sans élargir le risque",
+            signal_row["id"], abs(signal_row["entree_min"] - signal_row["stop_loss"]), epic,
+        )
+        with connection_scope(db_path) as conn:
+            conn.execute("UPDATE signals SET statut = 'rejete' WHERE id = ?", (signal_row["id"],))
+        return None
+
     direction_api = DIRECTION_TO_API[signal_row["sens"]]
     try:
         result = client.place_limit_order(
             epic=epic, direction=direction_api, size=decision.risk_decision.units,
             level=signal_row["entree_min"],
+            guaranteed_stop=stop_distance > 0, stop_distance=stop_distance if stop_distance > 0 else None,
         )
     except CapitalApiError:
         logger.exception("Échec du placement de l'ordre limite pour le signal %s", signal_row["id"])
