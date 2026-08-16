@@ -14,4 +14,9 @@ cd "$PROJECT_ROOT"
 
 venv/bin/python scripts/backup_db.py
 
+# backup_db.py ne crée data/backups/ que s'il y a une base à sauvegarder
+# (sys.exit(0) prématuré sinon) — garantir le dossier avant rclone sync,
+# qui échoue si le chemin source n'existe pas du tout.
+mkdir -p data/backups
+
 rclone sync data/backups/ scaleway:assistant-trading-backups --fast-list
