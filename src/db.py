@@ -345,11 +345,33 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+# Colonnes ajoutées à une table du §4.5 après sa création initiale.
+# CREATE TABLE IF NOT EXISTS ne migre jamais une table déjà existante —
+# sans ceci, une base créée avant l'ajout de trades.deal_id (palier P2)
+# resterait sans la colonne indéfiniment (bug réel trouvé le 16/08/2026
+# en vérifiant l'état du VPS avant de démarrer executor.py : la table
+# trades du palier P1 n'avait pas deal_id, la première écriture
+# d'executor.open_signal() aurait échoué. Voir docs/DECISIONS.md).
+_COLUMN_MIGRATIONS = [
+    ("trades", "deal_id", "TEXT"),
+]
+
+
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, column_def: str) -> None:
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}")
+
+
 def init_db(db_path: str) -> None:
-    """Crée les tables si elles n'existent pas encore. Idempotent."""
+    """Crée les tables si elles n'existent pas encore, puis applique les
+    migrations de colonnes connues sur les tables déjà existantes.
+    Idempotent dans les deux cas."""
     conn = get_connection(db_path)
     try:
         conn.executescript(SCHEMA)
+        for table, column, column_def in _COLUMN_MIGRATIONS:
+            _add_column_if_missing(conn, table, column, column_def)
         conn.commit()
     finally:
         conn.close()

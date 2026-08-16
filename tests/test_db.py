@@ -38,6 +38,29 @@ def test_init_db_creates_all_expected_tables(tmp_path):
         conn.close()
 
 
+def test_init_db_migrates_deal_id_onto_pre_existing_trades_table(tmp_path):
+    # Reproduit le bug réel trouvé le 16/08/2026 : une base créée avant
+    # l'ajout de trades.deal_id (palier P2) doit recevoir la colonne au
+    # prochain init_db(), pas rester bloquée dessus indéfiniment
+    # (CREATE TABLE IF NOT EXISTS ne migre jamais une table existante).
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    conn.execute(
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, actif TEXT NOT NULL, statut TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    conn = get_connection(db_path)
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)")}
+        assert "deal_id" in columns
+    finally:
+        conn.close()
+
+
 def test_init_db_is_idempotent(tmp_path):
     db_path = str(tmp_path / "test.db")
     init_db(db_path)

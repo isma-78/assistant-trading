@@ -441,6 +441,32 @@ B, §4.8), ce sera un module séparé avec son propre appel explicite à
 
 ---
 
+## 2026-08-16 — Bug réel trouvé avant démarrage : migration de schéma manquante
+
+**Constat** : avant de démarrer `run_executor_loop` sur le VPS (feu vert
+d'Ismaël pour le test réel encadré), vérification de l'état de la base
+existante — `trades` n'avait PAS la colonne `deal_id` ajoutée au palier
+P2. `CREATE TABLE IF NOT EXISTS` (utilisé par `init_db()`) ne modifie
+jamais une table déjà existante : la base du VPS avait été créée pendant
+P1, avant l'ajout de `deal_id`. La première écriture
+d'`executor.open_signal()` aurait échoué (`no such column: deal_id`) —
+non détecté par les tests car ils créent systématiquement une base
+neuve (`tmp_path`), jamais une base "ancienne" à migrer.
+
+**Décision** : `init_db()` applique désormais une liste explicite de
+migrations de colonnes (`_COLUMN_MIGRATIONS`) après la création des
+tables, via `ALTER TABLE ... ADD COLUMN` conditionnel (vérifié par
+`PRAGMA table_info`, jamais en double). Testé par simulation d'une
+table `trades` pré-existante sans `deal_id`. Appliqué immédiatement sur
+la base du VPS avant tout démarrage de la boucle.
+
+**Portée** : ce mécanisme ne couvre que les migrations déjà connues au
+moment où le code est écrit — toute future colonne ajoutée à une table
+existante doit être déclarée dans `_COLUMN_MIGRATIONS`, pas seulement
+dans `SCHEMA`.
+
+---
+
 ## Rappel — écarts déjà actés au palier P0 (détail dans `CLAUDE.md`)
 
 - **Broker OANDA → Capital.com** : entités OANDA UE routées vers OANDA TMS
