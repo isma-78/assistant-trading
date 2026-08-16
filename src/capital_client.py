@@ -57,7 +57,14 @@ class CapitalClient:
         try:
             resp.raise_for_status()
         except requests.HTTPError as exc:
-            raise CapitalApiError(str(exc)) from exc
+            # str(exc) seul n'inclut jamais le corps de la réponse —
+            # c'est pourtant là que Capital.com place errorCode (ex:
+            # "error.vallidation.guaranteed-stop-loss.required"), le
+            # seul indice exploitable pour diagnostiquer un rejet.
+            # Bug réel trouvé le 16/08/2026 : un échec silencieux de ce
+            # détail a fait perdre du temps de diagnostic pendant le
+            # test réel encadré d'executor.py (voir docs/DECISIONS.md).
+            raise CapitalApiError(f"{exc} — corps de la réponse : {resp.text}") from exc
 
     def get(self, path: str, params: Optional[dict] = None) -> dict:
         resp = self._session.get(f"{self.base_url}{path}", headers=self._headers(), params=params, timeout=10)

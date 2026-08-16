@@ -80,6 +80,21 @@ def test_http_error_wrapped_as_capital_api_error():
         client.get("/accounts")
 
 
+def test_http_error_includes_response_body_for_diagnosis():
+    # Bug réel trouvé le 16/08/2026 : str(HTTPError) seul n'inclut jamais
+    # errorCode, le seul indice exploitable pour diagnostiquer un rejet
+    # Capital.com (ex: "error.vallidation.guaranteed-stop-loss.required").
+    client, session = _client_with_session()
+    session.post.return_value = _fake_response(headers={"CST": "c", "X-SECURITY-TOKEN": "s"})
+    client.login()
+    error_response = _fake_response(status_ok=False)
+    error_response.text = '{"errorCode":"error.vallidation.guaranteed-stop-loss.required"}'
+    session.get.return_value = error_response
+
+    with pytest.raises(CapitalApiError, match="guaranteed-stop-loss"):
+        client.get("/accounts")
+
+
 def _logged_in_client():
     client, session = _client_with_session()
     session.post.return_value = _fake_response(headers={"CST": "c", "X-SECURITY-TOKEN": "s"})
