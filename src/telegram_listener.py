@@ -157,7 +157,38 @@ def _handle_suivi(conn, raw_message_id, reply_to_msg_id, raw_text, received_at):
     )
 
 
-def run_listener(config, db_path: str, session_path: str = "data/telethon_session") -> None:
+async def _backfill_history(client, channel: str, limit: int, db_path: str, bot_token, chat_id) -> int:
+    """Traite les `limit` derniers messages déjà présents dans le canal
+    (plus ancien -> plus récent), via le même client/session déjà
+    authentifié — pas de deuxième connexion, pas de risque de conflit
+    d'accès concurrent au fichier .session (voir docs/DECISIONS.md).
+    Idempotent comme process_message() : sans effet sur un message déjà
+    capturé par ailleurs. audit_all=False : pas de notification pour de
+    l'historique, seules les contradictions Matinale (§3.4, toujours
+    notifiées) le seraient. Retourne le nombre de messages traités."""
+    count = 0
+    async for message in client.iter_messages(channel, limit=limit, reverse=True):
+        count += 1
+        try:
+            process_message(
+                db_path=db_path,
+                channel=channel,
+                telegram_msg_id=message.id,
+                reply_to_msg_id=message.reply_to_msg_id,
+                raw_text=message.raw_text or "",
+                received_at=message.date.isoformat() if message.date else None,
+                bot_token=bot_token,
+                chat_id=chat_id,
+                audit_all=False,
+            )
+        except Exception:
+            logger.exception("Erreur lors du backfill du message %s", message.id)
+    return count
+
+
+def run_listener(
+    config, db_path: str, session_path: str = "data/telethon_session", backfill_limit: int = 0
+) -> None:
     """Point d'entrée production. Import Telethon différé : cette
     dépendance n'est nécessaire qu'ici, jamais pour process_message() ni
     pour les tests. Bloque (client.run_until_disconnected()) — à lancer
@@ -212,12 +243,32 @@ def run_listener(config, db_path: str, session_path: str = "data/telethon_sessio
         config.telegram_channel,
     )
     client.start(phone=config.telegram_phone)
+
+    if backfill_limit > 0:
+        logger.info("Backfill des %d derniers messages de %s...", backfill_limit, config.telegram_channel)
+        n = loop.run_until_complete(
+            _backfill_history(
+                client, config.telegram_channel, backfill_limit, db_path,
+                config.telegram_bot_token, config.telegram_chat_id,
+            )
+        )
+        logger.info("Backfill terminé : %d messages traités.", n)
+
     client.run_until_disconnected()
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    import argparse
+
     from src.config import load_config
 
+    logging.basicConfig(level=logging.INFO)
+    parser_cli = argparse.ArgumentParser()
+    parser_cli.add_argument(
+        "--backfill", type=int, default=0,
+        help="Nombre de messages récents à traiter au démarrage (0 = désactivé, comportement normal)",
+    )
+    args = parser_cli.parse_args()
+
     app_config = load_config()
-    run_listener(app_config, db_path=app_config.db_path)
+    run_listener(app_config, db_path=app_config.db_path, backfill_limit=args.backfill)
