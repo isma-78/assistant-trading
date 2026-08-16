@@ -203,6 +203,36 @@ s'appliquera au bon niveau (validation/risk_engine), pas à l'ingestion.
 
 ---
 
+## 2026-08-16 — Boucle asyncio explicite dans `run_listener` (compat Python 3.14)
+
+**Constat** : premier lancement réel sur le VPS →
+`RuntimeError: There is no current event loop in thread 'MainThread'`.
+Python 3.14 a supprimé la création implicite d'une boucle asyncio par
+`asyncio.get_event_loop()` (dépréciée depuis 3.10, retirée en 3.14).
+Telethon 1.36.0 (dernière version publiée testée) accède à `self.loop` de
+façon synchrone **dès la construction de `TelegramClient`**, pas
+seulement à `.start()` — comportement hérité d'avant cette suppression.
+
+**Décision** : créer et définir explicitement une boucle asyncio
+(`asyncio.new_event_loop()` + `asyncio.set_event_loop(loop)`) avant toute
+utilisation de Telethon, et la passer explicitement au constructeur
+(`TelegramClient(..., loop=loop)`) plutôt que de dépendre de l'état
+global implicite. Reproduit et corrigé localement (Python 3.14.7) avant
+redéploiement sur le VPS (Python 3.14.4), sans mock du réseau réel — seuls
+`client.start()`/`client.run_until_disconnected()` sont mockés pour le
+test de non-régression, l'authentification réelle restant un test manuel
+d'Ismaël (déjà hors périmètre de l'automatisable, voir entrée listener
+ci-dessus).
+
+**Alternative écartée** : épingler une version de Telethon antérieure
+compatible avec l'ancien comportement d'asyncio. Écartée car cela
+signifierait dépendre indéfiniment d'un comportement Python explicitement
+retiré (dette technique croissante), alors que la boucle explicite est la
+correction recommandée par la documentation de migration asyncio
+elle-même et fonctionne avec la version de Telethon déjà choisie.
+
+---
+
 ## Rappel — écarts déjà actés au palier P0 (détail dans `CLAUDE.md`)
 
 - **Broker OANDA → Capital.com** : entités OANDA UE routées vers OANDA TMS

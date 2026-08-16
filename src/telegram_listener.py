@@ -162,12 +162,28 @@ def run_listener(config, db_path: str, session_path: str = "data/telethon_sessio
     dépendance n'est nécessaire qu'ici, jamais pour process_message() ni
     pour les tests. Bloque (client.run_until_disconnected()) — à lancer
     comme processus long (service systemd ou équivalent), pas depuis un
-    script ponctuel."""
+    script ponctuel.
+
+    Python 3.14 a supprimé la création implicite de boucle asyncio par
+    asyncio.get_event_loop() (RuntimeError si aucune boucle n'est
+    "running" ni explicitement définie). Telethon 1.36.0 y accède de
+    façon synchrone dès la construction de TelegramClient (pas seulement
+    à .start()), ce que l'API historique de Telethon suppose toujours
+    possible. On crée donc la boucle explicitement avant toute
+    utilisation de Telethon plutôt que de dépendre d'un comportement
+    implicite que Python ne fournit plus — voir docs/DECISIONS.md."""
+    import asyncio
+
     from telethon import TelegramClient, events
 
     init_db(db_path)
 
-    client = TelegramClient(session_path, int(config.telegram_api_id), config.telegram_api_hash)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    client = TelegramClient(
+        session_path, int(config.telegram_api_id), config.telegram_api_hash, loop=loop
+    )
 
     @client.on(events.NewMessage(chats=config.telegram_channel))
     async def _on_message(event):
