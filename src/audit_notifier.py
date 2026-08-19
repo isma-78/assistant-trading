@@ -46,6 +46,30 @@ def send_notification(bot_token: str, chat_id: str, message: str, timeout: float
         return False
 
 
+def send_document(bot_token: str, chat_id: str, file_path: str, filename: str, caption: str = "", timeout: float = 30.0) -> bool:
+    """Envoie un fichier (ex: dashboard HTML, §4.6) en pièce jointe
+    Telegram (`sendDocument`, pas `sendMessage`) — utilise `requests`
+    (déjà une dépendance déclarée du projet, capital_client.py/
+    market_data.py) plutôt que `urllib` : construire un corps
+    multipart/form-data à la main serait disproportionné pour ce seul
+    besoin, contrairement à `sendMessage` (JSON simple, urllib suffit).
+    Jamais d'exception vers l'appelant, même contrat que send_notification."""
+    import requests
+
+    url = f"{TELEGRAM_API_BASE}/bot{bot_token}/sendDocument"
+    try:
+        with open(file_path, "rb") as f:
+            resp = requests.post(
+                url,
+                data={"chat_id": chat_id, "caption": caption},
+                files={"document": (filename, f, "text/html")},
+                timeout=timeout,
+            )
+        return resp.ok and bool(resp.json().get("ok"))
+    except (requests.RequestException, OSError, ValueError):
+        return False
+
+
 def format_signal_notification(asset, direction, entry_price, stop_price, take_profits, extraction_status) -> str:
     if extraction_status != "ok":
         return (

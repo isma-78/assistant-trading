@@ -94,6 +94,49 @@ def test_handle_command_unknown_lists_available_commands(tmp_path):
     reply = handle_command(db_path, "bidule", None)
     assert "inconnue" in reply.lower()
     assert "/etat" in reply
+    assert "/dashboard" in reply
+
+
+@patch("src.control_bot.send_document", return_value=True)
+def test_handle_command_dashboard_sends_document_and_returns_empty_reply(mock_send_document, tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    reply = handle_command(db_path, "dashboard", None, bot_token="tok", chat_id="chat")
+
+    assert reply == ""
+    mock_send_document.assert_called_once()
+    args, kwargs = mock_send_document.call_args
+    assert args[0] == "tok"
+    assert args[1] == "chat"
+    sent_file_path = args[2]
+    import os
+    assert not os.path.exists(sent_file_path), "le fichier temporaire doit être supprimé après envoi"
+
+
+@patch("src.control_bot.send_document", return_value=False)
+def test_handle_command_dashboard_send_failure_returns_error_text(mock_send_document, tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    reply = handle_command(db_path, "dashboard", None, bot_token="tok", chat_id="chat")
+    assert "Échec" in reply
+
+
+def test_handle_command_dashboard_without_credentials_returns_fallback_text(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    reply = handle_command(db_path, "dashboard", None)  # pas de bot_token/chat_id
+    assert "indisponible" in reply.lower()
+
+
+@patch("src.control_bot.send_document", return_value=True)
+@patch("src.control_bot.send_notification", return_value=True)
+def test_process_update_dashboard_does_not_double_send_text(mock_notify, mock_send_document, tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    update = {"message": {"chat": {"id": 12345}, "text": "/dashboard"}}
+    _process_update(db_path, update, authorized_chat_id="12345", bot_token="tok")
+    mock_send_document.assert_called_once()
+    mock_notify.assert_not_called()  # le document envoyé sert déjà de réponse
 
 
 def test_format_etat_shows_open_trade_and_envelope(tmp_path):

@@ -439,6 +439,37 @@ dérogation `/stop_urgence`) dans `docs/DECISIONS.md`.
   interne.
 - 318 tests passent, 100% sur `risk_engine`/`capital_manager`/`go_nogo`/
   `validator`/`trend_strategy`/`circuit_breaker`.
+- **Watchdog processus** (`scripts/process_watchdog.py`, cron VPS toutes
+  les 5 min) : vérifie que `telegram_listener`/`executor_loop`/
+  `trend_executor`/`control_bot` tournent (`pgrep -f`, pas une présence
+  de session tmux — les deux se désynchronisent en production). Alerte
+  Telegram une fois par transition vivant->mort, jamais de redémarrage
+  automatique. Motivé par la mort silencieuse de `trend_executor` le
+  19/08/2026 — cause non identifiée avec certitude (OOM/cron/fail2ban/
+  reboot écartés, accès root manquant pour aller plus loin ; point clos
+  par Ismaël tant que ce n'est pas récurrent, voir `docs/DECISIONS.md`).
+
+## Palier P2.7 — `metrics` + `dashboard` (§4.4, §4.5, §4.6, 20/08/2026)
+
+Plan validé par Ismaël avant codage. Détail des écarts dans
+`docs/DECISIONS.md`.
+
+- `src/metrics.py` — 100% couvert (demande explicite d'Ismaël : future
+  base de la bascule 2%/4% et du score de confiance). Calcul à la
+  demande (pas de snapshot périodique dans `metrics_snapshot`) :
+  R-multiple, espérance, profit factor, taux de réussite indicatif,
+  drawdown courant/max par (actif, source), gains/pertes en euros par
+  période (semaine/mois/depuis le début) sourcés sur `envelope_ledger`.
+- `src/dashboard.py` + commande `/dashboard` sur `control_bot.py` :
+  page HTML autonome (§4.6, dans l'ordre exact), envoyée en pièce
+  jointe Telegram — **pas de serveur web, même temporaire** (écart
+  assumé au §4.6 littéral, validé par Ismaël). Blocs Hypothèses
+  (générateur officiel)/Classement/Décisions affichés vides et
+  étiquetés "non construit" (modules absents), jamais simulés.
+- `audit_notifier.send_document()` (nouveau) : seule fonction du module
+  à utiliser `requests` plutôt que `urllib` (upload multipart).
+- 368 tests passent, 100% sur `risk_engine`/`capital_manager`/`go_nogo`/
+  `validator`/`trend_strategy`/`circuit_breaker`/`metrics`.
 
 ## Ce qu'il ne faut jamais faire
 

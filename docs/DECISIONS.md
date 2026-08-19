@@ -12,6 +12,60 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — `metrics.py` + `dashboard.py` (§4.4, §4.5, §4.6)
+
+Plan validé par Ismaël avant codage (deux confirmations explicites).
+
+### `metrics.py` — snapshot périodique non implémenté
+
+Calcul à la demande, jamais écrit dans `metrics_snapshot` (§4.5) malgré
+son existence dans le schéma : rien d'autre ne lit cette table
+aujourd'hui, y ajouter un scheduler serait de la complexité sans
+consommateur. Réversible — si un suivi de tendance dans le temps devient
+utile (ex: espérance qui se dégrade progressivement), écrire dedans
+plus tard sans changer l'API de calcul.
+
+Couverture 100% (demande explicite d'Ismaël, 20/08/2026) : ce module
+alimentera plus tard la bascule 2%/4% (§2.3) et le score de confiance
+(§2.4), donc un bug de calcul ici a un impact financier réel même si
+aujourd'hui il n'est que reporting.
+
+### `dashboard.py` — envoi en pièce jointe Telegram, pas de serveur web
+
+**Écart assumé au §4.6 littéral** ("génère une page HTML statique avec
+lien temporaire"), validé explicitement par Ismaël le 20/08/2026 :
+`/dashboard` envoie le fichier HTML généré directement en pièce jointe
+Telegram (`audit_notifier.send_document`, nouvelle fonction utilisant
+`requests` — déjà une dépendance déclarée du projet — plutôt que
+`urllib`, un multipart/form-data à la main serait disproportionné),
+qu'Ismaël ouvre localement dans son navigateur. Zéro port exposé, zéro
+process supplémentaire à faire tourner et sécuriser : dépasse l'objectif
+du §4.6 ("pas de surface d'attaque exposée en continu"), qui suppose
+malgré tout un serveur web, même bref.
+
+### Blocs volontairement vides (Hypothèses officiel, Classement, Décisions)
+
+Trois blocs du §4.6 dépendent de modules confirmés absents par l'audit
+du 19/08/2026 (`confidence_scorer`, `allocator`, `hypothesis_engine`
+officiel du §3.9). Affichés vides et clairement étiquetés "non
+construit" — jamais simulés avec des données factices (demande
+explicite d'Ismaël). Le bloc "Hypothèses" affiche quand même, à part, la
+progression réelle du Flux B (nb de trades clôturés vers le seuil de 10,
+invariant #10) : distinct du générateur officiel du §3.9, mais une
+donnée déjà disponible et honnête plutôt qu'une case vide inutile.
+
+### Périmètre du contenu "Par actif"
+
+La colonne "statut Go/No-Go" du §4.6 affiche toujours "N/A (démo)" :
+`go_nogo.py` n'est pas évalué par actif aujourd'hui (confirmé par
+l'audit du 19/08/2026 — voir son entrée pour le détail des 7 critères du
+§4.9 non implémentés). Pas de simulation ici non plus.
+
+368 tests passent, 100% sur `risk_engine`/`capital_manager`/`go_nogo`/
+`validator`/`trend_strategy`/`circuit_breaker`/`metrics`.
+
+---
+
 ## 2026-08-19 — Watchdog processus + investigation de la mort silencieuse de `trend_executor`
 
 ### Watchdog (`scripts/process_watchdog.py`)

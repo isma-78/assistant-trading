@@ -1,10 +1,15 @@
 """
-control_bot.py — Bot de contrôle Telegram (§7.1 du CDC), premier lot :
-/etat, /pause [actif], /reprendre [actif], /stop_urgence. Les 10 autres
+control_bot.py — Bot de contrôle Telegram (§7.1 du CDC) : /etat, /pause
+[actif], /reprendre [actif], /stop_urgence, /dashboard. Les 9 autres
 commandes du §7.1 restent hors périmètre (dépendent de modules encore
-absents : dashboard, confidence_scorer, allocator, hypothesis_engine —
+absents : confidence_scorer, allocator, hypothesis_engine officiel —
 voir docs/DECISIONS.md), portée volontairement réduite comme
 audit_notifier.py l'a déjà fait pour les notifications.
+
+/dashboard (§4.6) génère la page HTML (src/dashboard.py) et l'envoie en
+pièce jointe Telegram plutôt que via un lien vers un serveur web, même
+temporaire — écart assumé au §4.6 littéral, validé par Ismaël le
+20/08/2026, voir docs/DECISIONS.md.
 
 Process autonome séparé (4e session tmux sur le VPS, aux côtés de
 telegram_listener, executor_loop, trend_executor) : réutilise le MÊME
@@ -33,18 +38,22 @@ aussi de liste blanche d'expéditeur autorisé.
 
 import json
 import logging
+import os
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 
-from src.audit_notifier import TELEGRAM_API_BASE, send_notification
+from src.audit_notifier import TELEGRAM_API_BASE, send_document, send_notification
 from src.circuit_breaker_store import clear_breaker, trigger_manual_pause, trigger_stop_urgence
+from src.dashboard import generate_dashboard_html
 from src.db import connection_scope
 
 logger = logging.getLogger(__name__)
 
-KNOWN_COMMANDS = {"etat", "pause", "reprendre", "stop_urgence"}
+KNOWN_COMMANDS = {"etat", "pause", "reprendre", "stop_urgence", "dashboard"}
 
 
 def parse_command(text: str) -> Optional[Tuple[str, Optional[str]]]:
@@ -112,11 +121,40 @@ def format_etat(db_path: str) -> str:
     return "\n".join(lines)
 
 
-def handle_command(db_path: str, command: str, arg: Optional[str], triggered_by: str = "ismael") -> str:
+def _send_dashboard(db_path: str, bot_token: Optional[str], chat_id: Optional[str]) -> str:
+    """Génère le HTML (src/dashboard.py) et l'envoie en pièce jointe
+    Telegram (send_document, pas send_notification — voir docstring du
+    module). Retourne un texte de repli si l'envoi échoue ou si
+    bot_token/chat_id ne sont pas disponibles (ex: appel direct sans
+    passer par _process_update, comme dans certains tests) ; retourne
+    une chaîne vide en cas de succès — _process_update n'envoie alors
+    aucun message texte supplémentaire, le document sert de réponse."""
+    if not bot_token or not chat_id:
+        return "Dashboard indisponible : identifiants Telegram manquants."
+
+    html_content = generate_dashboard_html(db_path)
+    fd, tmp_path = tempfile.mkstemp(suffix=".html", prefix="dashboard_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(html_content)
+        filename = f"dashboard_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.html"
+        sent = send_document(bot_token, chat_id, tmp_path, filename, caption="\U0001F4CA Dashboard Assistant Trading")
+    finally:
+        os.remove(tmp_path)
+
+    return "" if sent else "Échec de l'envoi du dashboard — réessaie dans un instant."
+
+
+def handle_command(
+    db_path: str, command: str, arg: Optional[str], triggered_by: str = "ismael",
+    bot_token: Optional[str] = None, chat_id: Optional[str] = None,
+) -> str:
     """Dispatch d'une commande déjà authentifiée (voir _process_update).
     Ne touche jamais le broker (voir docstring du module) — écrit
     uniquement l'état de contrôle, lu au cycle suivant par les boucles
-    d'exécution."""
+    d'exécution. `bot_token`/`chat_id` : uniquement nécessaires pour
+    /dashboard (envoi direct d'un fichier, contrairement aux autres
+    commandes dont la réponse texte est envoyée par l'appelant)."""
     if command == "etat":
         return format_etat(db_path)
 
@@ -137,9 +175,12 @@ def handle_command(db_path: str, command: str, arg: Optional[str], triggered_by:
             "au prochain cycle de chaque boucle (jusqu'à ~60s). Entrées bloquées jusqu'à /reprendre."
         )
 
+    if command == "dashboard":
+        return _send_dashboard(db_path, bot_token, chat_id)
+
     return (
         f"Commande inconnue : /{command}\n"
-        "Commandes disponibles : /etat, /pause [actif], /reprendre [actif], /stop_urgence"
+        "Commandes disponibles : /etat, /pause [actif], /reprendre [actif], /stop_urgence, /dashboard"
     )
 
 
@@ -170,8 +211,9 @@ def _process_update(db_path: str, update: dict, authorized_chat_id: str, bot_tok
         return
     command, arg = parsed
     logger.info("Commande reçue : /%s %s", command, arg or "")
-    reply = handle_command(db_path, command, arg)
-    send_notification(bot_token, authorized_chat_id, reply)
+    reply = handle_command(db_path, command, arg, bot_token=bot_token, chat_id=authorized_chat_id)
+    if reply:  # /dashboard réussi retourne "" : le document envoyé sert déjà de réponse
+        send_notification(bot_token, authorized_chat_id, reply)
 
 
 def run_control_bot_loop(config, db_path: str) -> None:

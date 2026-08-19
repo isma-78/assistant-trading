@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 from src.audit_notifier import (
     format_matinale_notification,
     format_signal_notification,
+    send_document,
     send_notification,
 )
 
@@ -71,3 +72,57 @@ def test_format_matinale_notification_no_contradiction():
     text = format_matinale_notification("BTCUSD", "baissier", "baissier", False)
     assert "Contradiction" not in text
     assert "BTCUSD" in text
+
+
+# ---------------------------------------------------------------------------
+# send_document
+# ---------------------------------------------------------------------------
+
+def _fake_requests_response(ok_payload: dict, http_ok: bool = True):
+    mock = MagicMock()
+    mock.ok = http_ok
+    mock.json.return_value = ok_payload
+    return mock
+
+
+@patch("requests.post")
+def test_send_document_returns_true_on_telegram_ok(mock_post, tmp_path):
+    file_path = tmp_path / "dashboard.html"
+    file_path.write_text("<html></html>", encoding="utf-8")
+    mock_post.return_value = _fake_requests_response({"ok": True})
+
+    assert send_document("tok", "chat", str(file_path), "dashboard.html") is True
+    mock_post.assert_called_once()
+    _, kwargs = mock_post.call_args
+    assert kwargs["data"]["chat_id"] == "chat"
+    assert "document" in kwargs["files"]
+
+
+@patch("requests.post")
+def test_send_document_returns_false_on_telegram_error_payload(mock_post, tmp_path):
+    file_path = tmp_path / "dashboard.html"
+    file_path.write_text("<html></html>", encoding="utf-8")
+    mock_post.return_value = _fake_requests_response({"ok": False, "description": "bad chat"})
+    assert send_document("tok", "chat", str(file_path), "dashboard.html") is False
+
+
+@patch("requests.post")
+def test_send_document_returns_false_on_http_error(mock_post, tmp_path):
+    file_path = tmp_path / "dashboard.html"
+    file_path.write_text("<html></html>", encoding="utf-8")
+    mock_post.return_value = _fake_requests_response({}, http_ok=False)
+    assert send_document("tok", "chat", str(file_path), "dashboard.html") is False
+
+
+def test_send_document_returns_false_when_file_missing(tmp_path):
+    assert send_document("tok", "chat", str(tmp_path / "nope.html"), "nope.html") is False
+
+
+@patch("requests.post")
+def test_send_document_never_raises_on_network_error(mock_post, tmp_path):
+    import requests
+
+    file_path = tmp_path / "dashboard.html"
+    file_path.write_text("<html></html>", encoding="utf-8")
+    mock_post.side_effect = requests.RequestException("no network")
+    assert send_document("tok", "chat", str(file_path), "dashboard.html") is False
