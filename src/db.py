@@ -162,12 +162,13 @@ CREATE TABLE IF NOT EXISTS envelopes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actif TEXT NOT NULL,
     mode TEXT NOT NULL,            -- "demo" | "reel"
+    source TEXT NOT NULL DEFAULT 'stationx',  -- ajout P2.5 hors §4.5 : voir docs/DECISIONS.md (Flux B)
     capital_initial REAL NOT NULL,
     capital_courant REAL NOT NULL,
     nb_rechargements INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    UNIQUE (actif, mode)
+    UNIQUE (actif, mode, source)
 );
 
 CREATE TABLE IF NOT EXISTS envelope_ledger (
@@ -325,6 +326,7 @@ CREATE TABLE IF NOT EXISTS trade_analysis (
     heure_ouverture INTEGER NOT NULL,    -- 0-23, UTC
     jour_semaine INTEGER NOT NULL,       -- 0=lundi ... 6=dimanche
     boosted INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'stationx',  -- "stationx" | "hypothesis" — ajout P2.5, voir docs/DECISIONS.md
 
     -- Partie LLM (narrative uniquement — jamais un jugement, invariant #9)
     resume_narratif TEXT,
@@ -354,6 +356,7 @@ def get_connection(db_path: str) -> sqlite3.Connection:
 # d'executor.open_signal() aurait échoué. Voir docs/DECISIONS.md).
 _COLUMN_MIGRATIONS = [
     ("trades", "deal_id", "TEXT"),
+    ("trade_analysis", "source", "TEXT NOT NULL DEFAULT 'stationx'"),
 ]
 
 
@@ -363,15 +366,52 @@ def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, co
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}")
 
 
+def _migrate_envelopes_source(conn: sqlite3.Connection) -> None:
+    """`envelopes.source` (ajout P2.5, Flux B — voir docs/DECISIONS.md) ne
+    peut pas être ajoutée par un simple ADD COLUMN : la contrainte
+    UNIQUE(actif, mode) doit devenir UNIQUE(actif, mode, source), ce que
+    SQLite ne permet pas de modifier sur une table existante. Reconstruit
+    la table (les `id` sont préservés à l'identique pour que les
+    références de `envelope_ledger` restent valides). Idempotent :
+    ne s'exécute que si `source` n'existe pas déjà."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(envelopes)")}
+    if "source" in existing:
+        return
+
+    conn.execute(
+        "CREATE TABLE envelopes_new ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "actif TEXT NOT NULL,"
+        "mode TEXT NOT NULL,"
+        "source TEXT NOT NULL DEFAULT 'stationx',"
+        "capital_initial REAL NOT NULL,"
+        "capital_courant REAL NOT NULL,"
+        "nb_rechargements INTEGER NOT NULL DEFAULT 0,"
+        "created_at TEXT NOT NULL,"
+        "updated_at TEXT NOT NULL,"
+        "UNIQUE (actif, mode, source)"
+        ")"
+    )
+    conn.execute(
+        "INSERT INTO envelopes_new "
+        "(id, actif, mode, source, capital_initial, capital_courant, nb_rechargements, created_at, updated_at) "
+        "SELECT id, actif, mode, 'stationx', capital_initial, capital_courant, nb_rechargements, created_at, updated_at "
+        "FROM envelopes"
+    )
+    conn.execute("DROP TABLE envelopes")
+    conn.execute("ALTER TABLE envelopes_new RENAME TO envelopes")
+
+
 def init_db(db_path: str) -> None:
     """Crée les tables si elles n'existent pas encore, puis applique les
-    migrations de colonnes connues sur les tables déjà existantes.
-    Idempotent dans les deux cas."""
+    migrations connues (colonnes, contraintes) sur les tables déjà
+    existantes. Idempotent dans les deux cas."""
     conn = get_connection(db_path)
     try:
         conn.executescript(SCHEMA)
         for table, column, column_def in _COLUMN_MIGRATIONS:
             _add_column_if_missing(conn, table, column, column_def)
+        _migrate_envelopes_source(conn)
         conn.commit()
     finally:
         conn.close()

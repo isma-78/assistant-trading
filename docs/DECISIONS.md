@@ -573,6 +573,96 @@ envoyée via `audit_notifier`.
 
 ---
 
+## 2026-08-20 — Palier P2.5 : Flux B (Hypothèse #1), architecture multi-source
+
+Implémente `docs/HYPOTHESES.md` Hypothèse #1 (validée par Ismaël le
+20/08/2026), phase 2 de son mandat. Regroupe les décisions d'architecture
+nécessaires pour faire coexister deux flux (Station X, Flux B) sur la
+même base de données, sans jamais mélanger leurs résultats.
+
+**`src/trend_strategy.py` = le module `trend_strategy` du CDC** (§2.11,
+§4.4), construit pour la première fois à ce palier. Logique pure
+(`compute_regime`, `compute_donchian_channel`, `evaluate_entry`), 100%
+couverte (demande explicite d'Ismaël, même règle que `risk_engine.py`).
+
+**Process séparé, pas fusionné dans `executor.py`** : demande explicite
+d'Ismaël ("la boucle tourne aux côtés des deux autres"). Écarté au
+profit d'un process séparé : fusionner les deux flux dans une seule
+boucle aurait été plus simple (un seul writer SQLite, pas de filtrage
+par source nécessaire) mais contredisait l'instruction reçue. Conséquence
+assumée : deux process Python indépendants écrivent concurremment sur le
+même fichier SQLite — voir les points de vigilance ci-dessous.
+
+**Filtrage par source sur les requêtes partagées** : `manage_open_trades`
+et `check_pending_fills` acceptent désormais `include_sources`/
+`exclude_sources`/`sources` — chaque boucle ne touche que ses propres
+trades. `cancel_stale_working_orders` reste volontairement non filtrée
+(elle n'agit que sur des ordres broker, pas des lignes DB détenues par
+l'autre process ; une double tentative d'annulation du même ordre par
+les deux boucles serait sans conséquence, juste une erreur API absorbée
+par le `try/except` déjà en place).
+
+**`envelopes.source` + reconstruction de la contrainte UNIQUE** : le
+CDC ne prévoit qu'une enveloppe par (actif, mode). Une deuxième
+dimension (source) est nécessaire pour que Station X et le Flux B aient
+chacun leur propre solde sur un même actif (EURUSD, GBPUSD, USDJPY,
+US30, ETHUSD sont concernés). `ALTER TABLE ADD COLUMN` ne peut pas
+changer une contrainte UNIQUE existante en SQLite — `_migrate_envelopes_source()`
+reconstruit la table (id préservés à l'identique pour ne pas casser les
+références de `envelope_ledger`), testé sur une base simulant l'état
+réel du VPS avant application. `trade_analysis.source` ajoutée de la
+même façon (simple colonne, pas de contrainte à toucher).
+
+**`_envelope_source_key()` : "hypothesis" vs "stationx", pas les valeurs
+brutes de `signals.source`** : `trades.source`/`signals.source` stockent
+pour Station X l'identifiant brut du canal Telegram (id numérique, voir
+CLAUDE.md), jamais la chaîne littérale "stationx". Plutôt que de
+réécrire `telegram_listener.py` (module P1 déployé et stable, hors
+périmètre de cette demande) pour produire une étiquette propre, le
+routage d'enveloppe normalise : tout ce qui n'est pas explicitement
+`"hypothesis"` est traité comme `"stationx"`. `trade_analysis.source`
+reçoit cette version normalisée (lisible), pas la valeur brute.
+
+**Réserve globale non threadée en mémoire — relue avant chaque
+clôture** : avec un seul process (avant ce palier), accumuler
+`reserve_total` en mémoire d'un cycle à l'autre était sûr. Avec deux
+process concurrents, ce cache pouvait devenir périmé si l'autre process
+clôturait un trade gagnant entre deux lectures. `manage_open_trades` ne
+retourne plus de `reserve_total` : chaque clôture complète relit
+`load_reserve_total(db_path)` juste avant d'écrire. **Limite acceptée,
+pas résolue par un verrou distribué** : une fenêtre de course résiduelle
+subsiste entre la lecture et l'écriture (deux transactions SQLite
+séparées, pas une seule atomique) — jugée négligeable au volume de
+trades actuel (quelques trades/jour au mieux) et sans aucun capital réel
+en jeu. À revisiter si le volume augmente significativement.
+
+**Signaux du Flux B archivés comme `raw_messages` synthétiques** :
+`signals.raw_message_id` est `NOT NULL REFERENCES raw_messages(id)` —
+plutôt que d'assouplir cette contrainte (qui protège la traçabilité de
+tout signal Station X), chaque signal du Flux B reçoit une ligne
+`raw_messages` synthétique (`channel='trend_strategy'`, `telegram_msg_id`
+= horodatage en millisecondes, `raw_text` = résumé lisible des valeurs
+MA200/Donchian ayant déclenché le signal). Effet secondaire positif :
+donne une trace auditable de *pourquoi* chaque signal du Flux B s'est
+déclenché, pas seulement le résultat.
+
+**`HYPOTHESIS_ASSETS` figée en constante** (US30, EURUSD, GBPUSD,
+USDJPY, ETHUSD) : reflet de l'audit du 19-20/08/2026 (0 signal Station X
+capté sur ces 5 actifs depuis le lancement de P1). Pas relue
+dynamiquement depuis l'état de `signals` à chaque démarrage — si Station
+X commence à publier sur l'un de ces actifs, les deux flux tourneraient
+alors en parallèle dessus (enveloppes déjà séparées, aucun conflit
+technique), mais la liste elle-même n'est ajustée que par une nouvelle
+entrée datée dans `docs/HYPOTHESES.md`, jamais silencieusement.
+
+**Tests** : 250 tests passent (241 + 9 nouveaux sur ce lot). 100% sur
+`risk_engine`/`capital_manager`/`go_nogo`/`validator`/`trend_strategy`.
+`trend_executor.py` (orchestration) testé avec des doubles, sans
+exigence de couverture totale — même traitement que
+`telegram_listener.run_listener`/`executor.run_executor_loop`.
+
+---
+
 ## Rappel — écarts déjà actés au palier P0 (détail dans `CLAUDE.md`)
 
 - **Broker OANDA → Capital.com** : entités OANDA UE routées vers OANDA TMS

@@ -73,6 +73,19 @@ LIMIT_ORDER_EXPIRY_SECONDS = 15 * 60
 
 DIRECTION_TO_API = {"long": "BUY", "short": "SELL"}
 
+# Regroupe toute source non "hypothesis" sous l'étiquette "stationx" pour
+# le routage des enveloppes (§2.11 : "Métriques calculées séparément par
+# source"). signals.source/trades.source stockent la valeur brute du
+# canal Telegram (id numérique, voir CLAUDE.md) pour Station X, jamais la
+# chaîne littérale "stationx" — cette fonction normalise pour le seul
+# besoin du routage d'enveloppe, sans réécrire la donnée d'origine. Voir
+# docs/DECISIONS.md (Flux B, palier P2.5).
+HYPOTHESIS_SOURCE = "hypothesis"
+
+
+def _envelope_source_key(source: str) -> str:
+    return HYPOTHESIS_SOURCE if source == HYPOTHESIS_SOURCE else "stationx"
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -170,6 +183,7 @@ class OpenTradeState:
     trade_id: int
     deal_id: str
     asset: str
+    source: str                # signals/trades.source d'origine — détermine l'enveloppe à créditer/débiter
     direction: str  # "long" | "short"
     entry_price: float
     initial_stop_price: float  # risque initial, jamais modifié (base du R-multiple, §2.1)
@@ -449,6 +463,7 @@ def _load_open_trade_state(conn, trade_row) -> OpenTradeState:
         trade_id=trade_row["id"],
         deal_id=trade_row["deal_id"],
         asset=trade_row["actif"],
+        source=trade_row["source"],
         direction=trade_row["direction"],
         entry_price=trade_row["prix_entree_reel"] or trade_row["prix_entree_prevu"],
         initial_stop_price=trade_row["stop_loss_initial"],
@@ -459,9 +474,15 @@ def _load_open_trade_state(conn, trade_row) -> OpenTradeState:
     )
 
 
-def check_pending_fills(db_path: str, client: CapitalClient) -> int:
+def check_pending_fills(db_path: str, client: CapitalClient, sources: Optional[list] = None) -> int:
     """Détecte les ordres limite (statut='en_attente') qui ont été
     exécutés depuis le dernier passage.
+
+    `sources` : si fourni, ne traite que les trades dont `source` est
+    dans cette liste — évite tout recoupement entre les deux boucles
+    indépendantes (Station X, Flux B) qui tournent en parallèle sur la
+    même base (voir manage_open_trades, docs/DECISIONS.md). Sans filtre
+    par défaut, comportement historique.
 
     Bug réel trouvé le 16/08/2026 pendant le test encadré : Capital.com
     N'attribue PAS le même dealId à l'ordre limite et à la position
@@ -480,9 +501,15 @@ def check_pending_fills(db_path: str, client: CapitalClient) -> int:
     positions_by_working_order_id = {p.get("position", {}).get("workingOrderId"): p for p in positions}
     working_order_ids = {o.get("workingOrderData", {}).get("dealId") for o in client.get_working_orders()}
 
+    query = "SELECT * FROM trades WHERE statut = 'en_attente'"
+    params: list = []
+    if sources:
+        query += f" AND source IN ({','.join('?' for _ in sources)})"
+        params.extend(sources)
+
     filled = 0
     with connection_scope(db_path) as conn:
-        pending = conn.execute("SELECT * FROM trades WHERE statut = 'en_attente'").fetchall()
+        pending = conn.execute(query, params).fetchall()
         for trade_row in pending:
             order_deal_id = trade_row["deal_id"]
             if order_deal_id in working_order_ids:
@@ -514,20 +541,51 @@ def check_pending_fills(db_path: str, client: CapitalClient) -> int:
 
 def manage_open_trades(
     db_path: str, client: CapitalClient, risk_engine: RiskEngine,
-    envelope_managers: dict, envelope_ids: dict, reserve_total: float,
+    envelope_managers: dict, envelope_ids: dict,
+    include_sources: Optional[list] = None, exclude_sources: Optional[list] = None,
     anthropic_client=None, bot_token: Optional[str] = None, chat_id: Optional[str] = None,
-) -> float:
+) -> None:
     """Parcourt les trades ouverts, applique evaluate_position_management
     sur chacun, exécute les actions résultantes (clôture partielle/totale
-    via l'API, mise à jour du stop). Retourne le nouveau total de
-    réserve (§2.3) après application des trades clos pendant ce passage.
-    `envelope_managers`/`envelope_ids` : dict {actif: (CapitalManager,
-    envelope_id)} déjà chargés par l'appelant. `anthropic_client`/
-    `bot_token`/`chat_id` : optionnels, transmis à trade_analyzer.
-    analyze_closed_trade() sur toute clôture complète — omis (None), le
-    trade se ferme quand même, seule l'analyse post-trade est sautée."""
+    via l'API, mise à jour du stop).
+
+    `envelope_managers`/`envelope_ids` : dict {(actif, "stationx"|
+    "hypothesis"): CapitalManager / id} déjà chargés par l'appelant — le
+    routage se fait sur (state.asset, _envelope_source_key(state.source)),
+    jamais sur l'actif seul, pour ne jamais mélanger les résultats de
+    deux sources sur le même actif (§2.11, Flux B — voir docs/DECISIONS.md).
+
+    `include_sources`/`exclude_sources` : filtrent les trades gérés par
+    cet appel — indispensable depuis que deux boucles indépendantes
+    (`run_executor_loop` pour Station X, `trend_executor.run_trend_loop`
+    pour le Flux B) tournent en parallèle sur la même base : chacune ne
+    doit gérer que ses propres trades, jamais ceux de l'autre boucle.
+    Aucun filtre par défaut (comportement historique, utilisé par les
+    tests qui ne se soucient pas du multi-source).
+
+    Le total de réserve (§2.3) n'est plus tenu en mémoire d'un trade à
+    l'autre : chaque clôture complète relit `load_reserve_total(db_path)`
+    juste avant d'écrire, pour rester correct même si Station X et le
+    Flux B closent un trade gagnant au même moment dans deux process
+    séparés (voir docs/DECISIONS.md — limite acceptée : une fenêtre de
+    course résiduelle subsiste entre la lecture et l'écriture, jugée
+    négligeable au volume de trades actuel, sans capital réel en jeu).
+
+    `anthropic_client`/`bot_token`/`chat_id` : optionnels, transmis à
+    trade_analyzer.analyze_closed_trade() sur toute clôture complète —
+    omis (None), le trade se ferme quand même, seule l'analyse
+    post-trade est sautée."""
+    query = "SELECT * FROM trades WHERE statut = 'ouvert'"
+    params: list = []
+    if include_sources:
+        query += f" AND source IN ({','.join('?' for _ in include_sources)})"
+        params.extend(include_sources)
+    if exclude_sources:
+        query += f" AND source NOT IN ({','.join('?' for _ in exclude_sources)})"
+        params.extend(exclude_sources)
+
     with connection_scope(db_path) as conn:
-        open_trades = conn.execute("SELECT * FROM trades WHERE statut = 'ouvert'").fetchall()
+        open_trades = conn.execute(query, params).fetchall()
 
     for trade_row in open_trades:
         try:
@@ -541,25 +599,23 @@ def manage_open_trades(
             if action.action == ManagementActionType.NONE:
                 continue
 
-            reserve_total = _apply_management_action(
-                db_path, client, state, action, envelope_managers, envelope_ids, reserve_total,
+            _apply_management_action(
+                db_path, client, state, action, envelope_managers, envelope_ids,
                 anthropic_client, bot_token, chat_id,
             )
         except Exception:
             logger.exception("Erreur non gérée en gérant le trade %s — passage au suivant", trade_row["id"])
 
-    return reserve_total
-
 
 def _apply_management_action(
-    db_path, client, state, action, envelope_managers, envelope_ids, reserve_total,
+    db_path, client, state, action, envelope_managers, envelope_ids,
     anthropic_client=None, bot_token=None, chat_id=None,
-) -> float:
+) -> None:
     if action.action == ManagementActionType.UPDATE_TRAILING_STOP:
         client.update_position_stop(state.deal_id, action.new_stop_price)
         with connection_scope(db_path) as conn:
             conn.execute("UPDATE trades SET stop_loss_courant = ? WHERE id = ?", (action.new_stop_price, state.trade_id))
-        return reserve_total
+        return
 
     # Clôtures (partielles ou totales)
     is_full_close = action.action == ManagementActionType.CLOSE_FULL_STOP
@@ -590,10 +646,12 @@ def _apply_management_action(
 
     if is_full_close:
         pnl_eur = _trade_pnl_eur(db_path, state.trade_id, action.r_multiple)
-        manager, envelope_id = envelope_managers[state.asset], envelope_ids[state.asset]
+        envelope_key = (state.asset, _envelope_source_key(state.source))
+        manager, envelope_id = envelope_managers[envelope_key], envelope_ids[envelope_key]
         balance_before = manager.balance
-        reserve_share, reserve_total = apply_trade_result(manager, pnl_eur, reserve_total, note=action.detail)
-        persist_trade_result(db_path, envelope_id, manager, state.trade_id, balance_before, reserve_share, reserve_total)
+        reserve_before = load_reserve_total(db_path)
+        reserve_share, reserve_after = apply_trade_result(manager, pnl_eur, reserve_before, note=action.detail)
+        persist_trade_result(db_path, envelope_id, manager, state.trade_id, balance_before, reserve_share, reserve_after)
 
         with connection_scope(db_path) as conn:
             conn.execute(
@@ -609,14 +667,15 @@ def _apply_management_action(
         # entièrement construit et testé mais jamais appelé depuis
         # executor.py — voir docs/DECISIONS.md).
         try:
-            analyze_closed_trade(db_path, state.trade_id, anthropic_client, bot_token, chat_id)
+            analyze_closed_trade(
+                db_path, state.trade_id, anthropic_client, bot_token, chat_id,
+                source=_envelope_source_key(state.source),
+            )
         except Exception:
             logger.exception(
                 "Échec de l'analyse post-trade pour le trade %s — clôture déjà journalisée, sans impact",
                 state.trade_id,
             )
-
-    return reserve_total
 
 
 def _initial_size(db_path: str, trade_id: int) -> float:
@@ -693,32 +752,38 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
 
     envelope_managers, envelope_ids = {}, {}
     for asset in whitelist:
-        envelope_id, manager = load_or_create_envelope(db_path, asset, "demo", caps.envelope_initial)
-        envelope_ids[asset], envelope_managers[asset] = envelope_id, manager
-    reserve_total = load_reserve_total(db_path)
+        envelope_id, manager = load_or_create_envelope(db_path, asset, "demo", caps.envelope_initial, source="stationx")
+        key = (asset, "stationx")
+        envelope_ids[key], envelope_managers[key] = envelope_id, manager
 
-    logger.info("Démarrage de la boucle d'exécution démo (intervalle=%ds, %d actifs)", interval_seconds, len(whitelist))
+    logger.info("Démarrage de la boucle d'exécution démo Station X (intervalle=%ds, %d actifs)", interval_seconds, len(whitelist))
 
     while True:
         try:
             check_pending_fills(db_path, client)
             cancel_stale_working_orders(db_path, client)
 
+            # Exclut le Flux B (source="hypothesis", géré par
+            # trend_executor.run_trend_loop, process séparé) — chaque
+            # boucle ne traite que ses propres signaux/trades.
             with connection_scope(db_path) as conn:
-                pending_signals = conn.execute("SELECT * FROM signals WHERE statut = 'a_valider'").fetchall()
+                pending_signals = conn.execute(
+                    "SELECT * FROM signals WHERE statut = 'a_valider' AND source != ?", (HYPOTHESIS_SOURCE,)
+                ).fetchall()
             for signal_row in pending_signals:
-                asset = signal_row["actif"]
-                if asset not in envelope_managers:
+                key = (signal_row["actif"], "stationx")
+                if key not in envelope_managers:
                     continue  # actif hors liste blanche courante, laissé tel quel pour audit
                 open_signal(
                     db_path, client, signal_row, risk_engine, whitelist,
-                    envelope_managers[asset], envelope_ids[asset],
+                    envelope_managers[key], envelope_ids[key],
                     config.confidence_threshold, go_nogo_status,
                 )
 
-            reserve_total = manage_open_trades(
-                db_path, client, risk_engine, envelope_managers, envelope_ids, reserve_total,
-                anthropic_client, config.telegram_bot_token, config.telegram_chat_id,
+            manage_open_trades(
+                db_path, client, risk_engine, envelope_managers, envelope_ids,
+                exclude_sources=[HYPOTHESIS_SOURCE],
+                anthropic_client=anthropic_client, bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,
             )
         except Exception:
             logger.exception("Erreur non gérée dans la boucle d'exécution — nouvelle tentative au prochain cycle")

@@ -205,7 +205,7 @@ def generate_narrative_summary(features: TradeFeatures, anthropic_client, model:
 def analyze_closed_trade(
     db_path: str, trade_id: int, anthropic_client=None,
     bot_token: Optional[str] = None, chat_id: Optional[str] = None,
-    model: str = DEFAULT_MODEL,
+    model: str = DEFAULT_MODEL, source: str = "stationx",
 ) -> TradeFeatures:
     """Point d'entrée : à appeler juste après qu'executor.py a fermé
     entièrement un trade (statut='ferme'). Calcule toujours la partie
@@ -213,7 +213,13 @@ def analyze_closed_trade(
     `anthropic_client=None` (ou tout échec, y compris le garde-fou)
     persiste la partie déterministe seule plutôt que de bloquer
     l'analyse sur un texte optionnel — fail-safe, mais jamais l'inverse
-    (jamais de narratif sans les chiffres qui le fondent)."""
+    (jamais de narratif sans les chiffres qui le fondent).
+
+    `source` : "stationx" (défaut) ou "hypothesis" (Flux B, voir
+    docs/HYPOTHESES.md) — l'appelant (executor._apply_management_action)
+    la normalise déjà depuis trades.source, ce module ne la redérive pas
+    lui-même pour rester découplé de la convention exacte de valeurs de
+    trades.source (voir docs/DECISIONS.md)."""
     with connection_scope(db_path) as conn:
         trade_row = conn.execute("SELECT * FROM trades WHERE id = ?", (trade_id,)).fetchone()
         if trade_row is None or trade_row["statut"] != "ferme":
@@ -245,13 +251,13 @@ def analyze_closed_trade(
         conn.execute(
             "INSERT INTO trade_analysis "
             "(trade_id, signal_id, r_multiple_realise, denouement, duree_secondes, "
-            " ecart_signal_execution, actif, confiance_signal, heure_ouverture, jour_semaine, boosted, "
+            " ecart_signal_execution, actif, confiance_signal, heure_ouverture, jour_semaine, boosted, source, "
             " resume_narratif, resume_genere_at, resume_modele, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 features.trade_id, features.signal_id, features.r_multiple_realise, features.denouement,
                 features.duree_secondes, features.ecart_signal_execution, features.actif,
-                features.confiance_signal, features.heure_ouverture, features.jour_semaine, int(features.boosted),
+                features.confiance_signal, features.heure_ouverture, features.jour_semaine, int(features.boosted), source,
                 narrative, now if narrative else None, model if narrative else None, now,
             ),
         )

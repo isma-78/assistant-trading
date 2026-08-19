@@ -353,15 +353,53 @@ schéma DB, bug de verrou SQLite trouvé et corrigé, etc.).
   avec Ismaël du moment de démarrage effectif de `run_executor_loop`
   (pas encore écrite comme point d'entrée `if __name__ == "__main__"` —
   seules les fonctions qu'elle appellerait sont construites et testées).
-- **Détection de remplissage d'ordre limite non revalidée sur un
-  remplissage réel** : `check_pending_fills` suppose que Capital.com
-  conserve le même `dealId` entre l'ordre limite et la position
-  résultante (observé lors des tests manuels de placement/annulation,
-  mais aucun ordre n'a réellement été rempli pendant ces tests — le
-  niveau était toujours choisi pour ne pas se déclencher). À confirmer
-  au premier remplissage réel avant de faire confiance à la boucle sans
-  supervision prolongée.
-- Calibration GOLD/US100/US30 toujours bloquée le week-end (hérité de P0/P1).
+
+### P2 — validation réelle et passage en autonome (16-20/08/2026)
+
+Test réel encadré effectué (feu vert d'Ismaël) : boucle démarrée sous
+supervision, un trade BTCUSD réel ouvert → géré → fermé de bout en bout.
+**4 bugs réels trouvés et corrigés** avant le passage en autonome (détail
+complet dans `docs/DECISIONS.md`) :
+1. Migration de schéma manquante (`trades.deal_id` absent sur la base
+   existante — corrigé par un mécanisme de migration de colonnes dans `init_db()`)
+2. Stop garanti jamais envoyé à l'API (aurait fait échouer toute ouverture)
+3. **Bug critique** : le `dealId` de la position résultante est différent
+   de celui de l'ordre limite d'origine (le lien est `position.workingOrderId`)
+   — `check_pending_fills` ne détectait jamais un remplissage réel avant
+   correction ; confirmé et corrigé en observant un vrai remplissage BTCUSD
+4. `trade_analyzer.py` était construit et testé mais jamais appelé depuis
+   `executor.py` — câblé dans `_apply_management_action`
+
+**`executor_loop` tourne en autonome sur le VPS depuis le 16/08/2026**
+(tmux, aux côtés de `telegram_listener`). Audit du 19/08/2026 : aucun
+crash, 26 signaux GOLD captés en direct, 0 trade ouvert (tous rejetés —
+9 par péremption de prix, 4 par le garde-fou du stop garanti, GOLD
+exigeant ~1% de distance minimum vs ~3 points typiques du canal). Aucune
+tentative d'élargissement de stop ni de moyenne à la baisse observée.
+Calibration GOLD/US100/US30 toujours bloquée le week-end (hérité de P0/P1).
+
+## Palier P2.5 — Flux B (Hypothèse #1, 20/08/2026)
+
+Implémente `docs/HYPOTHESES.md` (validée par Ismaël) : filtre de
+tendance MA(200) + rupture de canal Donchian(20) sur les 5 actifs sans
+signal Station X (US30, EURUSD, GBPUSD, USDJPY, ETHUSD). Détail complet
+de l'architecture (process séparé, filtrage multi-source, migration
+`envelopes.source`) dans `docs/DECISIONS.md`.
+
+- `src/trend_strategy.py` — module `trend_strategy` du CDC (§2.11,
+  §4.4), 100% couvert. Logique pure : régime MA(200) + canal de
+  Donchian(20), aucun LLM.
+- `src/trend_executor.py` — boucle autonome séparée (tmux `trend_executor`
+  sur le VPS), réutilise le même `open_signal`/`manage_open_trades`/
+  `validator`/`risk_engine` qu'`executor.py`, filtré par
+  `source="hypothesis"`.
+- Enveloppes démo strictement séparées (`envelopes.source`, migration de
+  schéma appliquée), trades tagués `source` dans `trade_analysis`.
+- 250 tests passent, 100% sur `risk_engine`/`capital_manager`/`go_nogo`/
+  `validator`/`trend_strategy`.
+- **Aucune conclusion statistique avant 10 trades** (invariant #10, un
+  seul paramètre réglable pour cette hypothèse) — les trades du Flux B
+  sont journalisés, jamais interprétés avant ce seuil.
 
 ## Ce qu'il ne faut jamais faire
 

@@ -81,6 +81,21 @@ def test_load_or_create_envelope_separate_per_asset_and_mode(tmp_path):
     assert btc_reloaded.balance == 500.0  # pas affecté par le mouvement sur GOLD
 
 
+def test_load_or_create_envelope_separate_per_source(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+
+    stationx_id, stationx_manager = load_or_create_envelope(db_path, "EURUSD", "demo", 500.0, source="stationx")
+    hypothesis_id, hypothesis_manager = load_or_create_envelope(db_path, "EURUSD", "demo", 500.0, source="hypothesis")
+
+    assert stationx_id != hypothesis_id
+    stationx_manager.apply_trade_pnl(-20.0, "perte stationx")
+    persist_trade_result(db_path, stationx_id, stationx_manager, trade_id=_insert_dummy_trade(db_path), balance_before=500.0, reserve_share=0.0, reserve_total_after=0.0)
+
+    _, hypothesis_reloaded = load_or_create_envelope(db_path, "EURUSD", "demo", 500.0, source="hypothesis")
+    assert hypothesis_reloaded.balance == 500.0  # jamais affectée par le mouvement de l'autre source
+
+
 def test_load_reserve_total_zero_when_no_movements(tmp_path):
     db_path = str(tmp_path / "test.db")
     init_db(db_path)

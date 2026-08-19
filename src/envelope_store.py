@@ -21,24 +21,33 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def load_or_create_envelope(db_path: str, actif: str, mode: str, capital_initial: float) -> Tuple[int, CapitalManager]:
-    """Charge l'enveloppe (actif, mode) depuis la DB, ou la crée avec
-    capital_initial si elle n'existe pas encore (première exécution pour
-    cet actif). Retourne (envelope_id, CapitalManager positionné au
-    solde courant persisté)."""
+def load_or_create_envelope(
+    db_path: str, actif: str, mode: str, capital_initial: float, source: str = "stationx",
+) -> Tuple[int, CapitalManager]:
+    """Charge l'enveloppe (actif, mode, source) depuis la DB, ou la crée
+    avec capital_initial si elle n'existe pas encore (première exécution
+    pour cet actif/cette source). Retourne (envelope_id, CapitalManager
+    positionné au solde courant persisté).
+
+    `source` distingue les enveloppes du flux Station X ("stationx",
+    valeur par défaut) de celles du Flux B (`"hypothesis"`, docs/HYPOTHESES.md)
+    — jamais mélangées, chacune démarre et évolue indépendamment sur le
+    même actif (§2.11 du CDC : "Métriques calculées séparément par
+    source"). Voir docs/DECISIONS.md pour la migration de schéma associée
+    (envelopes.source, contrainte UNIQUE élargie)."""
     with connection_scope(db_path) as conn:
         row = conn.execute(
-            "SELECT id, capital_courant FROM envelopes WHERE actif = ? AND mode = ?",
-            (actif, mode),
+            "SELECT id, capital_courant FROM envelopes WHERE actif = ? AND mode = ? AND source = ?",
+            (actif, mode, source),
         ).fetchone()
         if row is not None:
             return row["id"], CapitalManager(initial_balance=row["capital_courant"])
 
         now = _now()
         cursor = conn.execute(
-            "INSERT INTO envelopes (actif, mode, capital_initial, capital_courant, nb_rechargements, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, 0, ?, ?)",
-            (actif, mode, capital_initial, capital_initial, now, now),
+            "INSERT INTO envelopes (actif, mode, source, capital_initial, capital_courant, nb_rechargements, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+            (actif, mode, source, capital_initial, capital_initial, now, now),
         )
         envelope_id = cursor.lastrowid
         conn.execute(

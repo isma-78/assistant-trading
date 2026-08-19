@@ -139,7 +139,7 @@ def _state(**overrides):
     # stop_distance = 1 (entry 100, stop 101) -> tp1 (99) = 1R, tp2 (98) = 2R,
     # arithmétique propre pour les assertions de r_multiple ci-dessous.
     base = dict(
-        trade_id=1, deal_id="deal-1", asset="GOLD", direction="short",
+        trade_id=1, deal_id="deal-1", asset="GOLD", source="stationx", direction="short",
         entry_price=100.0, initial_stop_price=101.0, stop_price=101.0,
         tp1=99.0, tp2=98.0, tp1_hit=False, tp2_hit=False, remaining_fraction=1.0,
     )
@@ -459,6 +459,33 @@ def test_check_pending_fills_still_pending_no_change(tmp_path):
     assert filled == 0
 
 
+def test_check_pending_fills_sources_filter_ignores_other_sources(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_prevu, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-stationx', 'stationx', 'GOLD', 'demo', 'short', 0.01, 100.0, 101.0, 101.0, 10.0, 2.0, "
+            "'2026-08-16T00:00:00Z', 'en_attente')",
+            (signal_row["id"],),
+        )
+
+    client = MagicMock()
+    client.get_working_orders.return_value = []  # plus en attente
+    client.get_open_positions.return_value = [
+        {"position": {"dealId": "position-nouveau-id", "workingOrderId": "deal-stationx", "level": 99.98}}
+    ]
+
+    # Filtré sur "hypothesis" uniquement : le trade stationx ci-dessus,
+    # bien que réellement rempli côté broker, ne doit pas être touché par
+    # cet appel (c'est celui de l'autre boucle qui s'en chargera).
+    filled = check_pending_fills(db_path, client, sources=["hypothesis"])
+    assert filled == 0
+
+
 def test_cancel_stale_working_orders_cancels_old_ones(tmp_path):
     client = MagicMock()
     client.get_working_orders.return_value = [
@@ -489,10 +516,10 @@ def test_manage_open_trades_closes_full_stop_and_updates_envelope(tmp_path):
     client.get_market_snapshot.return_value = {"snapshot": {"bid": 101.0, "offer": 101.2, "marketStatus": "TRADEABLE"}}
     client.get_prices.return_value = {"prices": []}  # pas assez pour un ATR -> None, sans importance ici (stop touché)
 
-    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0)
-    reserve_total = manage_open_trades(
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="stationx")
+    manage_open_trades(
         db_path, client, make_engine(),
-        envelope_managers={"GOLD": envelope_manager}, envelope_ids={"GOLD": envelope_id}, reserve_total=0.0,
+        envelope_managers={("GOLD", "stationx"): envelope_manager}, envelope_ids={("GOLD", "stationx"): envelope_id},
     )
 
     client.close_position.assert_called_once()
@@ -505,6 +532,76 @@ def test_manage_open_trades_closes_full_stop_and_updates_envelope(tmp_path):
     finally:
         conn.close()
     assert envelope_manager.balance == 490.0  # perte imputée en totalité (§2.3)
+
+
+def _insert_open_trade(db_path, signal_id, source, deal_id):
+    with connection_scope(db_path) as conn:
+        return conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, ?, ?, 'GOLD', 'demo', 'short', 0.01, 100.0, 101.0, 101.0, 10.0, 2.0, "
+            "'2026-08-16T00:00:00Z', 'ouvert')",
+            (signal_id, deal_id, source),
+        ).lastrowid
+
+
+def test_manage_open_trades_exclude_sources_skips_hypothesis(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+    hyp_trade_id = _insert_open_trade(db_path, signal_row["id"], "hypothesis", "deal-hyp")
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 101.0, "offer": 101.2, "marketStatus": "TRADEABLE"}}
+    client.get_prices.return_value = {"prices": []}
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis")
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("GOLD", "hypothesis"): envelope_manager}, envelope_ids={("GOLD", "hypothesis"): envelope_id},
+        exclude_sources=["hypothesis"],
+    )
+
+    client.close_position.assert_not_called()
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (hyp_trade_id,)).fetchone()
+        assert trade["statut"] == "ouvert"  # jamais touché : exclu par le filtre
+    finally:
+        conn.close()
+
+
+def test_manage_open_trades_include_sources_only_hypothesis(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+    stationx_trade_id = _insert_open_trade(db_path, signal_row["id"], "stationx", "deal-sx")
+    hyp_trade_id = _insert_open_trade(db_path, signal_row["id"], "hypothesis", "deal-hyp")
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 101.0, "offer": 101.2, "marketStatus": "TRADEABLE"}}
+    client.get_prices.return_value = {"prices": []}
+
+    _, stationx_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="stationx")
+    hyp_id, hyp_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis")
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("GOLD", "stationx"): stationx_manager, ("GOLD", "hypothesis"): hyp_manager},
+        envelope_ids={("GOLD", "hypothesis"): hyp_id},
+        include_sources=["hypothesis"],
+    )
+
+    conn = get_connection(db_path)
+    try:
+        stationx_trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (stationx_trade_id,)).fetchone()
+        hyp_trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (hyp_trade_id,)).fetchone()
+        assert stationx_trade["statut"] == "ouvert"  # non inclus, jamais touché
+        assert hyp_trade["statut"] == "ferme"        # inclus, fermé (stop touché)
+    finally:
+        conn.close()
+    assert hyp_manager.balance == 490.0
+    assert stationx_manager.balance == 500.0  # enveloppe stationx jamais affectée
 
 
 def test_manage_open_trades_triggers_trade_analysis_on_full_close(tmp_path):
@@ -535,11 +632,11 @@ def test_manage_open_trades_triggers_trade_analysis_on_full_close(tmp_path):
     response.content = [MagicMock(text="Le trade sur GOLD a touché le stop après une brève ouverture.")]
     anthropic_client.messages.create.return_value = response
 
-    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0)
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="stationx")
     with patch("src.trade_analyzer.send_notification") as mock_notify:
         manage_open_trades(
             db_path, client, make_engine(),
-            envelope_managers={"GOLD": envelope_manager}, envelope_ids={"GOLD": envelope_id}, reserve_total=0.0,
+            envelope_managers={("GOLD", "stationx"): envelope_manager}, envelope_ids={("GOLD", "stationx"): envelope_id},
             anthropic_client=anthropic_client, bot_token="tok", chat_id="42",
         )
 
@@ -549,6 +646,7 @@ def test_manage_open_trades_triggers_trade_analysis_on_full_close(tmp_path):
         assert analysis is not None
         assert analysis["r_multiple_realise"] == pytest.approx(-1.0)
         assert analysis["resume_narratif"] is not None
+        assert analysis["source"] == "stationx"
     finally:
         conn.close()
     mock_notify.assert_called_once()
