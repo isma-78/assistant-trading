@@ -44,8 +44,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Tuple
 
+from src import circuit_breaker_store
 from src.capital_client import CapitalApiError, CapitalClient
 from src.capital_manager import CapitalManager, apply_trade_result
+from src.circuit_breaker import evaluate_exposure_cap
 from src.db import connection_scope
 from src.envelope_store import load_or_create_envelope, load_reserve_total, persist_trade_result
 from src.go_nogo import GoNoGoStatus
@@ -335,13 +337,41 @@ def _compute_guaranteed_stop_distance(client: CapitalClient, epic: str, entry_pr
 def open_signal(
     db_path: str, client: CapitalClient, signal_row, risk_engine: RiskEngine, whitelist: dict,
     envelope_manager: CapitalManager, envelope_id: int, confidence_threshold: float, go_nogo_status: GoNoGoStatus,
+    bot_token: Optional[str] = None, chat_id: Optional[str] = None,
 ) -> Optional[str]:
     """Traite un signal statut='a_valider' : valide, dimensionne, place
     un ordre LIMITE (§2.8), journalise. Retourne le deal_id si un ordre a
     été placé, None sinon (rejet quelque niveau que ce soit — toujours
-    journalisé dans risk_decisions, jamais silencieux)."""
+    journalisé dans risk_decisions, jamais silencieux).
+
+    Deux garde-fous supplémentaires appliqués ICI, autour de
+    decide_entry (validator + risk_engine, invariant #3, jamais modifiés
+    pour cette intégration) plutôt que dedans — coupe-circuits §2.7 et
+    circuit_breaker_store.py sont un module séparé, voir docs/DECISIONS.md :
+    1. Blocage global/actif (stop_urgence, /pause, coupe-circuit R déjà
+       déclenché) : vérifié AVANT decide_entry, ne consomme pas de calcul
+       de sizing pour un signal qui sera de toute façon rejeté.
+    2. Plafond d'exposition simultanée (§2.3, 10% de l'enveloppe) :
+       vérifié APRÈS decide_entry, seul moment où le risque incrémental
+       (risk_amount_eur) de CE signal est connu."""
     asset = signal_row["actif"]
     epic = asset
+    now = _now()
+
+    blocked, block_reason = circuit_breaker_store.is_asset_blocked(
+        db_path, asset, signal_row["source"], datetime.now(timezone.utc), bot_token, chat_id,
+    )
+    if blocked:
+        with connection_scope(db_path) as conn:
+            conn.execute(
+                "INSERT INTO risk_decisions (signal_id, decided_at, approved, reason, detail, units, risk_amount_eur) "
+                "VALUES (?, ?, 0, 'circuit_breaker_blocked', ?, NULL, NULL)",
+                (signal_row["id"], now, f"Actif/global bloqué par un coupe-circuit : {block_reason}"),
+            )
+            conn.execute("UPDATE signals SET statut = 'rejete' WHERE id = ?", (signal_row["id"],))
+        logger.info("Signal %s rejeté : coupe-circuit actif (%s)", signal_row["id"], block_reason)
+        return None
+
     snapshot = get_price_snapshot(client, epic)
 
     decision = decide_entry(
@@ -352,7 +382,18 @@ def open_signal(
         confidence_threshold=confidence_threshold, go_nogo_ok=go_nogo_status.allowed,
     )
 
-    now = _now()
+    if decision.approved:
+        open_risk_eur = circuit_breaker_store.get_open_risk_eur(db_path, asset, signal_row["source"])
+        if evaluate_exposure_cap(open_risk_eur, envelope_manager.balance, decision.risk_decision.risk_amount_eur):
+            decision = EntryDecision(
+                approved=False, validation=decision.validation, risk_decision=decision.risk_decision,
+                detail=(
+                    f"Rejeté : plafond d'exposition simultanée dépassé (§2.3) — "
+                    f"engagé={open_risk_eur}€ + nouveau={decision.risk_decision.risk_amount_eur}€ "
+                    f"> 10% de {envelope_manager.balance}€"
+                ),
+            )
+
     with connection_scope(db_path) as conn:
         conn.execute(
             "INSERT INTO risk_decisions (signal_id, decided_at, approved, reason, detail, units, risk_amount_eur) "
@@ -698,6 +739,81 @@ def _trade_pnl_eur(db_path: str, trade_id: int, last_r_multiple: float) -> float
 
 
 # ---------------------------------------------------------------------------
+# /stop_urgence (§7.1) — fermeture forcée de toutes les positions ouvertes
+# ---------------------------------------------------------------------------
+
+def force_close_all_open_trades(
+    db_path: str, client: CapitalClient,
+    envelope_managers: dict, envelope_ids: dict,
+    include_sources: Optional[list] = None, exclude_sources: Optional[list] = None,
+    anthropic_client=None, bot_token: Optional[str] = None, chat_id: Optional[str] = None,
+    reason: str = "Arrêt d'urgence (/stop_urgence)",
+) -> int:
+    """Ferme immédiatement TOUTES les positions ouvertes du périmètre
+    donné (source), au prix courant, et annule tous les ordres limite en
+    attente du même périmètre. Retourne le nombre de positions fermées.
+
+    Seule dérogation assumée à "ordres limite uniquement, jamais au
+    marché" (§2.8) : /stop_urgence est une action de sécurité manuelle
+    déclenchée par Ismaël via le bot de contrôle, pas l'exécution d'un
+    signal — voir docs/DECISIONS.md. Réutilise _apply_management_action
+    (même code que toute clôture SL/TP — envelope, réserve, journalisation,
+    analyse post-trade), seule la CONSTRUCTION de l'action diffère
+    (prix courant plutôt qu'un niveau de stop/TP déjà connu)."""
+    query = "SELECT * FROM trades WHERE statut = 'ouvert'"
+    params: list = []
+    if include_sources:
+        query += f" AND source IN ({','.join('?' for _ in include_sources)})"
+        params.extend(include_sources)
+    if exclude_sources:
+        query += f" AND source NOT IN ({','.join('?' for _ in exclude_sources)})"
+        params.extend(exclude_sources)
+    with connection_scope(db_path) as conn:
+        open_trades = conn.execute(query, params).fetchall()
+
+    closed = 0
+    for trade_row in open_trades:
+        try:
+            with connection_scope(db_path) as conn:
+                state = _load_open_trade_state(conn, trade_row)
+            snapshot = get_price_snapshot(client, state.asset)
+            r_multiple = compute_r_multiple(state.direction, state.entry_price, state.initial_stop_price, snapshot.mid)
+            action = ManagementAction(
+                action=ManagementActionType.CLOSE_FULL_STOP,
+                fraction_to_close=state.remaining_fraction,
+                exit_price=snapshot.mid,
+                r_multiple=r_multiple,
+                detail=reason,
+            )
+            _apply_management_action(
+                db_path, client, state, action, envelope_managers, envelope_ids,
+                anthropic_client, bot_token, chat_id,
+            )
+            closed += 1
+        except Exception:
+            logger.exception("Échec de fermeture d'urgence du trade %s — passage au suivant", trade_row["id"])
+
+    pending_query = "SELECT * FROM trades WHERE statut = 'en_attente'"
+    pending_params: list = []
+    if include_sources:
+        pending_query += f" AND source IN ({','.join('?' for _ in include_sources)})"
+        pending_params.extend(include_sources)
+    if exclude_sources:
+        pending_query += f" AND source NOT IN ({','.join('?' for _ in exclude_sources)})"
+        pending_params.extend(exclude_sources)
+    with connection_scope(db_path) as conn:
+        pending = conn.execute(pending_query, pending_params).fetchall()
+    for trade_row in pending:
+        try:
+            client.cancel_working_order(trade_row["deal_id"])
+            logger.info("Ordre limite annulé (arrêt d'urgence) : trade_id=%s", trade_row["id"])
+        except CapitalApiError:
+            logger.exception("Échec d'annulation d'urgence de l'ordre du trade %s", trade_row["id"])
+
+    return closed
+
+
+# ---------------------------------------------------------------------------
 # Boucle continue — point d'entrée production
 # ---------------------------------------------------------------------------
 
@@ -757,9 +873,47 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
         envelope_ids[key], envelope_managers[key] = envelope_id, manager
 
     logger.info("Démarrage de la boucle d'exécution démo Station X (intervalle=%ds, %d actifs)", interval_seconds, len(whitelist))
+    process_name = "executor"
 
     while True:
         try:
+            now = datetime.now(timezone.utc)
+
+            # Surcouche anomalie système (§2.7) : sonde de connectivité
+            # légère à chaque cycle plutôt que d'instrumenter chaque appel
+            # métier individuellement (écart documenté, voir
+            # docs/DECISIONS.md) — 3 échecs consécutifs de CETTE sonde
+            # déclenchent la pause générale des entrées.
+            try:
+                client.get_account_balance()
+                circuit_breaker_store.record_api_result(db_path, process_name, True)
+            except CapitalApiError:
+                circuit_breaker_store.record_api_result(
+                    db_path, process_name, False, config.telegram_bot_token, config.telegram_chat_id,
+                )
+                logger.exception("Échec de la sonde de connectivité API — itération sautée")
+                time.sleep(interval_seconds)
+                continue
+
+            circuit_breaker_store.check_channel_inactivity(db_path, now, config.telegram_bot_token, config.telegram_chat_id)
+
+            # /stop_urgence (§7.1) : fermeture forcée une seule fois par
+            # activation (voir circuit_breaker_store.get_unhandled_stop_
+            # urgence_event_id) — les itérations suivantes n'ont rien à
+            # fermer (déjà fait) et les nouvelles entrées restent bloquées
+            # par is_asset_blocked tant que /reprendre n'a pas été envoyé.
+            stop_event_id = circuit_breaker_store.get_unhandled_stop_urgence_event_id(db_path, process_name)
+            if stop_event_id is not None:
+                closed = force_close_all_open_trades(
+                    db_path, client, envelope_managers, envelope_ids,
+                    exclude_sources=[HYPOTHESIS_SOURCE],
+                    anthropic_client=anthropic_client, bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,
+                )
+                circuit_breaker_store.mark_stop_urgence_handled(db_path, process_name, stop_event_id)
+                logger.warning("Arrêt d'urgence traité : %d position(s) Station X fermée(s)", closed)
+                time.sleep(interval_seconds)
+                continue
+
             check_pending_fills(db_path, client)
             cancel_stale_working_orders(db_path, client)
 
@@ -778,6 +932,7 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
                     db_path, client, signal_row, risk_engine, whitelist,
                     envelope_managers[key], envelope_ids[key],
                     config.confidence_threshold, go_nogo_status,
+                    config.telegram_bot_token, config.telegram_chat_id,
                 )
 
             manage_open_trades(

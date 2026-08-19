@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src import circuit_breaker_store
 from src.capital_manager import CapitalManager
 from src.db import connection_scope, get_connection, init_db
 from src.envelope_store import load_or_create_envelope
@@ -650,3 +651,163 @@ def test_manage_open_trades_triggers_trade_analysis_on_full_close(tmp_path):
     finally:
         conn.close()
     mock_notify.assert_called_once()
+
+
+# --- coupe-circuits / exposition simultanée (§2.7, §2.3) -----------------
+
+def test_open_signal_rejected_when_asset_blocked_by_circuit_breaker(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)
+    circuit_breaker_store.trigger_manual_pause(db_path, "GOLD", "test")
+
+    client = MagicMock()
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result is None
+    client.get_market_snapshot.assert_not_called()  # court-circuité avant même de consulter le marché
+    conn = get_connection(db_path)
+    try:
+        decision = conn.execute("SELECT * FROM risk_decisions").fetchone()
+        assert decision["reason"] == "circuit_breaker_blocked"
+        assert conn.execute("SELECT COUNT(*) AS n FROM trades").fetchone()["n"] == 0
+    finally:
+        conn.close()
+
+
+def test_open_signal_rejected_when_exposure_cap_exceeded(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)  # entree=100, stop=101 -> risque 2% de 500 = 10€
+    # Déjà 45€ engagés sur GOLD/stationx : 45 + 10 = 55 > 10% de 500 = 50
+    existing_trade_id = _insert_open_trade(db_path, signal_row["id"], "station_x", "deal-existing")
+    with connection_scope(db_path) as conn:
+        conn.execute("UPDATE trades SET risque_eur = 45.0 WHERE id = ?", (existing_trade_id,))
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result is None
+    client.place_limit_order.assert_not_called()
+    conn = get_connection(db_path)
+    try:
+        decision = conn.execute("SELECT * FROM risk_decisions WHERE signal_id = ?", (signal_row["id"],)).fetchone()
+        assert "exposition" in decision["detail"]
+    finally:
+        conn.close()
+
+
+def test_open_signal_within_exposure_cap_still_approved(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)
+    existing_trade_id = _insert_open_trade(db_path, signal_row["id"], "station_x", "deal-existing")
+    with connection_scope(db_path) as conn:
+        conn.execute("UPDATE trades SET risque_eur = 20.0 WHERE id = ?", (existing_trade_id,))  # 20 + 10 = 30 <= 50
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-new", "level": 100.0}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result == "deal-new"
+
+
+# --- force_close_all_open_trades (/stop_urgence, §7.1) --------------------
+
+def test_force_close_all_open_trades_closes_position_and_credits_envelope(tmp_path):
+    from src.executor import force_close_all_open_trades
+
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+    trade_id = _insert_open_trade(db_path, signal_row["id"], "stationx", "deal-live")
+
+    client = MagicMock()
+    # short, entrée=100, stop initial=101 ; prix courant=99 -> R positif (favorable)
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 99.0, "offer": 99.2, "marketStatus": "TRADEABLE"}}
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="stationx")
+    with patch("src.trade_analyzer.send_notification"):
+        closed = force_close_all_open_trades(
+            db_path, client,
+            envelope_managers={("GOLD", "stationx"): envelope_manager},
+            envelope_ids={("GOLD", "stationx"): envelope_id},
+        )
+
+    assert closed == 1
+    client.close_position.assert_called_once()
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["statut"] == "ferme"
+    finally:
+        conn.close()
+    assert envelope_manager.balance > 500.0  # trade gagnant -> enveloppe créditée
+
+
+def test_force_close_all_open_trades_respects_source_filter(tmp_path):
+    from src.executor import force_close_all_open_trades
+
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+    hyp_trade_id = _insert_open_trade(db_path, signal_row["id"], "hypothesis", "deal-hyp")
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 99.0, "offer": 99.2, "marketStatus": "TRADEABLE"}}
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis")
+    closed = force_close_all_open_trades(
+        db_path, client,
+        envelope_managers={("GOLD", "hypothesis"): envelope_manager},
+        envelope_ids={("GOLD", "hypothesis"): envelope_id},
+        exclude_sources=["hypothesis"],
+    )
+
+    assert closed == 0
+    client.close_position.assert_not_called()
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (hyp_trade_id,)).fetchone()
+        assert trade["statut"] == "ouvert"
+    finally:
+        conn.close()
+
+
+def test_force_close_all_open_trades_cancels_pending_orders(tmp_path):
+    from src.executor import force_close_all_open_trades
+
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_prevu, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'order-pending', 'stationx', 'GOLD', 'demo', 'short', 0.01, 100.0, 101.0, 101.0, 10.0, 2.0, "
+            "'2026-08-16T00:00:00Z', 'en_attente')",
+            (signal_row["id"],),
+        )
+
+    client = MagicMock()
+    closed = force_close_all_open_trades(db_path, client, envelope_managers={}, envelope_ids={})
+
+    assert closed == 0
+    client.cancel_working_order.assert_called_once_with("order-pending")

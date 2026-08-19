@@ -401,6 +401,45 @@ de l'architecture (process séparé, filtrage multi-source, migration
   seul paramètre réglable pour cette hypothèse) — les trades du Flux B
   sont journalisés, jamais interprétés avant ce seuil.
 
+## Palier P2.6 — Coupe-circuits (§2.7) + bot de contrôle minimal (§7.1, 20/08/2026)
+
+Suite à un audit de conformité au CDC (19/08/2026) qui a confirmé
+l'absence totale de coupe-circuits R et de commandes de contrôle à
+distance — les deux manques les plus consequents côté protection.
+Détail complet des choix (scoping par source, sémantique "reprise
+manuelle", interprétations de la surcouche anomalie système,
+dérogation `/stop_urgence`) dans `docs/DECISIONS.md`.
+
+- `src/circuit_breaker.py` — module critique, 100% couvert. Logique pure
+  des seuils R (§2.7 : -2R jour/actif, -5R semaine/actif, -12R depuis le
+  plus haut/actif) + plafond d'exposition simultanée (§2.3, 10% de
+  l'enveloppe) + surcouche anomalie système (3 erreurs API, ≥5 actifs
+  simultanés, inactivité canal 7j).
+- `src/circuit_breaker_store.py` — persistance (`circuit_breaker_events`,
+  `system_state`, nouvelles tables hors §4.5), notifications, commandes
+  /pause /reprendre /stop_urgence. Coupe-circuits scopés (actif, source)
+  — écart assumé pour rester cohérent avec la séparation Station
+  X/Flux B des enveloppes.
+- `src/control_bot.py` — bot de contrôle Telegram, 4e process autonome
+  (tmux `control_bot` sur le VPS). Premier lot du §7.1 : `/etat`,
+  `/pause [actif]`, `/reprendre [actif]`, `/stop_urgence`. Authentifie
+  l'expéditeur par `chat_id` (pas de nouvelle variable d'environnement).
+  N'ouvre jamais de session broker : écrit un événement de contrôle,
+  lu et appliqué par `executor.py`/`trend_executor.py` à leur cycle
+  suivant.
+- `executor.py`/`trend_executor.py` étendus : `open_signal` vérifie le
+  blocage (coupe-circuit + plafond d'exposition) avant toute ouverture ;
+  `force_close_all_open_trades()` (nouveau) implémente `/stop_urgence`
+  — seule dérogation assumée à "ordres limite uniquement" (§2.8), une
+  action de sécurité manuelle n'est pas l'exécution d'un signal.
+- Bug réel trouvé par les tests avant déploiement : `record_trigger`
+  horodatait avec l'horloge réelle plutôt que le `now` évalué par
+  l'appelant, cassant la déduplication "déjà déclenché aujourd'hui" —
+  corrigé, `now` est désormais toujours explicite, jamais recalculé en
+  interne.
+- 318 tests passent, 100% sur `risk_engine`/`capital_manager`/`go_nogo`/
+  `validator`/`trend_strategy`/`circuit_breaker`.
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou

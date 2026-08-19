@@ -28,13 +28,15 @@ redéploiement.
 import logging
 from datetime import datetime, timezone
 
-from src.capital_client import CapitalClient
+from src import circuit_breaker_store
+from src.capital_client import CapitalApiError, CapitalClient
 from src.db import connection_scope
 from src.envelope_store import load_or_create_envelope
 from src.executor import (
     HYPOTHESIS_SOURCE,
     cancel_stale_working_orders,
     check_pending_fills,
+    force_close_all_open_trades,
     manage_open_trades,
     open_signal,
 )
@@ -183,9 +185,42 @@ def run_trend_loop(config, db_path: str, interval_seconds: int = 60) -> None:
         "Démarrage de la boucle Flux B (Hypothèse #1, intervalle=%ds, %d actifs)",
         interval_seconds, len(HYPOTHESIS_ASSETS),
     )
+    process_name = "trend_executor"
 
     while True:
         try:
+            now = datetime.now(timezone.utc)
+
+            # Surcouche anomalie système (§2.7) — même sonde de
+            # connectivité que executor.run_executor_loop, voir sa
+            # docstring pour le raisonnement (non dupliqué ici).
+            try:
+                client.get_account_balance()
+                circuit_breaker_store.record_api_result(db_path, process_name, True)
+            except CapitalApiError:
+                circuit_breaker_store.record_api_result(
+                    db_path, process_name, False, config.telegram_bot_token, config.telegram_chat_id,
+                )
+                logger.exception("Échec de la sonde de connectivité API — itération sautée")
+                time.sleep(interval_seconds)
+                continue
+
+            # /stop_urgence (§7.1) : même mécanisme "une seule fermeture
+            # forcée par activation" qu'executor.run_executor_loop, mais
+            # suivi séparément par process_name — chaque boucle ferme
+            # uniquement ses propres positions (source=hypothesis ici).
+            stop_event_id = circuit_breaker_store.get_unhandled_stop_urgence_event_id(db_path, process_name)
+            if stop_event_id is not None:
+                closed = force_close_all_open_trades(
+                    db_path, client, envelope_managers, envelope_ids,
+                    include_sources=[HYPOTHESIS_SOURCE],
+                    anthropic_client=anthropic_client, bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,
+                )
+                circuit_breaker_store.mark_stop_urgence_handled(db_path, process_name, stop_event_id)
+                logger.warning("Arrêt d'urgence traité : %d position(s) Flux B fermée(s)", closed)
+                time.sleep(interval_seconds)
+                continue
+
             for asset in HYPOTHESIS_ASSETS:
                 _generate_and_queue_signal(db_path, client, asset)
 
@@ -204,6 +239,7 @@ def run_trend_loop(config, db_path: str, interval_seconds: int = 60) -> None:
                     db_path, client, signal_row, risk_engine, whitelist,
                     envelope_managers[key], envelope_ids[key],
                     config.confidence_threshold, go_nogo_status,
+                    config.telegram_bot_token, config.telegram_chat_id,
                 )
 
             manage_open_trades(

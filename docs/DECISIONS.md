@@ -12,6 +12,148 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — Palier P2.6 : coupe-circuits (§2.7) + bot de contrôle minimal (§7.1)
+
+Priorité fixée par Ismaël après l'audit de conformité du 19/08/2026 :
+combler les deux manques les plus consequents identifiés (aucun frein
+automatique sur un actif qui perd, aucun levier manuel à distance) avant
+dashboard/metrics.
+
+### Architecture
+
+- **`src/circuit_breaker.py`** (module critique, 100% couvert) : logique
+  pure des seuils R (§2.7 : -2R jour, -5R semaine, -12R depuis le plus
+  haut) + plafond d'exposition simultanée (§2.3, 10%) + surcouche
+  anomalie système (3 erreurs API, ≥5 actifs, inactivité canal). Aucun
+  I/O, même séparation que `risk_engine.py`.
+- **`src/circuit_breaker_store.py`** (I/O, ~99% couvert — même niveau
+  d'exigence qu'`envelope_store.py`, pas les 100% de la logique pure) :
+  persistance des déclenchements (`circuit_breaker_events`), lecture de
+  l'historique de trades, notifications, commandes /pause /reprendre
+  /stop_urgence.
+- **`src/control_bot.py`** (I/O, ~74% couvert — boucle de long-polling
+  Telegram non unitairement testée, même traitement que
+  `run_executor_loop`/`run_listener`) : 4e process autonome sur le VPS.
+
+### Coupe-circuits scopés (actif, source), pas juste (actif)
+
+Le §2.7 littéral ne mentionne pas "source" (notion introduite après coup
+par le Flux B, palier P2.5, postérieur à la rédaction du §2.7). Sans ce
+scoping, une série de pertes du Flux B sur EURUSD bloquerait à tort
+Station X sur le même actif (et inversement) — incohérent avec la
+séparation déjà appliquée aux enveloppes (`envelopes.source`). Les
+commandes `/pause`/`/reprendre` du bot, elles, restent scopées au seul
+actif (les deux sources à la fois) : le §7.1 ne distingue pas la source,
+et Ismaël n'a pas à connaître cette distinction interne pour piloter le
+système en urgence.
+
+### Sémantique de "reprise manuelle" — journal d'événements, jamais un flag
+
+`circuit_breaker_events` est un journal, pas un simple booléen : un
+déclenchement "reprise manuelle" (week_r, drawdown_r, manual_pause,
+stop_urgence, api_errors, breadth) reste actif tant qu'aucune ligne
+`cleared_at` n'existe pour lui, **quel que soit** ce qu'un recalcul en
+direct des R redonnerait ensuite (testé explicitement :
+`test_is_asset_blocked_week_latched_ignores_live_recovery`) — sinon
+"reprise manuelle" du §2.7 n'aurait aucun sens, la semaine suivante
+lèverait le blocage toute seule. Seul `day_r` s'éteint sans action
+(changement de date UTC), cohérent avec "Reprise Auto le lendemain".
+
+### Bug réel trouvé par les tests : horodatage d'un déclenchement divergent du `now` évalué
+
+`record_trigger()` et `_maybe_trigger_breadth_pause()` utilisaient
+`datetime.now()` (horloge réelle) pour horodater un événement, alors que
+la décision qui vient de le produire (`evaluate_circuit_breakers`) avait
+été prise avec un `now` explicite passé par l'appelant. En production les
+deux coïncident presque toujours (le `now` réel), mais le test qui
+vérifie la déduplication "déjà déclenché aujourd'hui, pas de second
+appel API" l'a immédiatement révélé (le timestamp stocké ne tombait pas
+sur le même jour que le `now` de test, provoquant un redéclenchement à
+chaque appel). Corrigé : ces deux fonctions acceptent maintenant un
+`now`/`triggered_at` explicite, propagé depuis `is_asset_blocked`, jamais
+recalculé en interne. Symptomatique d'un principe à garder : toute
+fonction qui doit répondre "est-ce aujourd'hui ?" reçoit son `now` en
+paramètre, elle ne l'interroge jamais elle-même.
+
+### Plafond d'exposition simultanée (§2.3, pas §2.7) implémenté ici quand même
+
+Demande explicite d'Ismaël de le grouper avec les coupe-circuits — noté
+pour la traçabilité : structurellement c'est un concept du §2.3 (Gestion
+du capital), pas du §2.7 (Coupe-circuits), mais l'implémentation
+(`evaluate_exposure_cap` dans `circuit_breaker.py`) suit exactement la
+même logique de garde-fou avant ouverture, donc reste dans le même
+module plutôt que dans `capital_manager.py` (qui reste volontairement
+pur/en mémoire, voir l'entrée P2 sur `envelope_store.py`). Approximation
+assumée : l'exposition ouverte utilise `risque_eur` budgété à
+l'ouverture, jamais réduit après une clôture partielle (TP1/TP2) —
+surestime légèrement plutôt que sous-estimer, cohérent avec le parti
+pris fail-safe du reste du projet.
+
+### Surcouche anomalie système — interprétations assumées
+
+- **"3 erreurs API consécutives"** : plutôt que d'instrumenter chaque
+  site d'appel réseau existant (nombreux, risque de régression sur du
+  code déjà critique et testé), une sonde de connectivité légère
+  (`client.get_account_balance()`) est appelée une fois par cycle de
+  boucle ; le compteur est persisté (`system_state`, survit à un
+  redémarrage) plutôt qu'en mémoire. Détecte une vraie coupure API/auth,
+  pas chaque échec ponctuel d'un appel métier individuel — écart assumé
+  pour limiter le risque d'implémentation, documenté ici plutôt que
+  silencieux.
+- **"Pause générale"** (api_errors, breadth) : interprétée comme un
+  blocage des NOUVELLES entrées uniquement, jamais un arrêt de la gestion
+  des positions déjà ouvertes — cohérent avec le principe fail-safe déjà
+  appliqué ailleurs dans le projet ("abandonner la surveillance d'une
+  position ouverte serait plus dangereux que de patienter", voir
+  `executor.py`). Le CDC ne tranche pas explicitement ce point.
+- **Inactivité du canal (7 jours)** : exclut explicitement les
+  `raw_messages` synthétiques du Flux B (`channel='trend_strategy'`) —
+  sinon l'activité de `trend_executor.py` masquerait une vraie coupure
+  du canal Telegram Station X, qui est le seul concerné par cette alerte
+  (testé : `test_check_channel_inactivity_ignores_trend_strategy_synthetic_messages`).
+
+### `/stop_urgence` — seule dérogation à "ordres limite uniquement, jamais au marché" (§2.8)
+
+`force_close_all_open_trades()` (dans `executor.py`, réutilisé par
+`trend_executor.py`) ferme au prix courant, pas via un ordre limite —
+`/stop_urgence` est une action de sécurité manuelle explicitement
+déclenchée par Ismaël, pas l'exécution d'un signal ; le §2.8 encadre
+l'exécution des signaux, pas les actions d'urgence humaines. Réutilise
+`_apply_management_action` (même code que toute clôture SL/TP —
+enveloppe, réserve, journalisation, analyse post-trade), seule la
+construction de l'action diffère.
+
+Latence assumée : le bot de contrôle n'ouvre jamais de session broker
+(séparation contrôle/exécution, invariant #1 même hors LLM) — il écrit
+uniquement un événement ; ce sont `executor.run_executor_loop` et
+`trend_executor.run_trend_loop`, qui possèdent déjà leur propre
+`CapitalClient` authentifié, qui ferment réellement les positions à leur
+cycle suivant (jusqu'à ~60s, l'intervalle de `trend_executor`). Chaque
+process ne ferme que ses propres trades (source), et ne traite un même
+événement `stop_urgence` qu'une seule fois (`system_state`, clé
+`stop_urgence_handled:<process>`) — sinon il retenterait de fermer/annuler
+des positions/ordres déjà clos à chaque itération tant que
+`/reprendre` n'est pas envoyé.
+
+### `control_bot.py` — portée réduite, authentification par chat_id
+
+Seules `/etat`, `/pause [actif]`, `/reprendre [actif]`, `/stop_urgence`
+sont implémentées (demande explicite d'Ismaël pour ce premier lot) — les
+10 autres commandes du §7.1 dépendent de modules encore absents
+(`dashboard`, `confidence_scorer`, `allocator`, `hypothesis_engine`
+officiel, `metrics`), confirmé par l'audit du 19/08/2026. Même bot
+Telegram que `audit_notifier.py` (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`),
+pas le compte d'écoute Station X (Telethon) — deux mécanismes distincts.
+Authentification de l'expéditeur : pas de nouvelle variable
+d'environnement — dans une conversation privée Telegram,
+`message.chat.id == message.from.id`, donc `TELEGRAM_CHAT_ID` (déjà
+utilisé pour recevoir les notifications) sert aussi de liste blanche
+d'expéditeur autorisé ; tout autre `chat_id` est journalisé et ignoré,
+jamais exécuté (testé :
+`test_process_update_unauthorized_chat_ignored`).
+
+---
+
 ## 2026-08-19 — Bug réel : migration `envelopes.source` échouait sur la vraie base VPS (FK)
 
 **Constat** : en déployant P2.5 (Flux B) sur le VPS, `init_db()` a levé

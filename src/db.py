@@ -335,6 +335,39 @@ CREATE TABLE IF NOT EXISTS trade_analysis (
 
     created_at TEXT NOT NULL
 );
+
+-- ---------------------------------------------------------------------
+-- Coupe-circuits (§2.7) + pauses manuelles (§7.1) — ajout P2.6, hors
+-- §4.5 littéral (voir docs/DECISIONS.md). Journal d'événements plutôt
+-- qu'un simple flag : un déclenchement "reprise manuelle" (week_r,
+-- drawdown_r, manual_pause, stop_urgence, api_errors, breadth) reste
+-- actif tant qu'aucune ligne cleared_at n'existe pour lui, quel que soit
+-- ce que le calcul en direct des R redonnerait ensuite (§2.7 : "Reprise
+-- Manuelle" — jamais un recalcul qui repasserait sous le seuil tout
+-- seul). "day_r" ne dépend jamais de cleared_at : il s'éteint seul au
+-- changement de date (voir circuit_breaker_store.py).
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS circuit_breaker_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope TEXT NOT NULL,          -- "asset" | "global"
+    actif TEXT,                   -- NULL si scope="global"
+    source TEXT,                  -- NULL si scope="global" ou pause actif-large (toutes sources)
+    breaker_type TEXT NOT NULL,   -- "day_r" | "week_r" | "drawdown_r" | "manual_pause" | "stop_urgence" | "api_errors" | "breadth" | "channel_inactive"
+    triggered_at TEXT NOT NULL,
+    r_value REAL,
+    note TEXT,
+    cleared_at TEXT,
+    cleared_by TEXT
+);
+
+-- Compteurs/marqueurs techniques (streak d'erreurs API par process,
+-- dernier événement stop_urgence déjà traité par process, etc.) —
+-- persistés pour survivre à un redémarrage, jamais lus par un LLM.
+CREATE TABLE IF NOT EXISTS system_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
