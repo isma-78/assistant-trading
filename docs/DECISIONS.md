@@ -103,6 +103,18 @@ réduit fortement le risque qu'une récidive passe inaperçue au-delà de
 demander l'accès aux journaux système (root) avant de conclure à
 nouveau.
 
+**Réponse d'Ismaël (19/08/2026)** : aucune commande lancée directement
+sur le VPS via SSH pendant la fenêtre concernée (18:02-18:53 UTC) —
+uniquement des prompts envoyés à Claude Code. L'hypothèse d'une
+intervention manuelle de sa part est donc écartée à son tour. Cause
+définitive toujours non identifiée (signal externe le plus probable,
+émetteur inconnu, accès root non disponible pour aller plus loin).
+**Point clos pour l'instant** — pas d'investigation supplémentaire
+(accès root/journalctl) tant que ce n'est pas récurrent : le watchdog
+(`scripts/process_watchdog.py`, actif depuis ce jour) donne désormais une
+alerte immédiate si ça se reproduit, plutôt qu'une découverte après
+coup. Si récidive : rouvrir cette entrée plutôt qu'en créer une nouvelle.
+
 ---
 
 ## 2026-08-20 — Palier P2.6 : coupe-circuits (§2.7) + bot de contrôle minimal (§7.1)
