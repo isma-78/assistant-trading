@@ -493,3 +493,11 @@ Plan validé par Ismaël avant codage. Détail des écarts dans
 - Traiter le futur fichier `.session` Telethon comme un simple detail
   technique — il donne accès au compte Telegram personnel complet
   d'Ismaël (voir pivot Telegram ci-dessus)
+- **Passer un ordre manuel sur le compte démo Capital.com configuré
+  dans `.env`** (celui-là même que `executor.py`/`trend_executor.py`
+  utilisent) — réservé strictement au système (exécution automatique +
+  scripts de calibration `calibrate_pip_value.py`). Un trade manuel
+  signalé le 19/08/2026 a nécessité une vérification complète (aucun
+  écart trouvé au final, voir `docs/DECISIONS.md`) : tout test manuel de
+  la plateforme à l'avenir doit se faire sur un **compte démo Capital.com
+  séparé**, jamais celui-ci — pas besoin de le re-vérifier à chaque fois.

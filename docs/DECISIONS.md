@@ -12,6 +12,76 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-19 — Vérification d'un trade manuel signalé par Ismaël : aucun écart trouvé
+
+Ismaël a signalé avoir passé un trade manuellement sur le compte démo
+Capital.com (directement sur la plateforme, hors système) pour tester le
+compte — date/actif non précisés. Vérification demandée avant toute
+correction.
+
+**Méthode** : plutôt qu'une reconstruction comptable du solde attendu
+(peu fiable ici — le solde réel du compte agrège aussi l'activité des
+scripts P0 hors `trades`, ex. `calibrate_pip_value.py`, qui ne
+journalisent jamais dans la DB par conception), rapprochement direct par
+`dealId` : liste de TOUTE l'activité du compte depuis sa création
+(`GET /history/activity`, du 16/08/2026 à aujourd'hui) comparée
+exhaustivement à `trades` et à l'historique documenté des scripts P0/P2.
+
+**Constat** : compte unique sous ce login (`GET /accounts` : un seul
+compte, "premier test", pas de sous-compte caché où le trade manuel
+aurait pu atterrir). 37 événements d'activité au total, 14
+`POSITION/ACCEPTED`, correspondant à 8 positions distinctes :
+- 5 le 16/08 matin (11h10-11h18 UTC, BTCUSD/ETHUSD, tailles 0,005-type,
+  cycles ouverture/fermeture de ~1-2 min) : profil de
+  `calibrate_pip_value.py` (§P0), jamais censé écrire dans `trades`.
+- 1 le 16/08 après-midi (18h25-18h26 UTC, BTCUSD SELL 0,005, stop
+  garanti, fermée ~90s après) : même profil scripté que ci-dessus — pas
+  dans `trades` non plus, cohérent avec un cycle de calibration/test
+  supplémentaire.
+- 1 le 16/08 après-midi (18h54-19h03 UTC, BTCUSD) : `dealId` identique à
+  `trades.id=3` (`deal_id=00000000-5be9-cdc4-...`, `source=test_manuel_p2`)
+  — le test réel encadré documenté du palier P2. Correspond exactement.
+- 1 aujourd'hui (19h30 UTC, EURUSD BUY 1000 unités) : `dealId` identique
+  à `trades.id=4` (`source=hypothesis`) — le Flux B (`trend_executor`)
+  qui vient d'ouvrir légitimement une position réelle après un signal
+  Donchian(20). **Ce n'est pas le trade manuel signalé** : taille et
+  horodatage collent exactement à ce que le système a lui-même journalisé.
+
+**Aucune activité restante, aucun dealId orphelin.** Solde réel actuel
+~998,2-998,3€ (`deposit` interne Capital.com : 998,58€, contre un
+financement de départ ~1000€) — l'écart de ~1,4€ est cohérent avec les
+pertes déjà connues et documentées des tests P0/P2 (aucune activité
+inconnue à imputer).
+
+**Conclusion : aucun trade manuel non tracké identifié.** Deux
+hypothèses à vérifier avec Ismaël plutôt qu'une correction sans
+fondement : (a) le trade a été passé sur un AUTRE compte démo
+Capital.com (un second identifiant, pas celui configuré dans `.env`) ;
+(b) le trade décrit n'a en réalité pas été exécuté (navigation sur la
+plateforme sans validation finale). Rien n'a été journalisé ni corrigé
+dans la DB — pas d'écart confirmé, pas de correction à faire.
+
+**Mécanisme proposé si un écart est confirmé un jour** (non implémenté
+maintenant, faute de cas réel à traiter) : un mouvement
+`envelope_ledger.type_mouvement = 'manual_test'` distinct de `'trade_pnl'`,
+avec son propre `trade_id` NULL (pas de ligne `trades` associée) —
+`metrics.py` ne lit que `type_mouvement = 'trade_pnl'` (voir
+`get_trade_pnl_movements`), donc un mouvement `manual_test` serait déjà
+naturellement exclu de toutes les métriques statistiques sans code
+supplémentaire. Resterait à écrire : une petite fonction de
+`envelope_store.py` pour l'enregistrer (ajustement de
+`capital_courant` + ligne `manual_test`), jamais appelée
+automatiquement — seulement à la demande, en cas de trade manuel confirmé
+à l'avenir malgré la consigne ci-dessous.
+
+**Recommandation, appliquée immédiatement (voir aussi CLAUDE.md)** :
+plus aucun ordre manuel sur ce compte démo Capital.com — il est
+strictement réservé au système (calibration + exécution automatique).
+Tout test manuel de la plateforme à l'avenir doit utiliser un compte
+démo Capital.com séparé, jamais celui configuré dans `.env`.
+
+---
+
 ## 2026-08-20 — `/aide` + menu natif Telegram (`setMyCommands`)
 
 Demande explicite d'Ismaël : les commandes du bot toujours visibles dans
