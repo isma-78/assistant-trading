@@ -470,6 +470,14 @@ Plan validé par Ismaël avant codage. Détail des écarts dans
   à utiliser `requests` plutôt que `urllib` (upload multipart).
 - 368 tests passent, 100% sur `risk_engine`/`capital_manager`/`go_nogo`/
   `validator`/`trend_strategy`/`circuit_breaker`/`metrics`.
+- **`/aide` + menu natif Telegram** (`control_bot.COMMANDS`, source
+  unique) : `register_bot_commands()` (`setMyCommands`) est appelée à
+  chaque démarrage de `run_control_bot_loop` — le menu Telegram se
+  rafraîchit automatiquement à chaque redémarrage de `control_bot`,
+  aucune étape séparée à lancer. **Pour toute future commande** : ajouter
+  `(nom, description)` à `COMMANDS` + la branche dans `handle_command`,
+  puis redémarrer `control_bot` sur le VPS — voir `docs/DECISIONS.md`.
+  376 tests passent au total.
 
 ## Ce qu'il ne faut jamais faire
 

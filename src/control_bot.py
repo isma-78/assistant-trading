@@ -1,10 +1,17 @@
 """
 control_bot.py — Bot de contrôle Telegram (§7.1 du CDC) : /etat, /pause
-[actif], /reprendre [actif], /stop_urgence, /dashboard. Les 9 autres
-commandes du §7.1 restent hors périmètre (dépendent de modules encore
-absents : confidence_scorer, allocator, hypothesis_engine officiel —
-voir docs/DECISIONS.md), portée volontairement réduite comme
+[actif], /reprendre [actif], /stop_urgence, /dashboard, /aide. Les 9
+autres commandes du §7.1 restent hors périmètre (dépendent de modules
+encore absents : confidence_scorer, allocator, hypothesis_engine officiel
+— voir docs/DECISIONS.md), portée volontairement réduite comme
 audit_notifier.py l'a déjà fait pour les notifications.
+
+Liste des commandes centralisée dans `COMMANDS` (nom + description
+courte) — source UNIQUE, jamais dupliquée : alimente à la fois /aide et
+le menu natif Telegram (`setMyCommands`, ré-enregistré à chaque
+démarrage de run_control_bot_loop, voir sa docstring). Toute commande
+ajoutée doit être déclarée ici, nulle part ailleurs (20/08/2026, demande
+explicite d'Ismaël).
 
 /dashboard (§4.6) génère la page HTML (src/dashboard.py) et l'envoie en
 pièce jointe Telegram plutôt que via un lien vers un serveur web, même
@@ -53,7 +60,18 @@ from src.db import connection_scope
 
 logger = logging.getLogger(__name__)
 
-KNOWN_COMMANDS = {"etat", "pause", "reprendre", "stop_urgence", "dashboard"}
+# Source UNIQUE des commandes implémentées (nom, description courte) —
+# voir docstring du module. Alimente /aide ET le menu natif Telegram.
+# L'ordre reflète celui affiché par /aide et dans le menu Telegram.
+COMMANDS = [
+    ("etat", "Positions ouvertes, enveloppes, statut coupe-circuit par actif"),
+    ("pause", "Stoppe les entrées (global, ou /pause ACTIF pour un seul actif)"),
+    ("reprendre", "Réactive les entrées (global, ou /reprendre ACTIF)"),
+    ("stop_urgence", "Ferme toutes les positions ouvertes, bloque toutes les entrées"),
+    ("dashboard", "Génère et envoie le dashboard complet (§4.6)"),
+    ("aide", "Affiche la liste des commandes disponibles"),
+]
+KNOWN_COMMANDS = {name for name, _ in COMMANDS}
 
 
 def parse_command(text: str) -> Optional[Tuple[str, Optional[str]]]:
@@ -121,6 +139,15 @@ def format_etat(db_path: str) -> str:
     return "\n".join(lines)
 
 
+def format_aide() -> str:
+    """§7.1 /aide : liste des commandes RÉELLEMENT implémentées, dérivée
+    de COMMANDS — jamais une liste séparée à tenir à jour à la main."""
+    lines = ["\U0001F4D6 Commandes disponibles :"]
+    for name, description in COMMANDS:
+        lines.append(f"/{name} — {description}")
+    return "\n".join(lines)
+
+
 def _send_dashboard(db_path: str, bot_token: Optional[str], chat_id: Optional[str]) -> str:
     """Génère le HTML (src/dashboard.py) et l'envoie en pièce jointe
     Telegram (send_document, pas send_notification — voir docstring du
@@ -178,10 +205,34 @@ def handle_command(
     if command == "dashboard":
         return _send_dashboard(db_path, bot_token, chat_id)
 
-    return (
-        f"Commande inconnue : /{command}\n"
-        "Commandes disponibles : /etat, /pause [actif], /reprendre [actif], /stop_urgence, /dashboard"
+    if command == "aide":
+        return format_aide()
+
+    return f"Commande inconnue : /{command}\n\n{format_aide()}"
+
+
+def register_bot_commands(bot_token: str, timeout: float = 10.0) -> bool:
+    """Enregistre le menu natif Telegram (`setMyCommands`) — le menu qui
+    apparaît quand on tape "/" dans la conversation avec le bot, généré
+    depuis COMMANDS (même source que /aide, jamais dupliquée). Appelée à
+    chaque démarrage de run_control_bot_loop : toute commande ajoutée à
+    COMMANDS puis suivie d'un redémarrage du process se reflète
+    automatiquement dans le menu, sans étape manuelle à se rappeler (voir
+    docs/DECISIONS.md). Retourne False sans lever d'exception en cas
+    d'échec réseau — un menu non rafraîchi n'est jamais bloquant."""
+    url = f"{TELEGRAM_API_BASE}/bot{bot_token}/setMyCommands"
+    payload = json.dumps(
+        {"commands": [{"command": name, "description": description} for name, description in COMMANDS]}
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        url, data=payload, headers={"Content-Type": "application/json"}, method="POST",
     )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = json.loads(response.read().decode("utf-8"))
+            return bool(body.get("ok"))
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError):
+        return False
 
 
 def _get_updates(bot_token: str, offset: Optional[int], timeout: int = 25) -> list:
@@ -225,6 +276,10 @@ def run_control_bot_loop(config, db_path: str) -> None:
 
     offset = None
     logger.info("Démarrage du bot de contrôle (chat_id autorisé=%s)", config.telegram_chat_id)
+    if register_bot_commands(config.telegram_bot_token):
+        logger.info("Menu de commandes Telegram enregistré (%d commandes)", len(COMMANDS))
+    else:
+        logger.warning("Échec de l'enregistrement du menu de commandes Telegram (setMyCommands) — non bloquant")
 
     while True:
         try:

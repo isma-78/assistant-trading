@@ -12,6 +12,34 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — `/aide` + menu natif Telegram (`setMyCommands`)
+
+Demande explicite d'Ismaël : les commandes du bot toujours visibles dans
+Telegram (menu natif au "/"), pas un pense-bête qui deviendrait obsolète.
+
+**Liste unique** : `control_bot.COMMANDS` (nom, description courte) est
+la seule source — alimente à la fois `/aide` et `register_bot_commands()`
+(`setMyCommands`). Toute commande future doit être ajoutée **uniquement**
+à cette liste, jamais dans une chaîne de texte séparée.
+
+**Ré-enregistrement automatique, pas une étape manuelle à se rappeler** :
+`register_bot_commands()` est appelée à **chaque démarrage** de
+`run_control_bot_loop()`, donc à chaque redéploiement qui redémarre
+`control_bot` (déjà systématique pour toute modification de code de ce
+module, cf. les redémarrages P2.6/P2.7). Conséquence pratique pour les
+prochains ajouts (`/ajouter_actif`, `/passer_reel`, etc., §7.1) :
+1. Ajouter `(nom, description)` à `COMMANDS`.
+2. Ajouter la branche `if command == "nom": ...` dans `handle_command`.
+3. Redémarrer `control_bot` sur le VPS (kill + relance tmux, procédure
+   déjà utilisée) — le menu Telegram se met à jour tout seul à ce moment,
+   aucune commande `setMyCommands` à lancer séparément.
+
+Échec réseau de `setMyCommands` : jamais bloquant (log + le process
+continue), un menu non rafraîchi n'empêche aucune commande de fonctionner
+via texte brut.
+
+---
+
 ## 2026-08-20 — `metrics.py` + `dashboard.py` (§4.4, §4.5, §4.6)
 
 Plan validé par Ismaël avant codage (deux confirmations explicites).

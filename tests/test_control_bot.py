@@ -1,11 +1,18 @@
+import json
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from src.circuit_breaker_store import get_active_global_block, is_asset_blocked
 from src.control_bot import (
+    COMMANDS,
+    KNOWN_COMMANDS,
     _process_update,
+    format_aide,
     format_etat,
     handle_command,
     parse_command,
+    register_bot_commands,
 )
 from src.db import connection_scope, init_db
 
@@ -193,3 +200,83 @@ def test_process_update_no_message_ignored(tmp_path):
     db_path = str(tmp_path / "t.db")
     init_db(db_path)
     _process_update(db_path, {"update_id": 1}, authorized_chat_id="12345", bot_token="tok")
+
+
+# ---------------------------------------------------------------------------
+# /aide + menu natif Telegram (setMyCommands)
+# ---------------------------------------------------------------------------
+
+def test_commands_list_is_the_single_source_for_known_commands():
+    assert KNOWN_COMMANDS == {name for name, _ in COMMANDS}
+    assert "aide" in KNOWN_COMMANDS
+    assert "dashboard" in KNOWN_COMMANDS
+
+
+def test_format_aide_lists_every_command_with_description():
+    text = format_aide()
+    for name, description in COMMANDS:
+        assert f"/{name}" in text
+        assert description in text
+
+
+def test_handle_command_aide(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    reply = handle_command(db_path, "aide", None)
+    assert reply == format_aide()
+
+
+def test_handle_command_unknown_includes_full_aide_text(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    reply = handle_command(db_path, "bidule", None)
+    assert format_aide() in reply
+
+
+def _fake_response(payload: dict):
+    mock = MagicMock()
+    mock.read.return_value = json.dumps(payload).encode("utf-8")
+    mock.__enter__.return_value = mock
+    mock.__exit__.return_value = False
+    return mock
+
+
+@patch("src.control_bot.urllib.request.urlopen")
+def test_register_bot_commands_success(mock_urlopen):
+    mock_urlopen.return_value = _fake_response({"ok": True, "result": True})
+    assert register_bot_commands("fake-token") is True
+
+    request = mock_urlopen.call_args[0][0]
+    assert request.full_url.endswith("/botfake-token/setMyCommands")
+    body = json.loads(request.data.decode("utf-8"))
+    assert body["commands"] == [{"command": name, "description": desc} for name, desc in COMMANDS]
+
+
+@patch("src.control_bot.urllib.request.urlopen")
+def test_register_bot_commands_telegram_rejects(mock_urlopen):
+    mock_urlopen.return_value = _fake_response({"ok": False, "description": "bad token"})
+    assert register_bot_commands("fake-token") is False
+
+
+@patch("src.control_bot.urllib.request.urlopen")
+def test_register_bot_commands_never_raises_on_network_error(mock_urlopen):
+    import urllib.error
+    mock_urlopen.side_effect = urllib.error.URLError("no network")
+    assert register_bot_commands("fake-token") is False
+
+
+@patch("time.sleep", side_effect=RuntimeError("stop the test loop"))
+@patch("src.control_bot._get_updates", side_effect=RuntimeError("network down"))
+@patch("src.control_bot.register_bot_commands", return_value=True)
+def test_run_control_bot_loop_registers_commands_on_startup(mock_register, mock_get_updates, mock_sleep, tmp_path):
+    # _get_updates échoue -> la boucle appelle time.sleep(5) dans son propre
+    # except -> mocké pour lever et sortir de la boucle infinie, sinon ce
+    # test ne se terminerait jamais.
+    from src.control_bot import run_control_bot_loop
+
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    config = MagicMock(telegram_bot_token="tok", telegram_chat_id="chat")
+    with pytest.raises(RuntimeError, match="stop the test loop"):
+        run_control_bot_loop(config, db_path)
+    mock_register.assert_called_once_with("tok")
