@@ -378,6 +378,17 @@ def _migrate_envelopes_source(conn: sqlite3.Connection) -> None:
     if "source" in existing:
         return
 
+    # `envelope_ledger.envelope_id` référence `envelopes(id)` par clé
+    # étrangère (§4.5). Avec PRAGMA foreign_keys=ON (get_connection),
+    # SQLite refuse de DROP une table encore référencée comme parent par
+    # une autre — trouvé en migrant la vraie base de production (VPS,
+    # 19/08/2026), absent des tests locaux car leurs fixtures ne
+    # journalisaient jamais de mouvement d'enveloppe avant migration. Le
+    # pragma est un no-op au milieu d'une transaction implicite : on le
+    # désactive et le réactive ici, en dehors de toute transaction
+    # ouverte par le reste de init_db(), avec un commit explicite pour
+    # que la table reconstruite soit visible avant réactivation.
+    conn.execute("PRAGMA foreign_keys = OFF")
     conn.execute(
         "CREATE TABLE envelopes_new ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -400,6 +411,8 @@ def _migrate_envelopes_source(conn: sqlite3.Connection) -> None:
     )
     conn.execute("DROP TABLE envelopes")
     conn.execute("ALTER TABLE envelopes_new RENAME TO envelopes")
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = ON")
 
 
 def init_db(db_path: str) -> None:

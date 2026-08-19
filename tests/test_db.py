@@ -79,7 +79,10 @@ def test_init_db_migrates_envelopes_source_preserving_data_and_ids(tmp_path):
         "INSERT INTO envelopes (id, actif, mode, capital_initial, capital_courant, nb_rechargements, "
         "created_at, updated_at) VALUES (7, 'BTCUSD', 'demo', 500.0, 499.66, 0, 't0', 't1')"
     )
-    conn.execute("CREATE TABLE envelope_ledger (id INTEGER PRIMARY KEY, envelope_id INTEGER)")
+    conn.execute(
+        "CREATE TABLE envelope_ledger (id INTEGER PRIMARY KEY, "
+        "envelope_id INTEGER NOT NULL REFERENCES envelopes(id))"
+    )
     conn.execute("INSERT INTO envelope_ledger (id, envelope_id) VALUES (1, 7)")
     conn.commit()
     conn.close()

@@ -12,6 +12,52 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-19 — Bug réel : migration `envelopes.source` échouait sur la vraie base VPS (FK)
+
+**Constat** : en déployant P2.5 (Flux B) sur le VPS, `init_db()` a levé
+`sqlite3.IntegrityError: FOREIGN KEY constraint failed` sur
+`DROP TABLE envelopes`, jamais reproduit localement ni sur les 250 tests
+qui passaient pourtant tous, y compris un test dédié à cette migration
+(`test_init_db_migrates_envelopes_source_preserving_data_and_ids`).
+
+**Cause** : `envelope_ledger.envelope_id` porte une contrainte
+`REFERENCES envelopes(id)` (§4.5) et `get_connection()` active
+`PRAGMA foreign_keys = ON` sur toute connexion. SQLite refuse de `DROP`
+une table encore référencée comme parent par une clé étrangère tant que
+l'enforcement est actif — la vraie base VPS a `envelope_ledger` peuplée
+(9 lignes, dont une pour l'enveloppe BTCUSD réellement tradée). Le test
+dédié à cette migration recréait une table `envelope_ledger` factice
+**sans** la clause `REFERENCES`, donc sans contrainte réelle à enfreindre
+— écart silencieux entre le fixture de test et le schéma réel qui a
+laissé passer le bug jusqu'au déploiement.
+
+**Conséquence observée sur le VPS** : `CREATE TABLE envelopes_new` et
+l'`INSERT` (DDL/DML avant l'échec) ont bien été appliqués, mais
+`DROP TABLE envelopes` a levé une exception avant tout `commit()` —
+la table `envelopes_new` restante était vide (l'`INSERT`, en transaction
+implicite, a été annulé à la fermeture de connexion sans commit) tandis
+que `envelopes` d'origine était intacte (vérifié : 8 enveloppes, soldes
+corrects, BTCUSD à 499.66€). **Aucune perte de donnée** — sauvegarde
+prise avant coup par précaution (`data/backups/assistant_trading_20260819T175913Z.db`)
+puis confirmée inutile.
+
+**Correctif** : `_migrate_envelopes_source()` désactive
+`PRAGMA foreign_keys = OFF` avant la reconstruction de table, commit
+explicitement, puis réactive le pragma — hors de toute transaction
+implicite (le pragma est un no-op au milieu d'une transaction ouverte).
+Table `envelopes_new` résiduelle nettoyée manuellement sur le VPS avant
+de relancer la migration corrigée. Test de régression corrigé pour
+inclure la vraie clause `REFERENCES` sur `envelope_ledger`, reproduisant
+fidèlement l'échec avant le correctif.
+
+**Leçon retenue** : pour toute migration de schéma testée avec une table
+de fixture recréée à la main (plutôt qu'issue du vrai `SCHEMA`), vérifier
+que les contraintes (FK, UNIQUE, NOT NULL) sont répliquées à l'identique
+— sinon le test peut passer sur un schéma qui ne reflète pas les
+contraintes réelles.
+
+---
+
 ## 2026-08-16 — `parser.py` déterministe plutôt que LLM (§4.4, §3.3, §4.1)
 
 **CDC littéral** : §4.4 classe `parser` comme "Texte → JSON via LLM
