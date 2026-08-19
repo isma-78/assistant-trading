@@ -12,6 +12,99 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-19 — Watchdog processus + investigation de la mort silencieuse de `trend_executor`
+
+### Watchdog (`scripts/process_watchdog.py`)
+
+Demande explicite d'Ismaël suite à la découverte que `trend_executor`
+s'était arrêté sans laisser de trace (voir investigation ci-dessous).
+Exigences : vérification périodique des 4 process critiques, alerte
+immédiate (pas de redémarrage automatique — "mériterait sa propre
+réflexion"), journalisation systématique.
+
+**cron plutôt qu'un 5e process tmux dédié** : un watchdog qui tournerait
+lui-même comme process long-lived aurait exactement le même point de
+défaillance que ce qu'il surveille — un `trend_executor` bis. cron est
+géré par le système d'init du VPS, indépendant de tout process
+applicatif, invoqué toutes les 5 minutes (`*/5 * * * *`).
+
+**Détection par `pgrep -f` sur la ligne de commande complète, pas par
+présence d'une session tmux** : observé en production que les deux se
+désynchronisent dans les deux sens —
+- une session tmux créée sur un shell interactif (`executor_loop`,
+  lancée à l'origine avec `tmux new-session` puis peuplée via
+  `send-keys`) **survit** au crash du process Python qu'elle contenait
+  (retour au prompt shell, session toujours listée par `tmux ls`) ;
+- une session tmux "one-shot" (`trend_executor`, `control_bot`, lancées
+  directement avec `tmux new-session -d -s NOM 'commande'` comme
+  commande de pane) **disparaît entièrement** dès que cette commande se
+  termine (`remain-on-exit` non activé), emportant avec elle tout
+  scrollback qui aurait pu contenir une trace de l'erreur — c'est
+  exactement ce qui s'est produit pour `trend_executor` (voir
+  ci-dessous).
+
+Seule `pgrep -f "python -m <module>"` (présence du process réel, pas de
+son conteneur tmux) donne un signal fiable dans les deux cas.
+
+**État persisté dans `system_state`** (même table que
+`circuit_breaker_store.py`) : une alerte par transition vivant->mort
+(pas de spam à chaque exécution cron tant que le process reste absent),
+notification de reprise au retour vivant. 6 tests, ~91% de couverture
+(cohérent avec le traitement des autres points d'entrée `main()`/boucles
+non testés unitairement ailleurs dans le projet).
+
+### Investigation — mort silencieuse de `trend_executor` (survenue entre 20/08/2026 18:02 et 18:53 UTC)
+
+Constat : le process `python -m src.trend_executor` et sa session tmux
+ont disparu entièrement, sans qu'aucune ligne d'erreur n'apparaisse dans
+`logs/trend_executor.log` au-delà du message de démarrage — donc après
+l'initialisation complète (session Capital.com, liste blanche, chargement
+des enveloppes), puisque ce message n'est journalisé qu'après. Le
+`while True` de `run_trend_loop` capture déjà toute exception via
+`except Exception:` (jamais atteint ici, sinon "Erreur non gérée dans la
+boucle Flux B" serait présent) — un arrêt de ce type ne peut provenir que
+d'un signal reçu par le process (SIGTERM/SIGKILL, non interceptable sans
+handler dédié, qu'aucun module de ce projet n'installe) ou d'un
+`SystemExit`, jamais présent dans le code.
+
+**Vérifié et écarté** :
+- **OOM cgroup** : `/sys/fs/cgroup/user.slice/user-1001.slice/memory.events`
+  montre `oom_kill 0` (compteur cumulatif jamais incrémenté) et
+  `memory.peak` = 304 Mo, très loin du plafond effectif de la tranche
+  utilisateur (`EffectiveMemoryMax` ≈ 1,9 Go, `free -h` confirmant un
+  total système de 1,9 Gi) — la mémoire n'a jamais été sous pression
+  significative.
+- **cron** : `crontab -l` ne contient que la sauvegarde quotidienne
+  (`0 3 * * *`), sans lien temporel avec l'incident (survenu en
+  après-midi/soirée).
+- **fail2ban** : actif mais scope limité à SSH, sans mécanisme pouvant
+  toucher un process local applicatif.
+- **Reboot du VPS** : `uptime` continue sans interruption sur les jours
+  concernés — pas de redémarrage.
+
+**Non vérifiable, accès insuffisant** : les journaux noyau
+(`dmesg`, `journalctl -k`) nécessitent un accès root ; `sudo` exige une
+authentification interactive par mot de passe, indisponible depuis une
+commande SSH non-interactive de ce niveau d'accès. Sans ces journaux,
+impossible de confirmer ou d'exclure un signal envoyé manuellement
+(commande `kill` depuis une session SSH séparée d'Ismaël, ou tout autre
+mécanisme root) — **question restée ouverte, à poser directement à
+Ismaël** : a-t-il, via une session SSH distincte, exécuté une commande
+qui aurait pu toucher ce process pendant cette fenêtre ?
+
+**Conclusion honnête** : cause non identifiée avec certitude. Le
+mécanisme le plus probable, sur la base de ce qui a été écarté, est un
+signal externe (pas une exception applicative, pas une pression mémoire,
+pas un redémarrage système) — sans pouvoir en identifier l'émetteur avec
+les accès actuels. Le watchdog ci-dessus ne résout pas la cause mais
+réduit fortement le risque qu'une récidive passe inaperçue au-delà de
+5-10 minutes. Si l'incident se reproduit, vérifier en priorité
+`memory.peak`/`oom_kill` (déjà écartés cette fois, à recontrôler) et
+demander l'accès aux journaux système (root) avant de conclure à
+nouveau.
+
+---
+
 ## 2026-08-20 — Palier P2.6 : coupe-circuits (§2.7) + bot de contrôle minimal (§7.1)
 
 Priorité fixée par Ismaël après l'audit de conformité du 19/08/2026 :
