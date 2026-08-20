@@ -418,6 +418,44 @@ def test_open_signal_approved_places_limit_order_and_records_trade(tmp_path):
         conn.close()
 
 
+def test_open_signal_records_align_matinale_on_open(tmp_path):
+    # §3.8, variable #1 — collecte uniquement (docs/DECISIONS.md, 20/08/2026).
+    # Signal par défaut : GOLD short (_insert_signal) -> aligné avec un
+    # biais de Matinale "baissier".
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)
+    with connection_scope(db_path) as conn:
+        raw_id = conn.execute(
+            "INSERT INTO raw_messages (telegram_msg_id, channel, received_at, raw_text, message_type) "
+            "VALUES (2, 'station_x', '2026-08-16T00:00:00Z', 'texte', 'matinale')"
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO matinale_summaries "
+            "(raw_message_id, raw_asset_mention, actif, biais_corps, sentiment_tag, contradiction_detectee, published_at) "
+            "VALUES (?, 'Gold', 'GOLD', 'indetermine', 'baissier', 0, '2026-08-16T00:00:00Z')",
+            (raw_id,),
+        )
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-xyz", "level": 100.0}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    conn = get_connection(db_path)
+    try:
+        trade_id = conn.execute("SELECT id FROM trades").fetchone()["id"]
+        features = conn.execute("SELECT align_matinale FROM trade_features WHERE trade_id = ?", (trade_id,)).fetchone()
+        assert features["align_matinale"] == 1
+    finally:
+        conn.close()
+
+
 def test_open_signal_rejected_when_stop_too_tight_for_guaranteed_stop(tmp_path):
     db_path = str(tmp_path / "test.db")
     init_db(db_path)

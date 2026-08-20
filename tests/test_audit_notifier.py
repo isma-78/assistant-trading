@@ -74,6 +74,15 @@ def test_format_matinale_notification_no_contradiction():
     assert "BTCUSD" in text
 
 
+def test_format_matinale_notification_falls_back_to_tag_when_corps_indetermine():
+    # Format réel du canal (20/08/2026) : biais_corps souvent "indetermine"
+    # (texte technique sans phrase heuristique) — le tag déclaré doit
+    # rester visible plutôt qu'un "indetermine" peu informatif.
+    text = format_matinale_notification("BTCUSD", "indetermine", "haussier", False)
+    assert "haussier" in text
+    assert "indetermine" not in text
+
+
 # ---------------------------------------------------------------------------
 # send_document
 # ---------------------------------------------------------------------------

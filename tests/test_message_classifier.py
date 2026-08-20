@@ -20,6 +20,14 @@ MATINALE = (
     "✅ Bonne journée de trading à tous !"
 )
 
+# Format réel du 20/08/2026 (voir docs/DECISIONS.md) : ni "Matinale" ni
+# "point marché" en intro, ni tag "Sentiment X" — seul le tag "Biais X."
+# de fin de paragraphe permet la détection par repli structurel.
+MATINALE_FORMAT_REEL_SANS_MOT_CLE = (
+    "Du côté du Bitcoin en H4, le prix évolue actuellement autour des 69 710 $ "
+    "après une accélération haussière particulièrement importante. Biais haussier."
+)
+
 SIGNAL_ALERT = "VENTE XAUUSD NOW !"
 SIGNAL_STRUCTURED = "🔴 JE VENDS XAUUSD à 4367\n🎯 TP1 : 4364\n🎯 TP2 : 4357\n🎯 TP3 : Ouvert\n🔒 SL : 4370"
 
@@ -34,6 +42,13 @@ AUTRE_WEEKEND = "Le week-end, pas de marché, mais tu peux quand même faire ava
 
 def test_classifies_matinale():
     assert classify(MATINALE) == MessageCategory.MATINALE
+
+
+def test_classifies_matinale_format_reel_via_biais_tag_fallback():
+    # Régression : avant le repli "Biais X.", ce message échouait à être
+    # classé "matinale" faute du mot "Matinale"/"point marché" et faute du
+    # tag "Sentiment X" (bug réel trouvé le 20/08/2026, voir docs/DECISIONS.md).
+    assert classify(MATINALE_FORMAT_REEL_SANS_MOT_CLE) == MessageCategory.MATINALE
 
 
 def test_classifies_structured_signal():

@@ -26,6 +26,43 @@ MATINALE = (
     "✅ Bonne journée de trading à tous !"
 )
 
+# Exemple réel du 20/08/2026 (transcription fidèle fournie par Ismaël,
+# canal Station X) — format actuel de la Matinale, distinct de MATINALE
+# ci-dessus (backfill fév-mars 2025) : tag "Biais X." au lieu de
+# "Sentiment X", pas de séparateur "✅", niveaux techniques détaillés par
+# actif (prix, zone de départ, niveau majeur, FVG, Fibonacci). Voir
+# docs/DECISIONS.md pour la recalibration associée.
+MATINALE_FORMAT_REEL = (
+    "Du côté du Bitcoin en H4, le prix évolue actuellement autour des 69 710 $ "
+    "après une accélération haussière particulièrement importante. Le marché "
+    "est parti de la zone des 62 600 $ / 63 000 $ et a progressivement repris "
+    "les différents niveaux techniques avant de déclencher une véritable "
+    "impulsion au-dessus des 64 500 $. Cette accélération a laissé derrière "
+    "elle une large FVG+ H4, signe du déséquilibre créé par la puissance du "
+    "mouvement acheteur. Le Bitcoin se retrouve désormais directement sous "
+    "son sommet situé à 70 048 $, qui représente le niveau majeur à "
+    "surveiller dans les prochaines heures. La grande FVG+ H4 laissée en "
+    "dessous du prix devient alors particulièrement intéressante : sa "
+    "partie haute se situe autour des 67 700 $, tandis que les 50 % à "
+    "66 334 $ et les 61,8 % à 65 457 $ constituent deux niveaux importants "
+    "à l'intérieur de cette zone. Plus bas, les 78,6 % à 64 210 $ "
+    "correspondent au bas de la zone. Biais haussier.\n\n"
+    "Du côté du Gold en H4, le prix évolue actuellement autour des 4 495 $ "
+    "après avoir lui aussi enregistré une très forte accélération haussière. "
+    "Le marché est parti de la zone des 4 325 $ / 4 350 $ avant de reprendre "
+    "rapidement les précédents sommets et d'atteindre les 4 528 $. Dans ce "
+    "scénario, la FVG- H4 située approximativement entre 4 360 $ et 4 455 $ "
+    "deviendrait une zone particulièrement importante. Les 50 % à 4 426 $ "
+    "constituent un premier niveau à surveiller, suivis des 61,8 % à "
+    "4 402 $, puis des 78,6 % à 4 368 $. Biais haussier.\n\n"
+    "Concernant les annonces économiques, deux publications américaines "
+    "importantes sont attendues aujourd'hui à 14h30. Nous aurons tout "
+    "d'abord l'indice manufacturier de la Fed de Philadelphie, avec une "
+    "prévision à 41,4 contre 24,1 précédemment. Au même moment seront "
+    "publiées les inscriptions hebdomadaires au chômage, attendues à 209K "
+    "contre 210K précédemment."
+)
+
 SIGNAL_ALERT = "VENTE XAUUSD NOW !"
 SIGNAL_STRUCTURED = "🔴 JE VENDS XAUUSD à 4367\n🎯 TP1 : 4364\n🎯 TP2 : 4357\n🎯 TP3 : Ouvert\n🔒 SL : 4370"
 
@@ -181,3 +218,65 @@ def test_extract_matinale_gold_contradiction_detected():
 def test_extract_matinale_no_asset_blocks_returns_empty_list():
     result = extract_matinale("Bonne journée à tous, pas de point marché aujourd'hui.")
     assert result.assets == []
+
+
+# --- Format réel du 20/08/2026 (tag "Biais X.", niveaux techniques) -------
+
+def test_extract_matinale_format_reel_returns_two_assets_no_macro_block():
+    result = extract_matinale(MATINALE_FORMAT_REEL)
+    assets = [a.raw_asset_mention for a in result.assets]
+    assert assets == ["Bitcoin", "Gold"]
+
+
+def test_extract_matinale_format_reel_biais_tag_captured_as_sentiment_tag():
+    result = extract_matinale(MATINALE_FORMAT_REEL)
+    bitcoin = next(a for a in result.assets if a.raw_asset_mention == "Bitcoin")
+    gold = next(a for a in result.assets if a.raw_asset_mention == "Gold")
+    assert bitcoin.asset == "BTCUSD"
+    assert bitcoin.sentiment_tag == "haussier"
+    assert gold.asset == "GOLD"
+    assert gold.sentiment_tag == "haussier"
+    # Aucune phrase heuristique ("reste donc X") dans ce format technique
+    # -> pas de biais du corps inféré, donc pas de contradiction inventée.
+    assert bitcoin.biais_corps == "indetermine"
+    assert bitcoin.contradiction_detectee is False
+    assert gold.biais_corps == "indetermine"
+    assert gold.contradiction_detectee is False
+
+
+def test_extract_matinale_format_reel_bitcoin_numeric_fields():
+    result = extract_matinale(MATINALE_FORMAT_REEL)
+    bitcoin = next(a for a in result.assets if a.raw_asset_mention == "Bitcoin")
+    assert bitcoin.prix_courant == 69710.0
+    assert bitcoin.zone_depart_min == 62600.0
+    assert bitcoin.zone_depart_max == 63000.0
+    assert bitcoin.niveau_majeur == 70048.0
+    assert bitcoin.fvg_haut == 67700.0
+    assert bitcoin.fvg_bas == 64210.0  # "78,6 % à 64 210 $ correspondent au bas de la zone"
+    assert bitcoin.fib_50 == 66334.0
+    assert bitcoin.fib_618 == 65457.0
+    assert bitcoin.fib_786 == 64210.0
+
+
+def test_extract_matinale_format_reel_gold_numeric_fields():
+    result = extract_matinale(MATINALE_FORMAT_REEL)
+    gold = next(a for a in result.assets if a.raw_asset_mention == "Gold")
+    assert gold.prix_courant == 4495.0
+    assert gold.zone_depart_min == 4325.0
+    assert gold.zone_depart_max == 4350.0
+    assert gold.niveau_majeur is None  # pas de phrase "niveau majeur" dans ce bloc
+    assert gold.fvg_bas == 4360.0   # "FVG- H4 située approximativement entre 4 360 $ et 4 455 $"
+    assert gold.fvg_haut == 4455.0
+    assert gold.fib_50 == 4426.0
+    assert gold.fib_618 == 4402.0
+    assert gold.fib_786 == 4368.0
+
+
+def test_extract_matinale_format_reel_macro_paragraph_not_extracted_as_asset():
+    # Le bloc "annonces économiques" ne doit jamais générer de
+    # MatinaleAssetSummary ni contaminer les champs numériques de Gold (le
+    # dernier bloc actif, adjacent à ce paragraphe dans le texte).
+    result = extract_matinale(MATINALE_FORMAT_REEL)
+    assert len(result.assets) == 2
+    gold = next(a for a in result.assets if a.raw_asset_mention == "Gold")
+    assert gold.prix_courant == 4495.0  # pas 209000/210000 (chômage) ni 14.30/41.4/24.1

@@ -91,7 +91,13 @@ def format_matinale_notification(asset, biais_corps, sentiment_tag, contradictio
     if contradiction_detectee:
         return (
             f"🔶 Contradiction Matinale détectée (§3.4)\n"
-            f"{asset} : corps={biais_corps} vs tag Sentiment={sentiment_tag}\n"
+            f"{asset} : corps={biais_corps} vs tag déclaré={sentiment_tag}\n"
             f"Biais du corps conservé, tag ignoré — aucune décision automatique."
         )
-    return f"📰 Matinale — {asset} : biais {biais_corps} (tag : {sentiment_tag or 'absent'})"
+    # Le format réel du canal (20/08/2026, docs/DECISIONS.md) laisse
+    # souvent biais_corps="indetermine" (aucune phrase heuristique dans un
+    # texte technique de niveaux/FVG/Fibonacci) — afficher le tag déclaré
+    # dans ce cas plutôt qu'un "indetermine" peu informatif, sans jamais
+    # inventer de biais si aucun des deux n'est résolu.
+    biais_effectif = biais_corps if biais_corps != "indetermine" else (sentiment_tag or "indetermine")
+    return f"📰 Matinale — {asset} : biais {biais_effectif}"

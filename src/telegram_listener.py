@@ -129,12 +129,16 @@ def _handle_matinale(conn, raw_message_id, raw_text, received_at, bot_token, cha
         conn.execute(
             "INSERT INTO matinale_summaries "
             "(raw_message_id, raw_asset_mention, actif, biais_corps, sentiment_tag, "
-            " contradiction_detectee, published_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            " contradiction_detectee, published_at, prix_courant, zone_depart_min, zone_depart_max, "
+            " niveau_majeur, fvg_haut, fvg_bas, fib_50, fib_618, fib_786) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 raw_message_id, summary.raw_asset_mention, summary.asset,
                 summary.biais_corps, summary.sentiment_tag,
                 int(summary.contradiction_detectee), received_at,
+                summary.prix_courant, summary.zone_depart_min, summary.zone_depart_max,
+                summary.niveau_majeur, summary.fvg_haut, summary.fvg_bas,
+                summary.fib_50, summary.fib_618, summary.fib_786,
             ),
         )
         # Une contradiction (§3.4) est toujours notifiée, même après la

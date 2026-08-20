@@ -71,6 +71,7 @@ from src.risk_engine import (
     compute_r_multiple,
 )
 from src.trade_analyzer import analyze_closed_trade
+from src.trade_features_store import record_align_matinale_for_trade
 from src.trend_strategy import DONCHIAN_PERIOD, compute_trailing_stop_channel
 from src.validator import ValidationResult, validate_signal
 
@@ -470,7 +471,7 @@ def open_signal(
         return None
 
     with connection_scope(db_path) as conn:
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
             "prix_entree_prevu, guaranteed_stop, stop_loss_initial, stop_loss_courant, risque_eur, "
             "pourcentage_risque_applique, ouvert_at, statut) "
@@ -483,6 +484,18 @@ def open_signal(
                 now,
             ),
         )
+        trade_id = cursor.lastrowid
+
+    # §3.8, variable #1 — collecte uniquement (invariant : n'influence
+    # jamais decide_entry ci-dessus, appelé APRÈS que le trade est déjà
+    # journalisé). Best-effort : un échec ici ne doit jamais remettre en
+    # cause l'ouverture déjà actée, seule la collecte statistique est
+    # perdue pour ce trade — voir docs/DECISIONS.md (même patron que
+    # l'analyse post-trade best-effort dans _apply_management_action).
+    try:
+        record_align_matinale_for_trade(db_path, trade_id, asset, signal_row["sens"], now)
+    except Exception:
+        logger.exception("Échec de la collecte align_matinale pour le trade %s — sans impact sur l'ouverture", trade_id)
 
     logger.info("Ordre limite placé pour le signal %s : deal_id=%s", signal_row["id"], result["deal_id"])
     return result["deal_id"]

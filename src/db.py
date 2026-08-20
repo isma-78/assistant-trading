@@ -93,9 +93,20 @@ CREATE TABLE IF NOT EXISTS matinale_summaries (
     raw_asset_mention TEXT NOT NULL,
     actif TEXT,
     biais_corps TEXT NOT NULL,     -- "haussier" | "baissier" | "neutre" | "indetermine"
-    sentiment_tag TEXT,            -- "haussier" | "baissier" | "neutre" | NULL
+    sentiment_tag TEXT,            -- "haussier" | "baissier" | "neutre" | NULL — "Sentiment X" ou "Biais X.", voir docs/DECISIONS.md (20/08/2026)
     contradiction_detectee INTEGER NOT NULL,
-    published_at TEXT NOT NULL
+    published_at TEXT NOT NULL,
+    -- Colonnes ajoutées le 20/08/2026, calibrées sur un exemple réel (voir
+    -- docs/DECISIONS.md) — toutes nullables, None si le texte ne les mentionne pas.
+    prix_courant REAL,
+    zone_depart_min REAL,
+    zone_depart_max REAL,
+    niveau_majeur REAL,
+    fvg_haut REAL,
+    fvg_bas REAL,
+    fib_50 REAL,
+    fib_618 REAL,
+    fib_786 REAL
 );
 
 -- ---------------------------------------------------------------------
@@ -392,6 +403,15 @@ _COLUMN_MIGRATIONS = [
     ("trades", "deal_id", "TEXT"),
     ("trade_analysis", "source", "TEXT NOT NULL DEFAULT 'stationx'"),
     ("trades", "guaranteed_stop", "INTEGER NOT NULL DEFAULT 0"),
+    ("matinale_summaries", "prix_courant", "REAL"),
+    ("matinale_summaries", "zone_depart_min", "REAL"),
+    ("matinale_summaries", "zone_depart_max", "REAL"),
+    ("matinale_summaries", "niveau_majeur", "REAL"),
+    ("matinale_summaries", "fvg_haut", "REAL"),
+    ("matinale_summaries", "fvg_bas", "REAL"),
+    ("matinale_summaries", "fib_50", "REAL"),
+    ("matinale_summaries", "fib_618", "REAL"),
+    ("matinale_summaries", "fib_786", "REAL"),
 ]
 
 

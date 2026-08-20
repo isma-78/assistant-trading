@@ -12,6 +12,152 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — §3.8 : collecte de la variable #1 (`align_matinale`) activée
+
+Suite directe de la recalibration de `extract_matinale()` ci-dessous, qui
+débloquait cette collecte. Demande explicite d'Ismaël : collecte
+uniquement, aucune décision n'en dépend.
+
+**État réel des 5 variables du §3.8, vérifié dans le code (pas supposé)** :
+`trade_features` (schéma §4.5) existait depuis le palier P2 mais
+**n'était écrite nulle part** — grep confirmé sur tout `src/` avant cette
+entrée. Aucune des 5 colonnes n'était donc collectée. Après ce lot :
+- `align_matinale` : **collectée**, voir ci-dessous.
+- `align_tendance_fond`, `ratio_gain_risque_prevu`, `proximite_macro`,
+  `volatilite_relative` : **toujours non collectées**. Rien dans ce lot
+  ne les construit — hors périmètre de la demande, à traiter séparément
+  quand elles seront demandées (pas de "tant qu'à faire" non sollicité).
+
+**`src/trade_features_store.py`** (nouveau module) :
+- `compute_align_matinale(direction, biais)` : pure, 100% couverte.
+  Retourne `True` (aligné), `False` (opposé), ou `None` si `biais` est
+  absent, "neutre" ou "indetermine" — un biais non directionnel n'est ni
+  aligné ni opposé, jamais deviné.
+- **Encodage retenu sur `trade_features.align_matinale INTEGER`** (colonne
+  du §4.5, déjà figée, pas de migration) : `1`=aligné, `0`=opposé,
+  `NULL`=non disponible. Tri-état sur une colonne binaire plutôt qu'une
+  migration de schéma pour ajouter une distinction "neutre"/"absent" —
+  le §3.8 ne demande que "aligné/opposé/non disponible", ce que NULL
+  couvre déjà sans ambiguïté ; la distinction fine "neutre déclaré" vs
+  "aucune Matinale du tout" n'a pas d'usage identifié aujourd'hui.
+- `get_latest_matinale_biais(db_path, actif, before)` : lit
+  `matinale_summaries.sentiment_tag` (pas `biais_corps` — c'est le biais
+  **déclaré** par le canal que le §3.8 demande, pas l'heuristique du
+  corps, qui reste réservée à la détection de contradiction §3.4).
+  Filtre `published_at <= before` explicitement — jamais une Matinale
+  future par rapport au trade, pour ne pas introduire de biais
+  rétrospectif dans la future analyse statistique (invariant #10).
+
+**Point de collecte : à l'OUVERTURE du trade, pas à la clôture.** Câblé
+dans `executor.open_signal()`, juste après l'INSERT dans `trades` (donc
+commun à Station X ET au Flux B — `trend_executor.py` appelle la même
+fonction, aucun câblage séparé nécessaire). Choix distinct de
+`trade_analyzer.compute_trade_features()` (qui tourne à la CLÔTURE, table
+`trade_analysis`, un objet complètement différent malgré la ressemblance
+de nom) : le §3.8 veut savoir si le trade était aligné avec le biais
+connu AU MOMENT de l'entrée, pas reconstruit après coup.
+
+**Best-effort, non bloquant** : encapsulé dans un `try/except` autour de
+l'appel dans `open_signal()` — un échec de cette collecte ne remet
+jamais en cause l'ouverture déjà actée (déjà journalisée en base avant
+cet appel), même patron que l'analyse post-trade dans
+`_apply_management_action`.
+
+**Tests** : `tests/test_trade_features_store.py` (15, nouveau, 100% de
+couverture du module) + `tests/test_executor.py` (+1, bout en bout via
+`open_signal`). 416 tests passent au total, 100% maintenu sur les
+modules critiques.
+
+---
+
+## 2026-08-20 — Recalibration d'`extract_matinale()` sur un exemple réel du format actuel
+
+Premier vrai post Matinale détaillé partagé par Ismaël (canal Station X,
+20/08/2026) depuis le backfill fév-mars 2025 qui avait servi de base
+initiale (§P1 de `CLAUDE.md` : "format probablement obsolète, à recalibrer
+sur la prochaine vraie Matinale").
+
+**Constat** : le format a effectivement changé sur deux points.
+1. Le motif "reste donc <mot>" (heuristique de `biais_corps`) n'apparaît
+   pas dans ce texte — normal, il ne prétendait couvrir qu'UN motif
+   possible parmi d'autres, jamais retiré (toujours actif sur l'ancien
+   exemple, `tests/test_parser.py::MATINALE`).
+2. Le tag "Sentiment X" (§3.4 littéral du CDC) est absent ; à la place,
+   chaque paragraphe par actif se termine par "Biais {haussier|baissier|
+   neutre}." — je traite ce tag comme le libellé actuel du même champ
+   déclaré (repli : `_SENTIMENT_TAG_MATINALE` cherché en premier,
+   `_BIAIS_TAG` en second), pas un troisième signal séparé — les deux
+   alimentent `sentiment_tag`, jamais un nouveau champ.
+
+**Conséquence directe sur la détection de contradiction (§3.4)** : sans
+"reste donc X" dans ce format (texte technique de niveaux/FVG/Fibonacci,
+sans adjectif directionnel dans le corps), `biais_corps` reste
+"indetermine" pour les deux blocs de l'exemple — donc `contradiction_
+detectee` reste `False`. C'est le comportement fail-safe voulu (jamais de
+contradiction inventée), mais ça signifie concrètement que la détection
+de contradiction §3.4 est **dormante sur ce nouveau format** tant qu'un
+exemple réel ne montre pas comment (ou si) le canal exprime une
+divergence corps/tag dans ce style d'écriture. Pas comblé par une
+heuristique inventée sans preuve — à recalibrer si/quand un tel exemple
+apparaît.
+
+**Segmentation par actif changée** : l'ancien découpage sur le séparateur
+visuel "✅" (`re.split`) ne fonctionne plus, cet émoji étant absent de
+l'exemple. Remplacé par un ancrage sur la position des en-têtes de bloc
+eux-mêmes ("Du côté du X en <horizon>") — `_split_asset_paragraphs()`,
+indépendant de toute convention de mise en forme du canal. Le dernier
+bloc s'arrête juste après son propre tag de biais pour ne jamais déborder
+sur un paragraphe de clôture ou d'annonces macro (testé explicitement,
+`test_extract_matinale_format_reel_macro_paragraph_not_extracted_as_asset`).
+Les deux exemples (ancien ET nouveau format) passent avec ce même
+découpage, aucune régression.
+
+**Bug de classification trouvé pendant la recalibration** : sans le mot
+"Matinale"/"point marché" explicite ailleurs dans le message,
+`message_classifier._looks_like_matinale()` exigeait un tag "Sentiment X"
+pour son repli structurel — un message de ce nouveau format échouerait
+silencieusement à être classé "matinale" (jamais atteint `extract_
+matinale()` du tout). Corrigé : le repli accepte aussi "Biais X.". Testé
+(`test_classifies_matinale_format_reel_via_biais_tag_fallback`).
+
+**Nouveaux champs numériques extraits par actif** (calibrés sur cet UNIQUE
+exemple, `matinale_summaries` migrée en conséquence — colonnes
+additives, nullables) : `prix_courant`, `zone_depart_min/max`,
+`niveau_majeur`, `fvg_haut/bas`, `fib_50/618/786`. Deux formulations
+réelles différentes observées pour la zone FVG dans le même message
+(Bitcoin : borne haute explicite + borne basse déduite d'une phrase liant
+explicitement le niveau de Fibonacci 78,6% au "bas de la zone" ; Gold :
+les deux bornes données ensemble, "FVG... approximativement entre X $ et
+Y $") — les deux formulations sont supportées, aucune bas de zone n'est
+jamais déduite par convention silencieuse (ex: "toujours le Fibonacci le
+plus profond") sans lien textuel explicite. **Calibré sur un seul
+exemple réel** : à ajuster si un futur post révèle une formulation
+différente (même prudence que `extract_signal`/`extract_suivi` en leur
+temps, §CLAUDE.md P1).
+
+**Sur l'extraction d'image (chart annoté)** : dans cet exemple, l'image
+jointe (chart H4 avec zone FVG grisée) ne semble apporter aucune
+information au-delà du texte — mêmes niveaux, même zone. Priorité donnée
+au texte (riche et suffisant ici) : l'extraction d'image n'est **pas**
+construite à ce palier, reste une piste à activer seulement si un futur
+exemple montre une image porteuse d'une info absente du texte.
+
+**Sur le bloc annonces macro** : utile en complément mais ne remplace pas
+le futur module `macro_calendar` (§2.9, toujours absent) — le canal ne
+mentionne pas nécessairement systématiquement toutes les annonces à fort
+impact, s'y fier comme unique source donnerait une couverture
+incomplète. Volontairement non extrait en données structurées (le §3.8
+ne demande que la variable #4 "proximité annonce macro", pas une base de
+calendrier macro complète — hors périmètre de ce lot).
+
+**Tests** : `tests/test_parser.py` (+5, nouvel exemple réel complet,
+ancien exemple toujours vert), `tests/test_message_classifier.py` (+1,
+régression du bug de classification), `tests/test_audit_notifier.py`
+(+1, repli d'affichage). 400 tests passent à ce stade (avant l'ajout de
+`trade_features_store.py` ci-dessus), aucune régression.
+
+---
+
 ## 2026-08-20 — Deuxième ordre manuel confirmé sur le compte démo système : `record_manual_test_movement()` écrit
 
 Suite directe de l'entrée du 19/08/2026 ci-dessous ("Vérification d'un

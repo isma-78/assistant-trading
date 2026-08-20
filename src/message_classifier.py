@@ -4,7 +4,9 @@ du canal Station X, en 4 catégories exclusives (CDC v4 §3.x).
 
 Catégories :
 - "matinale" : point marché quotidien, un paragraphe par actif se terminant
-  par un tag "Sentiment {haussier|baissier|neutre}."
+  par un tag de biais déclaré — "Sentiment {haussier|baissier|neutre}"
+  (§3.4 littéral) ou "Biais {haussier|baissier|neutre}." (libellé réel
+  observé depuis le 20/08/2026, voir docs/DECISIONS.md)
 - "signal"   : appel à l'ordre — alerte courte ("VENTE XAUUSD NOW !") ou
   message structuré ("JE VENDS XAUUSD à 4367" + niveaux TP/SL).
 - "suivi"    : mise à jour d'un signal déjà envoyé (stop touché, TP touché,
@@ -48,6 +50,14 @@ _MATINALE_ASSET_BLOCK = re.compile(
     r"du c[ôo]t[ée] du .+ en (?:daily|h4|h1|weekly)", re.IGNORECASE
 )
 _SENTIMENT_TAG = re.compile(r"\bsentiment\s+(haussier|baissier|neutre)\b", re.IGNORECASE)
+# "Biais haussier." : libellé du tag de fin de paragraphe observé sur le
+# format réel du canal depuis (au moins) le 20/08/2026 (voir
+# docs/DECISIONS.md) — le mot "Sentiment" n'apparaît plus dans cet exemple.
+# Sans ce repli, un message de ce format sans le mot "Matinale"/"point
+# marché" explicite ailleurs échouerait silencieusement à être classé
+# "matinale" (bug réel trouvé en calibrant parser.extract_matinale() sur
+# cet exemple).
+_BIAIS_TAG = re.compile(r"\bbiais\s+(haussier|baissier|neutre)\b", re.IGNORECASE)
 
 # --- Signal ---
 # Message structuré (avec prix d'entrée explicite après "à") : la marque la
@@ -91,8 +101,13 @@ def _looks_like_matinale(text: str) -> bool:
     if _matches_any(text, _MATINALE_MARKERS):
         return True
     # Sans le mot "Matinale" explicite : au moins un bloc actif structuré
-    # ("Du côté du X en Daily") accompagné d'un tag Sentiment suffit.
-    return bool(_MATINALE_ASSET_BLOCK.search(text) and _SENTIMENT_TAG.search(text))
+    # ("Du côté du X en Daily/H4") accompagné d'un tag de biais déclaré
+    # suffit — "Sentiment X" (§3.4 littéral) ou "Biais X." (format réel
+    # observé depuis le 20/08/2026), quel que soit le libellé du canal.
+    return bool(
+        _MATINALE_ASSET_BLOCK.search(text)
+        and (_SENTIMENT_TAG.search(text) or _BIAIS_TAG.search(text))
+    )
 
 
 def _is_structured_signal(text: str) -> bool:
