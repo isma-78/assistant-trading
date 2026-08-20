@@ -12,6 +12,58 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — Deuxième ordre manuel confirmé sur le compte démo système : `record_manual_test_movement()` écrit
+
+Suite directe de l'entrée du 19/08/2026 ci-dessous ("Vérification d'un
+trade manuel signalé"). En déployant le trailing Flux B (entrée
+suivante), une erreur 404 ("position introuvable") sur le trade EURUSD
+(id=4) a mené à l'historique d'activité du compte démo Capital.com : un
+ordre SELL de 1000 unités EURUSD, `source: "USER"`, exécuté le
+20/08/2026 à 06:50:44 UTC, sans aucune correspondance dans `trades`/
+`signals` — a clôturé la position longue du Flux B par netting.
+
+**Confirmé par Ismaël : trade manuel, comme le 19/08/2026.** Ce n'est
+plus un cas isolé — la consigne "aucun ordre manuel sur ce compte démo,
+utiliser un compte démo séparé pour tout test" (déjà dans `CLAUDE.md`
+depuis le 19/08) reste la référence ; cette entrée documente
+l'occurrence, pas un changement de règle.
+
+**Réconciliation appliquée** (mécanisme envisagé mais pas encore écrit
+au 19/08, écrit maintenant) : `envelope_store.record_manual_test_movement()`
+— crédite le montant réel à l'enveloppe (`envelope_ledger.type_mouvement
+= 'manual_test'`, jamais `'trade_pnl'`, donc invisible de
+`metrics.get_trade_pnl_movements` sans code supplémentaire, comme prévu
+le 19/08), **sans** passer par la règle de réinvestissement des 50%
+(§2.3) — un trade hors système n'est pas un gain de trading à répartir
+vers la réserve sanctuarisée.
+
+Écart assumé par rapport à la proposition initiale du 19/08 ("trade_id
+NULL, pas de ligne trades associée") : ici une ligne `trades` (id=4)
+existe déjà et est simplement marquée `statut='ferme'` séparément (le
+module ne la modifie jamais lui-même, invariant de conception déjà en
+place pour `persist_trade_result`) — `trade_id=4` est donc bien
+renseigné dans le mouvement `manual_test`, pour la traçabilité. La
+fonction accepte aussi `trade_id=None` pour le cas d'origine (trade
+entièrement hors `trades`).
+
+**Chiffres réels** (calculés à partir de l'historique broker, pas
+estimés) : entrée 1.16779, clôture 1.16836 (niveau du côté SELL de la
+transaction de netting), swap -0.16$ (prélevé la veille), soit +0.41$
+net → **+0,35€** au taux EUR/USD du moment de la clôture (1.16836).
+`r_multiple_total` recalculé via `risk_engine.compute_r_multiple` (même
+fonction que toute clôture système, jamais réinventée) : **+0,0529R**.
+`trades.id=4` marqué `statut='ferme'`, `ferme_at` = l'horodatage exact
+de l'événement broker (06:50:44.905 UTC), `pnl_net=0.35` — cohérent avec
+le fait que ni `_apply_management_action` ni ce correctif ne peuplent
+jamais `pnl_brut`/`couts` (colonnes du schéma §4.5 restées inutilisées
+dans tout le code existant, pas une omission propre à ce correctif).
+
+**Tests** : `tests/test_envelope_store.py` (+3, montant complet crédité
+sans partage de réserve, exclusion confirmée de `get_trade_pnl_movements`,
+`trade_id=None` accepté).
+
+---
+
 ## 2026-08-20 — Flux B : trailing Donchian dès l'ouverture (sortie sur profit manquante)
 
 Remonté par Ismaël en observant les deux premiers trades réels du Flux B

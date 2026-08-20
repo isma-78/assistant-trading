@@ -6,7 +6,12 @@ mock) : c'est un test d'intégration léger sur le schéma db.py.
 
 from src.capital_manager import CapitalManager, apply_trade_result
 from src.db import connection_scope, get_connection, init_db
-from src.envelope_store import load_or_create_envelope, load_reserve_total, persist_trade_result
+from src.envelope_store import (
+    load_or_create_envelope,
+    load_reserve_total,
+    persist_trade_result,
+    record_manual_test_movement,
+)
 
 
 def _insert_dummy_trade(db_path: str) -> int:
@@ -145,5 +150,68 @@ def test_persist_trade_result_losing_trade_no_reserve_row(tmp_path):
     try:
         count = conn.execute("SELECT COUNT(*) AS n FROM reserve_ledger").fetchone()["n"]
         assert count == 0
+    finally:
+        conn.close()
+
+
+def test_record_manual_test_movement_credits_full_amount_no_reserve_split(tmp_path):
+    # Contrairement à persist_trade_result (règle des 50%, §2.3), un
+    # mouvement manual_test crédite le montant complet à l'enveloppe et
+    # ne touche jamais la réserve — ce n'est pas un gain de trading.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+
+    envelope_id, manager = load_or_create_envelope(db_path, "EURUSD", "demo", 500.0, source="hypothesis")
+    trade_id = _insert_dummy_trade(db_path)
+
+    record_manual_test_movement(db_path, envelope_id, manager, trade_id, amount_eur=0.35, note="trade manuel confirmé")
+
+    assert manager.balance == 500.35
+    assert load_reserve_total(db_path) == 0.0
+
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute("SELECT * FROM envelopes WHERE id = ?", (envelope_id,)).fetchone()
+        assert row["capital_courant"] == 500.35
+
+        ledger_row = conn.execute(
+            "SELECT * FROM envelope_ledger WHERE envelope_id = ? AND type_mouvement = 'manual_test'", (envelope_id,)
+        ).fetchone()
+        assert ledger_row["trade_id"] == trade_id
+        assert ledger_row["montant_avant"] == 500.0
+        assert ledger_row["montant_apres"] == 500.35
+    finally:
+        conn.close()
+
+
+def test_record_manual_test_movement_excluded_from_trade_pnl_metrics(tmp_path):
+    # metrics.get_trade_pnl_movements ne lit que type_mouvement='trade_pnl'
+    # — un mouvement manual_test ne doit jamais y apparaître.
+    from src.metrics import get_trade_pnl_movements
+
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+
+    envelope_id, manager = load_or_create_envelope(db_path, "EURUSD", "demo", 500.0, source="hypothesis")
+    trade_id = _insert_dummy_trade(db_path)
+    record_manual_test_movement(db_path, envelope_id, manager, trade_id, amount_eur=0.35, note="trade manuel confirmé")
+
+    assert get_trade_pnl_movements(db_path, "EURUSD", "hypothesis") == []
+
+
+def test_record_manual_test_movement_accepts_none_trade_id(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+
+    envelope_id, manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0)
+    record_manual_test_movement(db_path, envelope_id, manager, None, amount_eur=-2.0, note="frais manuel")
+
+    assert manager.balance == 498.0
+    conn = get_connection(db_path)
+    try:
+        ledger_row = conn.execute(
+            "SELECT * FROM envelope_ledger WHERE envelope_id = ? AND type_mouvement = 'manual_test'", (envelope_id,)
+        ).fetchone()
+        assert ledger_row["trade_id"] is None
     finally:
         conn.close()

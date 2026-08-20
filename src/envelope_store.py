@@ -11,7 +11,7 @@ calculés par capital_manager.apply_trade_result(), il ne recalcule rien.
 """
 
 from datetime import datetime, timezone
-from typing import Tuple
+from typing import Optional, Tuple
 
 from src.capital_manager import CapitalManager
 from src.db import connection_scope
@@ -92,3 +92,46 @@ def persist_trade_result(
                 "VALUES (?, ?, ?, ?)",
                 (trade_id, reserve_share, reserve_total_after, now),
             )
+
+
+def record_manual_test_movement(
+    db_path: str, envelope_id: int, envelope: CapitalManager, trade_id: Optional[int],
+    amount_eur: float, note: str,
+) -> None:
+    """Ajuste une enveloppe suite à un mouvement HORS trading système —
+    ex: trade manuel confirmé sur le compte démo Capital.com par Ismaël
+    (§ "Ce qu'il ne faut jamais faire", CLAUDE.md), mécanisme envisagé
+    lors de la première occurrence (19/08/2026) et effectivement écrit à
+    la deuxième (20/08/2026, récurrence — voir docs/DECISIONS.md pour les
+    deux entrées).
+
+    Volontairement distinct de persist_trade_result() :
+    - `type_mouvement='manual_test'`, jamais 'trade_pnl' — metrics.py ne
+      lit que 'trade_pnl' (get_trade_pnl_movements), donc ce mouvement
+      est déjà exclu de toute statistique sans code supplémentaire.
+    - Aucune règle de réinvestissement 50% (capital_manager.apply_trade_
+      result, §2.3) : cette règle répartit un gain RÉALISÉ PAR LE
+      SYSTÈME entre l'enveloppe et la réserve globale — un mouvement hors
+      trading n'est pas un gain de trading, il ne doit ni gonfler la
+      réserve sanctuarisée ni fausser la mesure de performance du
+      système. Le montant complet va à l'enveloppe (reflète simplement
+      l'état réel du compte), la réserve n'est jamais touchée.
+    - `trade_id` accepte None (mouvement sans ligne `trades` associée,
+      le cas envisagé le 19/08/2026) OU l'id d'une ligne `trades`
+      existante que l'appelant a par ailleurs marquée 'ferme' séparément
+      (le cas du 20/08/2026, trade_id=4 — ce module ne modifie jamais
+      `trades` lui-même, invariant de conception déjà en place pour
+      persist_trade_result)."""
+    now = _now()
+    balance_before = envelope.balance
+    envelope.apply_trade_pnl(amount_eur, note)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "UPDATE envelopes SET capital_courant = ?, updated_at = ? WHERE id = ?",
+            (envelope.balance, now, envelope_id),
+        )
+        conn.execute(
+            "INSERT INTO envelope_ledger (envelope_id, trade_id, montant_avant, montant_apres, type_mouvement, recorded_at) "
+            "VALUES (?, ?, ?, ?, 'manual_test', ?)",
+            (envelope_id, trade_id, balance_before, envelope.balance, now),
+        )
