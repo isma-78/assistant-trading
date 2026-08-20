@@ -203,6 +203,73 @@ identiquement aux 5** — aucune variante par actif.
 
 ---
 
+## 2026-08-20 — Sortie sur profit : trailing Donchian dès l'ouverture
+
+**Constat** (remonté par Ismaël en observant les deux premiers trades
+réels du Flux B, GBPUSD et US30) : `evaluate_entry()` ne calcule jamais
+de TP1/TP2/TP3 — seulement `entry_price`/`stop_price`. Or la gestion de
+position d'`executor.py` (partagée avec Station X) ne déclenche son
+trailing ATR qu'après TP1 **et** TP2 touchés. Sans TP, `tp1_hit` ne
+devient jamais vrai : le trailing ne s'activait jamais pour ce flux.
+Seul le stop initial fixe pouvait clôturer un trade — aucune prise de
+gain, aucun mécanisme pour laisser courir un trend gagnant. C'était un
+oubli d'implémentation du palier P2.5, jamais une décision actée (rien
+en ce sens dans ce document ni dans `docs/DECISIONS.md` avant
+aujourd'hui).
+
+**Décision (arbitrage demandé à Ismaël entre deux options, tranché par
+lui) : trailing sur le canal de Donchian(20), pas de TP fixe, pas de
+trailing ATR.**
+
+Raisonnement retenu :
+- **Fidélité au principe théorique déjà cité plus haut** (Turtle
+  Trading) : le système d'origine ne sort pas sur un take-profit fixe,
+  il sort sur un signal de retournement du marché lui-même — c'est le
+  canal (mobile) qui pilote la sortie, pas un ratio gain/risque choisi a
+  priori.
+- **Zéro variable supplémentaire** (invariant #10, budget déjà tenu à
+  jour dans ce document) : réutilise strictement N=20, le seul paramètre
+  déjà fixé pour cette hypothèse, et la même fonction de canal
+  (`compute_donchian_channel`) qui sert déjà au déclencheur et au stop
+  initial. Un trailing ATR aurait introduit un second mécanisme de
+  sortie indépendant reposant sur un paramètre (ATR(14)) déjà utilisé
+  ailleurs mais jamais pour ce rôle précis dans cette hypothèse — moins
+  parcimonieux, sans justification théorique propre à l'Hypothèse #1.
+  Des ratios TP1/TP2/TP3 façon Station X auraient, eux, introduit des
+  ratios gain/risque choisis arbitrairement (pas de justification
+  théorique écrite préalable, exigée par l'invariant #10).
+
+**Mécanique** (`src/trend_strategy.compute_trailing_stop_channel`,
+module critique, 100% couvert) : à chaque cycle de gestion, recalcule le
+canal de Donchian(20) sur les bougies horaires courantes et propose le
+nouveau stop = borne opposée du canal (bas du canal pour un long, haut
+pour un short) — exactement la même règle que le stop initial, juste
+réévaluée en continu. Le candidat passe par `max()`/`min()` en interne
+PUIS par `risk_engine.evaluate_stop_update()` côté appelant (même
+double ceinture que le trailing ATR de Station X) : un stop ne peut
+jamais être élargi (invariant #5), jamais seulement par construction
+interne. Si l'historique de bougies est insuffisant à un cycle donné,
+le stop reste inchangé (fail-safe, invariant #7) plutôt que d'échouer.
+
+Câblé dans `executor._evaluate_position_management` sur le critère
+`state.tp1 is None` — qui identifie sans ambiguïté un trade du Flux B
+(aucun signal Station X n'omet tp1, voir `parser.py`) — actif dès
+l'ouverture, sans attendre un TP1/TP2 qui n'existera jamais pour ce
+flux. `manage_open_trades` récupère désormais `DONCHIAN_PERIOD + 1`
+bougies (au lieu de 20) pour que ce calcul dispose d'assez d'historique.
+
+**Appliqué rétroactivement aux deux trades déjà ouverts** (GBPUSD id=6,
+US30 id=7, ouverts le 20/08/2026 avant ce correctif) — le déploiement du
+code corrigé suffit, aucune migration de données n'était nécessaire : le
+trailing se recalcule à partir de l'état déjà en base (`stop_loss_courant`)
+à chaque cycle suivant.
+
+Tests : `tests/test_trend_strategy.py` (fonction pure, 100% couverte) +
+`tests/test_executor.py` (branche Flux B de `_evaluate_position_management`,
+même exigence que le reste de ce module critique).
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 ou à une Hypothèse #2 distincte — jamais une modification de ce qui
 précède.*

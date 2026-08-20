@@ -31,7 +31,9 @@ from src.executor import (
     open_signal,
 )
 from src.go_nogo import GoNoGoStatus
+from src.market_data import Candle
 from src.risk_engine import AssetSpec, RiskCaps, RiskEngine, RiskRejectionReason
+from src.trend_strategy import DONCHIAN_PERIOD
 
 WHITELIST = {"GOLD": AssetSpec(symbol="GOLD", min_units=0.01, pip_value_per_unit=0.86)}
 
@@ -233,6 +235,81 @@ def test_management_internal_error_is_caught_fail_safe():
     action = evaluate_position_management(_state(direction="sideways"), current_price=99.5, atr=1.0, risk_engine=make_engine())
     assert action.action == ManagementActionType.NONE
     assert "erreur" in action.detail.lower() or "Erreur" in action.detail
+
+
+# --- evaluate_position_management — Flux B (tp1=None, trailing Donchian) --
+
+def _flux_b_candle(close, high=None, low=None):
+    high = high if high is not None else close
+    low = low if low is not None else close
+    return Candle(time_utc="t", open=close, high=high, low=low, close=close)
+
+
+def _flux_b_state(**overrides):
+    base = dict(
+        trade_id=1, deal_id="deal-1", asset="EURUSD", source="hypothesis", direction="long",
+        entry_price=100.0, initial_stop_price=95.0, stop_price=95.0,
+        tp1=None, tp2=None, tp1_hit=False, tp2_hit=False, remaining_fraction=1.0,
+    )
+    base.update(overrides)
+    return OpenTradeState(**base)
+
+
+def test_management_flux_b_no_tp_never_reaches_tp_or_atr_branches():
+    # tp1=None -> les blocs TP1/TP2/ATR (réservés à Station X) sont tous
+    # sautés même à un prix qui les aurait déclenchés avec un TP défini ;
+    # sans `candles`, aucune action de trailing n'est possible non plus.
+    action = evaluate_position_management(_flux_b_state(), current_price=110.0, atr=1.0, risk_engine=make_engine())
+    assert action.action == ManagementActionType.NONE
+
+
+def test_management_flux_b_trailing_tightens_stop_long():
+    # Canal plat à 100 (hors bougie courante) -> candidat 100, plus serré
+    # que le stop actuel à 95.
+    window = [_flux_b_candle(100.0) for _ in range(DONCHIAN_PERIOD)]
+    candles = window + [_flux_b_candle(105.0)]
+    action = evaluate_position_management(
+        _flux_b_state(), current_price=105.0, atr=None, risk_engine=make_engine(), candles=candles,
+    )
+    assert action.action == ManagementActionType.UPDATE_TRAILING_STOP
+    assert action.new_stop_price == 100.0
+
+
+def test_management_flux_b_trailing_tightens_stop_short():
+    window = [_flux_b_candle(100.0) for _ in range(DONCHIAN_PERIOD)]
+    candles = window + [_flux_b_candle(95.0)]
+    state = _flux_b_state(direction="short", entry_price=100.0, initial_stop_price=105.0, stop_price=105.0)
+    action = evaluate_position_management(state, current_price=95.0, atr=None, risk_engine=make_engine(), candles=candles)
+    assert action.action == ManagementActionType.UPDATE_TRAILING_STOP
+    assert action.new_stop_price == 100.0
+
+
+def test_management_flux_b_trailing_never_widens():
+    # Canal donnerait un stop moins favorable (low=90 < stop actuel 95
+    # pour un long) -> rejeté par risk_engine.evaluate_stop_update,
+    # aucune action.
+    window = [_flux_b_candle(100.0, high=105.0, low=90.0) for _ in range(DONCHIAN_PERIOD)]
+    candles = window + [_flux_b_candle(105.0)]
+    action = evaluate_position_management(
+        _flux_b_state(), current_price=105.0, atr=None, risk_engine=make_engine(), candles=candles,
+    )
+    assert action.action == ManagementActionType.NONE
+
+
+def test_management_flux_b_no_candles_no_trailing():
+    action = evaluate_position_management(
+        _flux_b_state(), current_price=105.0, atr=None, risk_engine=make_engine(), candles=None,
+    )
+    assert action.action == ManagementActionType.NONE
+
+
+def test_management_flux_b_stop_hit_takes_priority_over_trailing():
+    window = [_flux_b_candle(100.0) for _ in range(DONCHIAN_PERIOD)]
+    candles = window + [_flux_b_candle(94.0)]
+    action = evaluate_position_management(
+        _flux_b_state(), current_price=94.0, atr=None, risk_engine=make_engine(), candles=candles,
+    )
+    assert action.action == ManagementActionType.CLOSE_FULL_STOP
 
 
 # --- _compute_guaranteed_stop_distance ------------------------------------

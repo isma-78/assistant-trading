@@ -14,6 +14,7 @@ from src.trend_strategy import (
     MA_PERIOD,
     compute_donchian_channel,
     compute_regime,
+    compute_trailing_stop_channel,
     evaluate_entry,
 )
 
@@ -148,3 +149,46 @@ def test_evaluate_entry_short_no_breakout_returns_none():
 def test_evaluate_entry_internal_error_is_caught_fail_safe():
     # candles=None fait planter len(candles) à l'intérieur -> capturé
     assert evaluate_entry("EURUSD", None) is None
+
+
+# --- compute_trailing_stop_channel --------------------------------------
+
+def test_trailing_channel_long_tightens_stop_up():
+    # Canal (hors bougie courante) : low=95, stop actuel encore à 90
+    # (placé plus large à l'origine) -> resserré à 95.
+    candles = _flat_candles([100.0] * DONCHIAN_PERIOD) + [_candle(102.0)]
+    new_stop = compute_trailing_stop_channel("long", candles, current_stop=90.0)
+    assert new_stop == 100.0  # low du canal (bougies plates à 100)
+
+
+def test_trailing_channel_short_tightens_stop_down():
+    candles = _flat_candles([100.0] * DONCHIAN_PERIOD) + [_candle(98.0)]
+    new_stop = compute_trailing_stop_channel("short", candles, current_stop=110.0)
+    assert new_stop == 100.0  # high du canal
+
+
+def test_trailing_channel_long_never_widens():
+    # Canal donnerait low=95 (plus bas que le stop actuel de 97) ->
+    # candidat moins favorable, le stop reste à 97 (invariant #5).
+    window = [_candle(100.0, high=105.0, low=95.0) for _ in range(DONCHIAN_PERIOD)]
+    candles = window + [_candle(102.0)]
+    new_stop = compute_trailing_stop_channel("long", candles, current_stop=97.0)
+    assert new_stop == 97.0
+
+
+def test_trailing_channel_short_never_widens():
+    window = [_candle(100.0, high=105.0, low=95.0) for _ in range(DONCHIAN_PERIOD)]
+    candles = window + [_candle(98.0)]
+    new_stop = compute_trailing_stop_channel("short", candles, current_stop=103.0)
+    assert new_stop == 103.0
+
+
+def test_trailing_channel_insufficient_history_returns_unchanged():
+    candles = _flat_candles([100.0] * (DONCHIAN_PERIOD - 1))
+    assert compute_trailing_stop_channel("long", candles, current_stop=90.0) == 90.0
+
+
+def test_trailing_channel_unknown_direction_raises():
+    candles = _flat_candles([100.0] * (DONCHIAN_PERIOD + 1))
+    with pytest.raises(ValueError):
+        compute_trailing_stop_channel("sideways", candles, current_stop=90.0)

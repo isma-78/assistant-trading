@@ -28,6 +28,8 @@ redéploiement.
 import logging
 from datetime import datetime, timezone
 
+import requests
+
 from src import circuit_breaker_store
 from src.capital_client import CapitalApiError, CapitalClient
 from src.db import connection_scope
@@ -192,12 +194,13 @@ def run_trend_loop(config, db_path: str, interval_seconds: int = 60) -> None:
             now = datetime.now(timezone.utc)
 
             # Surcouche anomalie système (§2.7) — même sonde de
-            # connectivité que executor.run_executor_loop, voir sa
-            # docstring pour le raisonnement (non dupliqué ici).
+            # connectivité que executor.run_executor_loop (widen du except
+            # pour couvrir les ConnectionError bruts inclus, voir sa
+            # docstring pour le raisonnement, non dupliqué ici).
             try:
                 client.get_account_balance()
                 circuit_breaker_store.record_api_result(db_path, process_name, True)
-            except CapitalApiError:
+            except (CapitalApiError, requests.exceptions.RequestException):
                 circuit_breaker_store.record_api_result(
                     db_path, process_name, False, config.telegram_bot_token, config.telegram_chat_id,
                 )

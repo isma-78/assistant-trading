@@ -1,10 +1,18 @@
 """
-executor.py — Exécution démo autonome des signaux Station X (palier P2).
-Ouvre, gère (TP1/TP2/TP3, trailing ATR sur TP3, resserrement de stop) et
-clôture des positions sur le compte DÉMO Capital.com. Aucun euro réel en
-jeu (§4.8 : le réel reste hors périmètre avant Porte A/B, verrouillé par
-go_nogo.py — ce module n'a même pas accès à un client configuré sur
-l'environnement "live").
+executor.py — Exécution démo autonome des signaux Station X ET du Flux B
+(palier P2, P2.5). Ouvre, gère et clôture des positions sur le compte
+DÉMO Capital.com. Aucun euro réel en jeu (§4.8 : le réel reste hors
+périmètre avant Porte A/B, verrouillé par go_nogo.py — ce module n'a même
+pas accès à un client configuré sur l'environnement "live").
+
+Deux logiques de sortie sur profit coexistent, distinguées par
+`state.tp1 is None` (jamais ambigu : aucun signal Station X n'omet tp1,
+voir parser.py) :
+- Station X : TP1(50%)/TP2(30%)/TP3(20% sous trailing 2×ATR, §2.10),
+  stop au breakeven dès TP1.
+- Flux B (Hypothèse #1, aucun TP — voir docs/HYPOTHESES.md) : trailing
+  Donchian(20) dès l'ouverture, la même fenêtre qui a fixé le stop
+  initial (entrée du 20/08/2026 dans docs/HYPOTHESES.md).
 
 Autonomie complète en démo (demande explicite d'Ismaël pour ce palier) :
 aucune validation manuelle par trade. go_nogo.py et risk_engine.py
@@ -42,7 +50,9 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
+
+import requests
 
 from src import circuit_breaker_store
 from src.capital_client import CapitalApiError, CapitalClient
@@ -51,7 +61,7 @@ from src.circuit_breaker import evaluate_exposure_cap
 from src.db import connection_scope
 from src.envelope_store import load_or_create_envelope, load_reserve_total, persist_trade_result
 from src.go_nogo import GoNoGoStatus
-from src.market_data import compute_atr, get_candles, get_price_snapshot
+from src.market_data import Candle, compute_atr, get_candles, get_price_snapshot
 from src.risk_engine import (
     ExistingPosition,
     RiskCaps,
@@ -61,6 +71,7 @@ from src.risk_engine import (
     compute_r_multiple,
 )
 from src.trade_analyzer import analyze_closed_trade
+from src.trend_strategy import DONCHIAN_PERIOD, compute_trailing_stop_channel
 from src.validator import ValidationResult, validate_signal
 
 logger = logging.getLogger(__name__)
@@ -237,15 +248,20 @@ def compute_trailing_stop_level(direction: str, current_price: float, atr: float
 
 def evaluate_position_management(
     state: OpenTradeState, current_price: float, atr: Optional[float], risk_engine: RiskEngine,
+    candles: Optional[List[Candle]] = None,
 ) -> ManagementAction:
     """Point d'entrée unique de gestion d'une position ouverte. Ne lève
     jamais d'exception : toute erreur interne devient NONE (aucune
     fermeture, aucune mise à jour) plutôt que d'agir sur une base
     incertaine — nuance du fail-safe (invariant #7) documentée dans
     docs/DECISIONS.md : ici, "ne rien faire" protège la position, ce
-    n'est pas un renoncement silencieux à un ordre."""
+    n'est pas un renoncement silencieux à un ordre.
+
+    `candles` : uniquement nécessaire pour le trailing Donchian du Flux B
+    (state.tp1 is None, aucun signal Station X n'omet tp1) — None pour
+    tout trade Station X, sans effet sur son comportement."""
     try:
-        return _evaluate_position_management(state, current_price, atr, risk_engine)
+        return _evaluate_position_management(state, current_price, atr, risk_engine, candles)
     except Exception:
         logger.exception("Erreur interne dans evaluate_position_management (trade_id=%s)", state.trade_id)
         return ManagementAction(action=ManagementActionType.NONE, detail="Erreur interne, aucune action cette itération")
@@ -253,6 +269,7 @@ def evaluate_position_management(
 
 def _evaluate_position_management(
     state: OpenTradeState, current_price: float, atr: Optional[float], risk_engine: RiskEngine,
+    candles: Optional[List[Candle]] = None,
 ) -> ManagementAction:
     if _is_stop_hit(state.direction, current_price, state.stop_price):
         r = compute_r_multiple(state.direction, state.entry_price, state.initial_stop_price, state.stop_price)
@@ -293,6 +310,24 @@ def _evaluate_position_management(
                 action=ManagementActionType.UPDATE_TRAILING_STOP,
                 new_stop_price=candidate_stop,
                 detail=f"Trailing ATR (2x) mis à jour : {state.stop_price} -> {candidate_stop}",
+            )
+
+    # Flux B (Hypothèse #1) : aucun signal de ce flux n'a jamais de TP
+    # (trend_strategy.evaluate_entry n'en calcule pas, voir
+    # docs/HYPOTHESES.md, entrée du 20/08/2026) — tp1_hit ne peut donc
+    # jamais devenir vrai et le bloc ATR ci-dessus ne s'active jamais pour
+    # ces trades. Trailing Donchian(20) dès l'ouverture, pas seulement
+    # après un TP1/TP2 qui n'existera jamais. `state.tp1 is None`
+    # distingue sans ambiguïté un trade Flux B (aucun signal Station X
+    # n'omet tp1, voir parser.py).
+    if state.tp1 is None and candles is not None:
+        candidate_stop = compute_trailing_stop_channel(state.direction, candles, state.stop_price)
+        stop_decision = risk_engine.evaluate_stop_update(state.stop_price, candidate_stop, state.direction)
+        if stop_decision.approved and candidate_stop != state.stop_price:
+            return ManagementAction(
+                action=ManagementActionType.UPDATE_TRAILING_STOP,
+                new_stop_price=candidate_stop,
+                detail=f"Trailing Donchian(20) mis à jour : {state.stop_price} -> {candidate_stop}",
             )
 
     return ManagementAction(action=ManagementActionType.NONE, detail="Aucune condition remplie")
@@ -633,10 +668,13 @@ def manage_open_trades(
             with connection_scope(db_path) as conn:
                 state = _load_open_trade_state(conn, trade_row)
             snapshot = get_price_snapshot(client, state.asset)
-            candles = get_candles(client, state.asset, resolution="HOUR", count=20)
+            # count : au moins DONCHIAN_PERIOD+1 (trailing Flux B) ET
+            # 14+1 (ATR Station X) bougies — la même récupération sert
+            # aux deux calculs, quelle que soit la source du trade.
+            candles = get_candles(client, state.asset, resolution="HOUR", count=DONCHIAN_PERIOD + 1)
             atr = compute_atr(candles, period=14)
 
-            action = evaluate_position_management(state, snapshot.mid, atr, risk_engine)
+            action = evaluate_position_management(state, snapshot.mid, atr, risk_engine, candles=candles)
             if action.action == ManagementActionType.NONE:
                 continue
 
@@ -884,10 +922,21 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
             # métier individuellement (écart documenté, voir
             # docs/DECISIONS.md) — 3 échecs consécutifs de CETTE sonde
             # déclenchent la pause générale des entrées.
+            #
+            # Capture aussi requests.exceptions.RequestException, pas
+            # seulement CapitalApiError : un ConnectionError/
+            # RemoteDisconnected brut (coupure réseau côté Capital.com,
+            # observé en production le 20/08/2026) n'est PAS enveloppé en
+            # CapitalApiError par capital_client.py (qui ne traduit que
+            # requests.HTTPError) — avant ce correctif, ces pannes
+            # tombaient dans le except Exception générique du bas de
+            # boucle sans jamais incrémenter le compteur d'anomalie,
+            # rendant la surcouche §2.7 aveugle à ce mode de panne
+            # précis (voir docs/DECISIONS.md).
             try:
                 client.get_account_balance()
                 circuit_breaker_store.record_api_result(db_path, process_name, True)
-            except CapitalApiError:
+            except (CapitalApiError, requests.exceptions.RequestException):
                 circuit_breaker_store.record_api_result(
                     db_path, process_name, False, config.telegram_bot_token, config.telegram_chat_id,
                 )

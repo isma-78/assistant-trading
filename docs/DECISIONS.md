@@ -12,6 +12,82 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — Flux B : trailing Donchian dès l'ouverture (sortie sur profit manquante)
+
+Remonté par Ismaël en observant les deux premiers trades réels du Flux B
+(GBPUSD, US30, ouverts ce jour). Détail du raisonnement et de la
+mécanique dans `docs/HYPOTHESES.md` (entrée du même jour, dédiée à
+l'Hypothèse #1) — résumé ici pour la traçabilité des écarts.
+
+**Constat** : `trend_strategy.evaluate_entry()` ne produit jamais de
+TP1/TP2/TP3, mais la gestion de position d'`executor.py` (partagée avec
+Station X) ne déclenche le trailing ATR qu'après TP1 **et** TP2 —
+condition qui ne peut jamais devenir vraie sans TP. Seul le stop initial
+fixe pouvait donc clôturer un trade du Flux B : oubli d'implémentation
+du palier P2.5, jamais une décision actée, corrigé aujourd'hui.
+
+**Décision (tranchée par Ismaël entre deux options proposées)** :
+trailing sur le canal de Donchian(20) — la même fenêtre déjà utilisée
+pour le déclencheur et le stop initial, aucun paramètre supplémentaire —
+plutôt qu'un trailing ATR (aurait introduit un second mécanisme de
+sortie sans justification théorique propre à l'hypothèse) ou des TP fixes
+façon Station X (aurait introduit des ratios gain/risque choisis
+arbitrairement, invariant #10).
+
+**Code** : `src/trend_strategy.compute_trailing_stop_channel()` (nouvelle
+fonction pure, module critique, 100% couverte) ; câblée dans
+`executor._evaluate_position_management` sur le critère `state.tp1 is
+None` (identifie sans ambiguïté un trade Flux B) ; `manage_open_trades`
+récupère désormais `DONCHIAN_PERIOD + 1` bougies (au lieu de 20) pour
+disposer d'assez d'historique. Le stop candidat passe par
+`risk_engine.evaluate_stop_update()` comme le trailing ATR de Station X —
+resserrement seul, jamais élargi (invariant #5).
+
+**Appliqué rétroactivement aux deux trades déjà ouverts** (GBPUSD id=6,
+US30 id=7) : aucune migration de données nécessaire, le trailing se
+recalcule à partir de `stop_loss_courant` déjà en base dès le
+redéploiement.
+
+**Tests** : `tests/test_trend_strategy.py` (+6 tests, fonction pure) et
+`tests/test_executor.py` (+6 tests, branche Flux B de
+`_evaluate_position_management`). 100% de couverture maintenue sur
+`risk_engine`/`capital_manager`/`go_nogo`/`validator`/`trend_strategy`/
+`circuit_breaker`/`metrics`.
+
+---
+
+## 2026-08-20 — Trou dans la détection d'anomalie API (§2.7) : erreurs réseau brutes non capturées
+
+Trouvé en investiguant pourquoi le Flux B semblait ne plus rien tenter
+après ses deux premiers trades du jour : le log de `trend_executor`
+montrait 15 `RemoteDisconnected` (coupures de connexion côté API démo
+Capital.com) depuis la veille, sans jamais avoir déclenché la surcouche
+anomalie système (§2.7 : 3 échecs consécutifs de la sonde de
+connectivité → pause). En pratique la boucle récupérait seule à chaque
+fois (retry au cycle suivant), donc sans conséquence observée à ce jour —
+mais le garde-fou lui-même était aveugle à ce mode de panne.
+
+**Cause** : la sonde de connectivité (`run_executor_loop` et
+`run_trend_loop`, code dupliqué intentionnellement — voir l'entrée P2.6
+sur `circuit_breaker_store`) ne capturait que `CapitalApiError`. Or
+`capital_client.py` ne traduit en `CapitalApiError` que les erreurs HTTP
+(`requests.HTTPError`, via `raise_for_status()`) — une coupure réseau
+brute (`requests.exceptions.ConnectionError`/`RemoteDisconnected`, pas
+un code HTTP) n'est pas enveloppée et retombait directement dans le
+`except Exception` générique du bas de boucle, qui n'incrémente jamais
+`circuit_breaker_store.record_api_result`.
+
+**Correctif** : `except (CapitalApiError, requests.exceptions.RequestException)`
+dans les deux boucles — `RequestException` est la classe de base de
+toutes les exceptions `requests` (HTTP, connexion, timeout), donc ce
+correctif couvre aussi les futurs modes de panne réseau sans capturer
+plus large que nécessaire (`except Exception` resterait un filet
+générique volontairement distinct, en dernier recours). Si Capital.com
+devient durablement inaccessible, la pause générale des entrées (§2.7)
+se déclenchera désormais correctement.
+
+---
+
 ## 2026-08-19 — Vérification d'un trade manuel signalé par Ismaël : aucun écart trouvé
 
 Ismaël a signalé avoir passé un trade manuellement sur le compte démo

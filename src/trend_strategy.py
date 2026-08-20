@@ -102,3 +102,31 @@ def _evaluate_entry(asset: str, candles: List[Candle]) -> Optional[TrendSignal]:
         return TrendSignal(asset=asset, direction="short", entry_price=current_close, stop_price=highest)
 
     return None
+
+
+def compute_trailing_stop_channel(
+    direction: str, candles: List[Candle], current_stop: float, period: int = DONCHIAN_PERIOD,
+) -> float:
+    """Stop suiveur de l'Hypothèse #1 (entrée du 20/08/2026,
+    docs/HYPOTHESES.md) : la MÊME fenêtre de Donchian(N=20) qui fixe le
+    stop initial (§ evaluate_entry) sert aussi de stop suiveur, recalculée
+    à chaque cycle — aucun paramètre supplémentaire (le canal bouge déjà
+    avec le prix, pas besoin d'ATR ni d'un second système).
+
+    Applique elle-même le resserrement-seul (invariant #5) par
+    max/min — l'appelant (executor.py) fait aussi passer le résultat par
+    risk_engine.evaluate_stop_update comme pour le trailing ATR de Station
+    X, en deuxième ceinture, jamais en unique garde-fou.
+
+    Si l'historique est insuffisant pour recalculer le canal, retourne le
+    stop actuel inchangé (fail-safe, invariant #7 — pas de dégradation
+    silencieuse du stop en l'absence de données)."""
+    channel = compute_donchian_channel(candles, period)
+    if channel is None:
+        return current_stop
+    highest, lowest = channel
+    if direction == "long":
+        return max(current_stop, lowest)
+    if direction == "short":
+        return min(current_stop, highest)
+    raise ValueError(f"direction inconnue : {direction!r}")
