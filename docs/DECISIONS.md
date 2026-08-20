@@ -12,6 +12,44 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — Identifiants du compte démo dédié à l'Hypothèse #3 : préparation, aucun câblage d'exécution
+
+Compte démo Capital.com séparé créé par Ismaël pour l'Hypothèse #3
+(M5/M15, proposition `docs/HYPOTHESES.md` non encore validée). Option A
+retenue (identifiant/mot de passe API distincts par compte, pas de
+bascule de compte partagée via `PUT /session`) — voir l'entrée
+précédente (analyse comptes multiples) pour le raisonnement complet.
+
+**Sécurité des identifiants** : jamais collés dans la conversation —
+Ismaël les a ajoutés directement dans son `.env` local via son éditeur,
+même discipline que le tout premier `.env` du palier P0 ("jamais
+transmis à/par un LLM"). Vérifiés présents et non vides via `dotenv_
+values()` + longueur uniquement, jamais la valeur elle-même affichée.
+
+**`config.py`** : `capital_api_key_hypothesis3`/`capital_identifier_
+hypothesis3`/`capital_api_password_hypothesis3`, tous `Optional[str] =
+None` (contrainte dataclass : après tous les champs obligatoires).
+`capital_identifier_hypothesis3` se replie sur `CAPITAL_IDENTIFIER`
+(compte principal) si `CAPITAL_IDENTIFIER_HYPOTHESIS3` est absent — même
+identifiant de connexion possible pour deux comptes démo distincts.
+Aucun `_require()` : un `.env` sans ces trois variables continue de
+charger normalement, `telegram_listener`/`executor_loop`/
+`trend_executor`/`control_bot` ne les lisent jamais.
+
+**Aucun câblage d'exécution à ce stade** — demande explicite d'Ismaël,
+la question des identifiants est indépendante de la validation de
+l'hypothèse elle-même : aucune boucle, aucun `open_signal`, aucune
+enveloppe `hypothesis3` n'existe. Prochaine étape (après confirmation
+locale) : transfert vers le VPS et test de connexion en lecture seule
+(solde, session) pour confirmer l'isolation du compte — toujours aucun
+ordre, aucune exécution.
+
+**Tests** : `tests/test_config.py` (nouveau, +3 : absence par défaut,
+présence explicite, repli d'identifiant). 446 tests passent, 100% de
+couverture maintenue sur les modules critiques.
+
+---
+
 ## 2026-08-20 — Bug trouvé en déployant l'extension à 8 actifs : bruit de précision binaire dans (bid+ask)/2 rejeté par l'API
 
 Trouvé dans les toutes premières secondes après le redémarrage de

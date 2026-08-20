@@ -12,6 +12,7 @@ Ne jamais le modifier en mémoire pendant que le programme tourne.
 
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -42,6 +43,22 @@ class AppConfig:
     risk_percent_default: float
     risk_percent_boosted: float
     envelope_initial: float
+
+    # Compte démo dédié à l'Hypothèse #3 (M5/M15, en préparation
+    # 20/08/2026 — voir docs/DECISIONS.md), distinct du compte principal
+    # Station X/H1 : clé/mot de passe API propres, jamais partagés.
+    # Optionnels (Optional[str], pas _require()), donc forcément après
+    # tous les champs obligatoires ci-dessus (contrainte des dataclass
+    # Python) : aucun process existant n'en a besoin tant que
+    # l'exécuteur H3 n'existe pas, ne doit jamais faire échouer le
+    # démarrage de telegram_listener/executor_loop/trend_executor/
+    # control_bot. Phase 1 (proposition docs/HYPOTHESES.md) non encore
+    # validée par Ismaël : ces identifiants ne sont câblés dans AUCUNE
+    # boucle d'exécution à ce stade, uniquement préparés pour un test de
+    # connexion en lecture seule.
+    capital_api_key_hypothesis3: Optional[str] = None
+    capital_identifier_hypothesis3: Optional[str] = None
+    capital_api_password_hypothesis3: Optional[str] = None
 
 
 def _require(name: str) -> str:
@@ -100,4 +117,11 @@ def load_config(dotenv_path: str = ".env") -> AppConfig:
         risk_percent_default=risk_default,
         risk_percent_boosted=risk_boosted,
         envelope_initial=envelope_initial,
+        capital_api_key_hypothesis3=os.environ.get("CAPITAL_API_KEY_HYPOTHESIS3") or None,
+        # Compte H3 potentiellement sous le même identifiant de connexion
+        # que le compte principal (juste un compte démo distinct) — repli
+        # sur CAPITAL_IDENTIFIER si CAPITAL_IDENTIFIER_HYPOTHESIS3 est
+        # absent, jamais l'inverse.
+        capital_identifier_hypothesis3=os.environ.get("CAPITAL_IDENTIFIER_HYPOTHESIS3") or os.environ.get("CAPITAL_IDENTIFIER") or None,
+        capital_api_password_hypothesis3=os.environ.get("CAPITAL_API_PASSWORD_HYPOTHESIS3") or None,
     )
