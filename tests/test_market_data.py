@@ -35,6 +35,17 @@ def test_get_price_snapshot_computes_mid():
     assert snap.market_status == "TRADEABLE"
 
 
+def test_get_price_snapshot_mid_rounds_away_binary_float_noise():
+    # Bug réel trouvé le 20/08/2026 (voir docs/DECISIONS.md) : (bid+ask)/2
+    # en float brut produit parfois 29148.199999999997 au lieu de
+    # 29148.2, rejeté par l'API Capital.com comme prix de limite invalide
+    # sur les instruments à minStepDistance strict (US100 notamment).
+    client = _client_with_snapshot(29148.1, 29148.3)
+    snap = get_price_snapshot(client, "US100")
+    assert snap.mid == 29148.2
+    assert repr(snap.mid) == "29148.2"  # pas "29148.199999999997"
+
+
 def test_get_price_snapshot_missing_bid_ask_raises():
     client = MagicMock()
     client.get_market_snapshot.return_value = {"snapshot": {"marketStatus": "CLOSED"}}
@@ -68,6 +79,25 @@ def test_get_candles_computes_mid_ohlc_in_order():
     assert candles[0].open == pytest.approx(100.1)
     assert candles[0].close == pytest.approx(100.6)
     assert candles[1].close == pytest.approx(101.6)
+
+
+def test_get_candles_close_rounds_away_binary_float_noise():
+    # Même bug que test_get_price_snapshot_mid_rounds_away_binary_float_
+    # noise, côté bougies cette fois (source de trend_strategy.evaluate_
+    # entry -> entry_price envoyé tel quel à place_limit_order).
+    client = MagicMock()
+    client.get_prices.return_value = {
+        "prices": [{
+            "snapshotTimeUTC": "2026-08-20T20:00:00",
+            "openPrice": {"bid": 29148.1, "ask": 29148.3},
+            "highPrice": {"bid": 29148.1, "ask": 29148.3},
+            "lowPrice": {"bid": 29148.1, "ask": 29148.3},
+            "closePrice": {"bid": 29148.1, "ask": 29148.3},
+        }]
+    }
+    candles = get_candles(client, "US100", resolution="HOUR", count=1)
+    assert candles[0].close == 29148.2
+    assert repr(candles[0].close) == "29148.2"
 
 
 def test_get_candles_skips_incomplete_bars():

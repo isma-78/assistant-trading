@@ -42,17 +42,26 @@ def get_price_snapshot(client: CapitalClient, epic: str) -> PriceSnapshot:
     if bid is None or ask is None:
         raise CapitalApiError(f"Snapshot de marché incomplet pour {epic} : {snapshot}")
     return PriceSnapshot(
-        epic=epic, bid=bid, ask=ask, mid=(bid + ask) / 2,
+        epic=epic, bid=bid, ask=ask, mid=round((bid + ask) / 2, 8),
         market_status=snapshot.get("marketStatus", "UNKNOWN"),
         captured_at_broker=snapshot.get("updateTime"),
     )
 
 
 def _mid_of(level: dict) -> Optional[float]:
+    """Bug réel trouvé le 20/08/2026 (voir docs/DECISIONS.md) : (bid+ask)/2
+    en float brut produit parfois un artefact de précision binaire (ex :
+    29148.199999999997 au lieu de 29148.2), rejeté par l'API Capital.com
+    comme prix de limite invalide (error.validation.limit.price) sur les
+    instruments à minStepDistance strict (US100, entre autres) — jamais
+    manifesté avant l'extension du Flux B aux indices. `round(..., 8)`
+    élimine le bruit binaire (qui apparaît bien au-delà de la 8e décimale
+    pour toutes les magnitudes de prix de la liste blanche) sans jamais
+    tronquer une précision réellement significative."""
     bid, ask = level.get("bid"), level.get("ask")
     if bid is None or ask is None:
         return None
-    return (bid + ask) / 2
+    return round((bid + ask) / 2, 8)
 
 
 def get_candles(client: CapitalClient, epic: str, resolution: str = "HOUR", count: int = 50) -> List[Candle]:

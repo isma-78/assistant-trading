@@ -12,6 +12,45 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — Bug trouvé en déployant l'extension à 8 actifs : bruit de précision binaire dans (bid+ask)/2 rejeté par l'API
+
+Trouvé dans les toutes premières secondes après le redémarrage de
+`trend_executor` avec les 8 actifs (entrée précédente) : un signal
+US100 a été généré et rejeté par l'API Capital.com
+(`error.validation.limit.price`).
+
+**Cause** : `market_data._mid_of()`/`get_price_snapshot()` calculent
+`(bid + ask) / 2` en float Python brut. Pour certaines paires bid/ask,
+ça produit un résultat avec du bruit de précision binaire — reproduit
+exactement : `(29148.1 + 29148.3) / 2 == 29148.199999999997`, pas
+`29148.2`. US100 impose `minStepDistance = 0.1 point` (`dealingRules`,
+vérifié en direct) — l'API rejette un prix qui n'est pas un multiple
+exact de ce pas, et `29148.199999999997` n'en est pas un à cause du
+bruit. Jamais manifesté avant : aucun actif couvert par le Flux B avant
+aujourd'hui (US30/EURUSD/GBPUSD/USDJPY/ETHUSD) n'a une combinaison
+magnitude de prix + pas minimum aussi sensible à ce bruit — un artefact
+de la précision binaire, pas propre à US100 en soi, juste plus souvent
+révélé par lui.
+
+**Correctif** : `round(..., 8)` sur les deux calculs de `(bid+ask)/2`
+(`get_price_snapshot` et `_mid_of`, `market_data.py`) — élimine le bruit
+binaire (qui apparaît bien au-delà de la 8e décimale, quelle que soit la
+magnitude de prix de la liste blanche, de 0,0001 BTC à 100 000 USD) sans
+jamais tronquer une précision réellement significative pour un
+instrument réel. Corrige à la source : ce prix alimente `Candle.close`
+(donc `trend_strategy.evaluate_entry`, `entry_price`/`stop_price` de
+tout signal Flux B) ET `PriceSnapshot.mid` (validator, staleness,
+guaranteed-stop) — un seul correctif couvre les deux chemins plutôt que
+de corriger uniquement le symptôme observé (le prix envoyé à
+`place_limit_order`).
+
+**Tests** : `tests/test_market_data.py` (+2, reproduisent exactement le
+cas réel — `29148.1`/`29148.3` -> `29148.2`, vérifié par `repr()` pour
+exclure tout bruit résiduel). 443 tests passent, 100% de couverture
+maintenue.
+
+---
+
 ## 2026-08-20 — Flux B étendu aux 8 actifs (coexistence assumée avec Station X) + marquage de session horaire
 
 **Décision explicite d'Ismaël**, suite à l'audit du jour montrant que
