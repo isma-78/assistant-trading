@@ -12,6 +12,75 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — Le stop garanti trop serré est désormais ÉLARGI, plus rejeté — remplace l'entrée du 16/08/2026
+
+**Remplace explicitement** l'entrée "2026-08-16 — Bug réel trouvé avant
+démarrage : stop garanti manquant dans `open_signal`" (plus bas dans ce
+fichier) sur le point précis du comportement en cas de stop trop serré.
+Le reste de cette entrée-là (constat du bug initial, découverte de
+l'exigence de stop garanti) reste vrai et n'est pas remis en cause — seul
+le choix "rejeter plutôt qu'élargir" est renversé ici.
+
+**Décision explicite d'Ismaël, en connaissance de cause**, après que
+l'audit du 20/08/2026 a montré (par rejeu réel contre l'API Capital.com,
+pas par hypothèse) que les 13 signaux GOLD rejetés pour péremption depuis
+le 19/08 auraient de toute façon tous été bloqués par le stop garanti
+(stops de 2-3 points du canal vs minimum de 1% du prix ≈ 45 points,
+13/13 confirmés rejetés en rejouant la fonction réelle contre l'API) :
+compte 100% démo, aucun risque financier réel, priorité à l'observation
+de ce que donne le signal une fois réellement exécutable plutôt qu'à la
+fidélité parfaite au stop d'origine. Le raisonnement du 16/08
+("élargir violerait l'invariant #2") reste valable en soi — il est
+explicitement mis de côté ici pour ce contexte précis (démo, décision du
+porteur du projet), pas invalidé comme principe général.
+
+**Mécanique retenue — `risk_engine` reste la seule source de vérité du
+sizing, jamais court-circuité** : `_compute_guaranteed_stop_adjustment()`
+(remplace `_compute_guaranteed_stop_distance()`) détermine désormais un
+stop EFFECTIF (élargi ou non), sans jamais calculer elle-même un risque
+en euros. Si élargi, `open_signal()` reconstruit un `TradeSignal` avec ce
+nouveau stop et **rappelle `risk_engine.evaluate_new_entry()`** — la
+même fonction critique, 100% couverte, jamais modifiée — pour
+redimensionner la position sur la nouvelle distance et garder le risque
+en euros plafonné à 2%/4% de l'enveloppe (§2.3), exactement comme demandé :
+"logique déjà existante pour le sizing, juste appliquée à un stop
+différent". Si ce redimensionnement est lui-même rejeté (ex : taille
+retombée sous le minimum broker après élargissement — cas réel possible,
+testé), l'entrée est rejetée à ce stade, **jamais** placée avec
+l'ancienne taille calculée sur le stop d'origine (aurait dépassé le
+risque budgété).
+
+**Portée de l'élargissement, choix délibéré** : seul `risk_engine`
+retravaille sur le nouveau stop. `validate_signal()` (péremption §2.8,
+tolérance = 50% de la distance de stop) continue d'utiliser le stop
+D'ORIGINE du signal, évalué AVANT toute décision d'élargissement — la
+péremption mesure la fraîcheur du signal tel qu'émis par le canal, pas
+une propriété qui devrait s'assouplir parce que le broker impose un
+stop plus large. Élargir la tolérance de péremption en même temps que le
+stop aurait été un changement non demandé, plus difficile à isoler
+statistiquement plus tard.
+
+**Traçabilité (exigence non négociable de la demande)** :
+`trades.stop_elargi` (booléen) + `trades.stop_origine_signal` (le stop
+tel qu'émis par le signal, NULL si non élargi) — colonnes additives,
+`trades.stop_loss_initial` devient le stop EFFECTIF réellement utilisé
+pour le trading et le calcul du R-multiple (cohérent : le R-multiple
+doit refléter le risque réellement pris, pas un stop jamais utilisé).
+`metrics.py` n'exclut PAS ces trades par défaut (demande explicite) —
+aucune fonction de filtrage n'a été ajoutée à ce stade, la colonne
+suffit à distinguer les deux populations par requête directe le jour où
+c'est utile ; ajouter une fonction dédiée maintenant, sans consommateur,
+aurait été de la complexité anticipée non sollicitée.
+
+**Tests** : `tests/test_executor.py` (+8 : les branches pures de
+`_compute_guaranteed_stop_adjustment` — non requis/suffisant/élargi
+long/élargi short/direction inconnue — et l'orchestration complète :
+élargissement + redimensionnement réussi avec les bonnes colonnes en
+base, rejet propre si le redimensionnement retombe sous le minimum).
+429 tests passent, 100% de couverture maintenue.
+
+---
+
 ## 2026-08-20 — Fuite de trade fantôme : `cancel_stale_working_orders()` ne mettait jamais à jour `trades.statut`
 
 Trouvé le même jour en cherchant un ordre en attente pour vérifier les

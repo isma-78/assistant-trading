@@ -148,7 +148,9 @@ CREATE TABLE IF NOT EXISTS trades (
     couts REAL,
     pnl_net REAL,
     statut TEXT NOT NULL DEFAULT 'ouvert',
-    cloture_reason TEXT  -- ajout 20/08/2026 hors §4.5 : "stop_initial" | "stop_breakeven" | "trailing" | "stop_urgence", voir docs/DECISIONS.md
+    cloture_reason TEXT,  -- ajout 20/08/2026 hors §4.5 : "stop_initial" | "stop_breakeven" | "trailing" | "stop_urgence", voir docs/DECISIONS.md
+    stop_elargi INTEGER NOT NULL DEFAULT 0,  -- ajout 20/08/2026 hors §4.5 : stop élargi au minimum garanti broker, voir docs/DECISIONS.md
+    stop_origine_signal REAL  -- stop tel qu'émis par le signal AVANT élargissement ; NULL si stop_elargi=0
 );
 
 CREATE TABLE IF NOT EXISTS trade_partials (
@@ -414,6 +416,8 @@ _COLUMN_MIGRATIONS = [
     ("matinale_summaries", "fib_618", "REAL"),
     ("matinale_summaries", "fib_786", "REAL"),
     ("trades", "cloture_reason", "TEXT"),
+    ("trades", "stop_elargi", "INTEGER NOT NULL DEFAULT 0"),
+    ("trades", "stop_origine_signal", "REAL"),
 ]
 
 

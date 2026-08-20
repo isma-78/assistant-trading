@@ -346,36 +346,53 @@ def _evaluate_position_management(
 # Orchestration I/O — ouverture d'un signal validé
 # ---------------------------------------------------------------------------
 
-def _compute_guaranteed_stop_distance(client: CapitalClient, epic: str, entry_price: float, stop_price: float) -> Optional[float]:
+@dataclass(frozen=True)
+class GuaranteedStopAdjustment:
+    stop_price: float           # stop EFFECTIF à utiliser (élargi ou identique au signal d'origine)
+    stop_distance: float        # distance correspondante ; 0.0 = pas de stop garanti requis pour cet instrument
+    guaranteed_required: bool
+    widened: bool                # True si stop_price diffère du stop d'origine du signal
+
+
+def _compute_guaranteed_stop_adjustment(
+    client: CapitalClient, epic: str, direction: str, entry_price: float, stop_price: float,
+) -> GuaranteedStopAdjustment:
     """Ce compte démo exige un stop garanti sur certains instruments —
     observé sur BTCUSD/ETHUSD dès le palier P0, confirmé aussi sur
     EURUSD lors de la validation des ordres limite au palier P2 (pas
-    seulement les cryptos, voir docs/DECISIONS.md). Calcule la distance
-    à partir du stop déjà dimensionné par risk_engine.
+    seulement les cryptos, voir docs/DECISIONS.md).
 
-    Si le minimum imposé par le broker est plus large que ce stop,
-    retourne None plutôt que d'élargir silencieusement le stop (ce qui
-    augmenterait le risque réel au-delà de ce que risk_engine a
-    budgété) — l'appelant doit alors rejeter l'entrée, jamais
-    compromettre le sizing pour la faire passer.
-
-    Retourne 0.0 si aucun stop garanti n'est requis pour cet instrument
-    (guaranteed_stop=False côté appelant dans ce cas)."""
+    Décision du 20/08/2026 (assumée par Ismaël, remplace le rejet du
+    16/08/2026 — voir docs/DECISIONS.md pour le raisonnement complet) :
+    si le stop budgété par risk_engine est plus serré que le minimum
+    imposé par le broker, ÉLARGIT le stop jusqu'à ce minimum plutôt que
+    de rejeter l'entrée. L'appelant DOIT redimensionner la position via
+    risk_engine.evaluate_new_entry() avec ce nouveau stop_price — cette
+    fonction ne fait que déterminer le stop, jamais la taille (invariant
+    #2 : elle ne calcule aucun risque en euros elle-même)."""
     market = client.get_market_snapshot(epic)
     dealing_rules = market.get("dealingRules", {})
     min_gs = dealing_rules.get("minGuaranteedStopDistance", {})
     if not min_gs.get("value"):
-        return 0.0
+        return GuaranteedStopAdjustment(stop_price=stop_price, stop_distance=0.0, guaranteed_required=False, widened=False)
 
     if min_gs.get("unit") == "PERCENTAGE":
         min_distance = entry_price * (min_gs["value"] / 100.0)
     else:
         min_distance = min_gs["value"]
 
-    stop_distance = abs(entry_price - stop_price)
-    if stop_distance < min_distance:
-        return None
-    return stop_distance
+    current_distance = abs(entry_price - stop_price)
+    if current_distance >= min_distance:
+        return GuaranteedStopAdjustment(stop_price=stop_price, stop_distance=current_distance, guaranteed_required=True, widened=False)
+
+    if direction == "long":
+        widened_stop_price = entry_price - min_distance
+    elif direction == "short":
+        widened_stop_price = entry_price + min_distance
+    else:
+        raise ValueError(f"direction inconnue : {direction!r}")
+
+    return GuaranteedStopAdjustment(stop_price=widened_stop_price, stop_distance=min_distance, guaranteed_required=True, widened=True)
 
 
 def open_signal(
@@ -456,22 +473,59 @@ def open_signal(
         logger.info("Signal %s rejeté : %s", signal_row["id"], decision.detail)
         return None
 
-    stop_distance = _compute_guaranteed_stop_distance(client, epic, signal_row["entree_min"], signal_row["stop_loss"])
-    if stop_distance is None:
-        logger.warning(
-            "Signal %s : stop budgété (%s) plus serré que le stop garanti minimum de %s, rejeté sans élargir le risque",
-            signal_row["id"], abs(signal_row["entree_min"] - signal_row["stop_loss"]), epic,
+    adjustment = _compute_guaranteed_stop_adjustment(
+        client, epic, signal_row["sens"], signal_row["entree_min"], signal_row["stop_loss"],
+    )
+
+    units, risk_amount_eur = decision.risk_decision.units, decision.risk_decision.risk_amount_eur
+    if adjustment.widened:
+        # Le stop budgété par le signal ne satisfait pas le minimum garanti
+        # du broker — élargi au lieu d'être rejeté (décision assumée
+        # d'Ismaël, 20/08/2026, remplace le rejet du 16/08/2026 : compte
+        # démo, priorité à l'observation du signal exécuté plutôt qu'à la
+        # fidélité parfaite au stop d'origine — voir docs/DECISIONS.md).
+        # risk_engine redimensionne SUR CE NOUVEAU STOP pour garder le
+        # risque en euros plafonné à 2%/4% de l'enveloppe (invariant #2 :
+        # jamais le même nombre d'unités qu'au stop d'origine, ce qui
+        # augmenterait silencieusement le risque réel).
+        widened_signal = TradeSignal(
+            asset=asset, direction=signal_row["sens"], entry_price=signal_row["entree_min"],
+            stop_price=adjustment.stop_price, confidence=signal_row["confiance"] or 0.0,
+        )
+        resized = risk_engine.evaluate_new_entry(
+            widened_signal, envelope_manager.balance, confidence_threshold, go_nogo_status.allowed,
         )
         with connection_scope(db_path) as conn:
-            conn.execute("UPDATE signals SET statut = 'rejete' WHERE id = ?", (signal_row["id"],))
-        return None
+            conn.execute(
+                "INSERT INTO risk_decisions (signal_id, decided_at, approved, reason, detail, units, risk_amount_eur) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    signal_row["id"], _now(), int(resized.approved),
+                    resized.reason.value if resized.reason else None,
+                    f"Redimensionnement après élargissement du stop garanti ({signal_row['stop_loss']} -> {adjustment.stop_price})",
+                    resized.units, resized.risk_amount_eur,
+                ),
+            )
+        if not resized.approved:
+            logger.warning(
+                "Signal %s : rejeté après élargissement du stop garanti — redimensionnement refusé (%s)",
+                signal_row["id"], resized.reason,
+            )
+            with connection_scope(db_path) as conn:
+                conn.execute("UPDATE signals SET statut = 'rejete' WHERE id = ?", (signal_row["id"],))
+            return None
+        units, risk_amount_eur = resized.units, resized.risk_amount_eur
+        logger.info(
+            "Signal %s : stop garanti élargi %s -> %s, taille redimensionnée %s -> %s",
+            signal_row["id"], signal_row["stop_loss"], adjustment.stop_price, decision.risk_decision.units, units,
+        )
 
     direction_api = DIRECTION_TO_API[signal_row["sens"]]
     try:
         result = client.place_limit_order(
-            epic=epic, direction=direction_api, size=decision.risk_decision.units,
+            epic=epic, direction=direction_api, size=units,
             level=signal_row["entree_min"],
-            guaranteed_stop=stop_distance > 0, stop_distance=stop_distance if stop_distance > 0 else None,
+            guaranteed_stop=adjustment.stop_distance > 0, stop_distance=adjustment.stop_distance if adjustment.stop_distance > 0 else None,
         )
     except CapitalApiError:
         logger.exception("Échec du placement de l'ordre limite pour le signal %s", signal_row["id"])
@@ -481,14 +535,14 @@ def open_signal(
         cursor = conn.execute(
             "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
             "prix_entree_prevu, guaranteed_stop, stop_loss_initial, stop_loss_courant, risque_eur, "
-            "pourcentage_risque_applique, ouvert_at, statut) "
-            "VALUES (?, ?, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente')",
+            "pourcentage_risque_applique, ouvert_at, statut, stop_elargi, stop_origine_signal) "
+            "VALUES (?, ?, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?)",
             (
                 signal_row["id"], result["deal_id"], signal_row["source"], asset, signal_row["sens"],
-                decision.risk_decision.units, signal_row["entree_min"], int(stop_distance > 0),
-                signal_row["stop_loss"], signal_row["stop_loss"], decision.risk_decision.risk_amount_eur,
-                (decision.risk_decision.risk_amount_eur / envelope_manager.balance * 100) if envelope_manager.balance else 0.0,
-                now,
+                units, signal_row["entree_min"], int(adjustment.stop_distance > 0),
+                adjustment.stop_price, adjustment.stop_price, risk_amount_eur,
+                (risk_amount_eur / envelope_manager.balance * 100) if envelope_manager.balance else 0.0,
+                now, int(adjustment.widened), signal_row["stop_loss"] if adjustment.widened else None,
             ),
         )
         trade_id = cursor.lastrowid

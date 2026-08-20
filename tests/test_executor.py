@@ -21,7 +21,7 @@ from src.envelope_store import load_or_create_envelope
 from src.executor import (
     ManagementActionType,
     OpenTradeState,
-    _compute_guaranteed_stop_distance,
+    _compute_guaranteed_stop_adjustment,
     cancel_stale_working_orders,
     check_pending_fills,
     compute_tp_allocations,
@@ -313,43 +313,75 @@ def test_management_flux_b_stop_hit_takes_priority_over_trailing():
     assert action.action == ManagementActionType.CLOSE_FULL_STOP
 
 
-# --- _compute_guaranteed_stop_distance ------------------------------------
+# --- _compute_guaranteed_stop_adjustment -----------------------------------
+# Décision du 20/08/2026 (Ismaël, assumée) : élargir le stop au minimum
+# garanti plutôt que de rejeter — remplace le comportement du 16/08/2026
+# (voir docs/DECISIONS.md pour le raisonnement complet des deux entrées).
 
-def test_guaranteed_stop_not_required_returns_zero():
+def test_guaranteed_stop_not_required():
     client = MagicMock()
     client.get_market_snapshot.return_value = {"dealingRules": {}}
-    result = _compute_guaranteed_stop_distance(client, "EURUSD", entry_price=1.15, stop_price=1.14)
-    assert result == 0.0
+    result = _compute_guaranteed_stop_adjustment(client, "EURUSD", "short", entry_price=1.15, stop_price=1.14)
+    assert result.guaranteed_required is False
+    assert result.widened is False
+    assert result.stop_distance == 0.0
+    assert result.stop_price == 1.14
 
 
-def test_guaranteed_stop_percentage_sufficient_distance_uses_signal_stop():
+def test_guaranteed_stop_percentage_sufficient_distance_unchanged():
     client = MagicMock()
     client.get_market_snapshot.return_value = {
         "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 0.25}}
     }
-    # entry=100000, min = 100000*0.0025 = 250 ; stop réel à 500 -> suffisant
-    result = _compute_guaranteed_stop_distance(client, "BTCUSD", entry_price=100000.0, stop_price=99500.0)
-    assert result == 500.0
+    # entry=100000, min = 100000*0.0025 = 250 ; stop réel à 500 -> déjà suffisant
+    result = _compute_guaranteed_stop_adjustment(client, "BTCUSD", "short", entry_price=100000.0, stop_price=99500.0)
+    assert result.widened is False
+    assert result.stop_price == 99500.0
+    assert result.stop_distance == 500.0
 
 
-def test_guaranteed_stop_percentage_insufficient_distance_returns_none():
+def test_guaranteed_stop_percentage_insufficient_widens_short():
     client = MagicMock()
     client.get_market_snapshot.return_value = {
         "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 0.25}}
     }
-    # entry=100000, min requis = 250 ; stop réel à seulement 50 -> insuffisant,
-    # jamais élargi silencieusement (augmenterait le risque au-delà du budget)
-    result = _compute_guaranteed_stop_distance(client, "BTCUSD", entry_price=100000.0, stop_price=99950.0)
-    assert result is None
+    # entry=100000, min requis=250 ; stop réel à seulement 50 -> élargi au
+    # minimum : short, stop au-dessus de l'entrée -> entry + min_distance.
+    result = _compute_guaranteed_stop_adjustment(client, "BTCUSD", "short", entry_price=100000.0, stop_price=99950.0)
+    assert result.widened is True
+    assert result.stop_price == 100250.0
+    assert result.stop_distance == 250.0
 
 
-def test_guaranteed_stop_absolute_unit():
+def test_guaranteed_stop_insufficient_widens_long():
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 0.25}}
+    }
+    # long : stop en-dessous de l'entrée -> entry - min_distance.
+    result = _compute_guaranteed_stop_adjustment(client, "BTCUSD", "long", entry_price=100000.0, stop_price=99950.0)
+    assert result.widened is True
+    assert result.stop_price == 99750.0
+    assert result.stop_distance == 250.0
+
+
+def test_guaranteed_stop_absolute_unit_sufficient():
     client = MagicMock()
     client.get_market_snapshot.return_value = {
         "dealingRules": {"minGuaranteedStopDistance": {"unit": "POINTS", "value": 10.0}}
     }
-    result = _compute_guaranteed_stop_distance(client, "GOLD", entry_price=2000.0, stop_price=1985.0)
-    assert result == 15.0
+    result = _compute_guaranteed_stop_adjustment(client, "GOLD", "short", entry_price=2000.0, stop_price=2015.0)
+    assert result.widened is False
+    assert result.stop_distance == 15.0
+
+
+def test_guaranteed_stop_adjustment_unknown_direction_raises():
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 5.0}}
+    }
+    with pytest.raises(ValueError):
+        _compute_guaranteed_stop_adjustment(client, "GOLD", "sideways", entry_price=100.0, stop_price=101.0)
 
 
 # --- orchestration (DB réelle temporaire + CapitalClient simulé) ---------
@@ -457,18 +489,60 @@ def test_open_signal_records_align_matinale_on_open(tmp_path):
         conn.close()
 
 
-def test_open_signal_rejected_when_stop_too_tight_for_guaranteed_stop(tmp_path):
+def test_open_signal_widens_stop_and_resizes_when_too_tight_for_guaranteed_stop(tmp_path):
+    # Décision du 20/08/2026 (Ismaël, assumée — voir docs/DECISIONS.md) :
+    # entree=100, stop=101 -> stop_distance=1, broker exige 5% * 100 = 5 ->
+    # insuffisant, ÉLARGI à 105 (short : stop au-dessus, entry+min_distance),
+    # risk_engine redimensionne SUR ce nouveau stop pour garder le risque
+    # à 2% de l'enveloppe (10€) : units = 10/(5*0.86) = 2.3256 -> 2.32.
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
-    # entree=100, stop=101 -> stop_distance=1, mais le broker exige un
-    # minimum de 5% * 100 = 5 -> insuffisant, doit être rejeté sans
-    # jamais élargir silencieusement le stop budgété par risk_engine.
     signal_row = _insert_signal(db_path, confiance=1.0)
 
     client = MagicMock()
     client.get_market_snapshot.return_value = {
         "snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"},
         "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 5.0}},
+    }
+    client.place_limit_order.return_value = {"deal_id": "deal-xyz", "level": 100.0}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result == "deal-xyz"
+    call_kwargs = client.place_limit_order.call_args.kwargs
+    assert call_kwargs["guaranteed_stop"] is True
+    assert call_kwargs["stop_distance"] == 5.0
+    assert call_kwargs["size"] == pytest.approx(2.32)
+
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT * FROM trades WHERE signal_id = ?", (signal_row["id"],)).fetchone()
+        assert trade["stop_loss_initial"] == 105.0
+        assert trade["stop_elargi"] == 1
+        assert trade["stop_origine_signal"] == 101.0
+        assert trade["taille_initiale"] == pytest.approx(2.32)
+    finally:
+        conn.close()
+
+
+def test_open_signal_rejected_when_resize_after_widening_below_minimum_size(tmp_path):
+    # Cas limite : le stop élargi est tellement large que la taille
+    # redimensionnée tombe sous min_units — l'entrée doit être rejetée à
+    # ce stade (jamais placée avec l'ancienne taille calculée sur le
+    # stop d'origine, ce qui dépasserait le risque budgété).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)  # entree=100, stop=101
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"},
+        # min = 10000 points -> unités redimensionnées bien sous min_units (0.01)
+        "dealingRules": {"minGuaranteedStopDistance": {"unit": "POINTS", "value": 10000.0}},
     }
 
     envelope_manager = CapitalManager(initial_balance=500.0)
@@ -484,6 +558,10 @@ def test_open_signal_rejected_when_stop_too_tight_for_guaranteed_stop(tmp_path):
         signal = conn.execute("SELECT statut FROM signals WHERE id = ?", (signal_row["id"],)).fetchone()
         assert signal["statut"] == "rejete"
         assert conn.execute("SELECT COUNT(*) AS n FROM trades").fetchone()["n"] == 0
+        # Deux lignes risk_decisions : la décision initiale (stop d'origine)
+        # puis le rejet du redimensionnement (stop élargi) — les deux
+        # journalisées, jamais silencieux.
+        assert conn.execute("SELECT COUNT(*) AS n FROM risk_decisions WHERE signal_id = ?", (signal_row["id"],)).fetchone()["n"] == 2
     finally:
         conn.close()
 
