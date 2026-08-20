@@ -1085,10 +1085,26 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
     import anthropic
 
     from src.asset_whitelist import build_asset_whitelist
+    from src.config import ConfigError
     from src.market_data import get_eur_conversion_rate
+
+    # Ciblage explicite de compte (incident réel du 20/08/2026, voir
+    # docs/DECISIONS.md) : le compte "préféré" par défaut d'un
+    # identifiant Capital.com est un état PARTAGÉ entre toutes les clés
+    # API de cet identifiant — a basculé silencieusement vers un compte
+    # vide dès la création d'un nouveau compte démo sur la plateforme.
+    # Échec explicite ici plutôt qu'un démarrage qui semblerait réussir
+    # sur le mauvais compte (fail-safe, invariant #7) — ne bloque QUE ce
+    # process, pas telegram_listener/control_bot qui n'en ont pas besoin.
+    if not config.capital_account_id:
+        raise ConfigError(
+            "CAPITAL_ACCOUNT_ID manquant — requis pour cibler explicitement le compte "
+            "(jamais le compte \"préféré\", instable, voir docs/DECISIONS.md du 20/08/2026)"
+        )
 
     client = CapitalClient(config.capital_api_key, config.capital_identifier, config.capital_api_password, _DEMO_BASE_URL)
     client.login()
+    client.switch_account(config.capital_account_id)
     anthropic_client = anthropic.Anthropic(api_key=config.anthropic_api_key)
 
     caps = RiskCaps(

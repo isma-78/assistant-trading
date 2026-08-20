@@ -223,6 +223,64 @@ def test_update_position_stop_includes_guaranteed_stop_flag_when_true():
     assert session.put.call_args.kwargs["json"] == {"stopLevel": 92000.0, "guaranteedStop": True}
 
 
+def test_switch_account_targets_explicit_account_id():
+    # Incident réel du 20/08/2026 (voir docs/DECISIONS.md) : le compte
+    # "préféré" est un état partagé entre toutes les clés API d'un même
+    # identifiant, peut basculer silencieusement — ne jamais en dépendre.
+    client, session = _logged_in_client()
+    session.put.return_value = _fake_response(json_body={"status": "SUCCESS"}, headers={})
+
+    result = client.switch_account("327614560537498782")
+
+    assert result == {"status": "SUCCESS"}
+    session.put.assert_called_once()
+    call = session.put.call_args
+    assert call.args[0] == "https://api.example.com/api/v1/session"
+    assert call.kwargs["json"] == {"accountId": "327614560537498782"}
+    assert call.kwargs["headers"]["CST"] == "c"
+
+
+def test_switch_account_updates_tokens_when_response_includes_new_ones():
+    client, session = _logged_in_client()
+    session.put.return_value = _fake_response(
+        json_body={"status": "SUCCESS"}, headers={"CST": "new-cst", "X-SECURITY-TOKEN": "new-sec"},
+    )
+
+    client.switch_account("327614560537498782")
+
+    session.get.return_value = _fake_response(json_body={"ok": True})
+    client.get("/accounts")
+    headers_used = session.get.call_args.kwargs["headers"]
+    assert headers_used["CST"] == "new-cst"
+    assert headers_used["X-SECURITY-TOKEN"] == "new-sec"
+
+
+def test_switch_account_keeps_existing_tokens_when_response_has_none():
+    client, session = _logged_in_client()
+    session.put.return_value = _fake_response(json_body={"status": "SUCCESS"}, headers={})
+
+    client.switch_account("327614560537498782")
+
+    session.get.return_value = _fake_response(json_body={"ok": True})
+    client.get("/accounts")
+    headers_used = session.get.call_args.kwargs["headers"]
+    assert headers_used["CST"] == "c"  # tokens de login() conservés
+    assert headers_used["X-SECURITY-TOKEN"] == "s"
+
+
+def test_switch_account_before_login_raises():
+    client, _ = _client_with_session()
+    with pytest.raises(CapitalApiError):
+        client.switch_account("327614560537498782")
+
+
+def test_switch_account_http_error_wrapped():
+    client, session = _logged_in_client()
+    session.put.return_value = _fake_response(status_ok=False)
+    with pytest.raises(CapitalApiError):
+        client.switch_account("327614560537498782")
+
+
 def test_get_prices_passes_resolution_and_max():
     client, session = _logged_in_client()
     session.get.return_value = _fake_response(json_body={"prices": []})

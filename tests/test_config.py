@@ -46,3 +46,21 @@ def test_load_config_hypothesis3_identifier_explicit_overrides_fallback(monkeypa
     config = load_config(dotenv_path=str(tmp_path / "nonexistent.env"))
     assert config.capital_identifier_hypothesis3 == "h3@example.com"
     assert config.capital_identifier == "main@example.com"  # compte principal inchangé
+
+
+# --- Ciblage explicite de compte (incident du 20/08/2026) -----------------
+
+def test_load_config_account_id_fields_absent_by_default(monkeypatch, tmp_path):
+    _set_required_env(monkeypatch)
+    config = load_config(dotenv_path=str(tmp_path / "nonexistent.env"))
+    assert config.capital_account_id is None
+    assert config.capital_account_id_hypothesis3 is None
+
+
+def test_load_config_account_id_fields_loaded_when_present(monkeypatch, tmp_path):
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("CAPITAL_ACCOUNT_ID", "327614560537498782")
+    monkeypatch.setenv("CAPITAL_ACCOUNT_ID_HYPOTHESIS3", "327950877951612062")
+    config = load_config(dotenv_path=str(tmp_path / "nonexistent.env"))
+    assert config.capital_account_id == "327614560537498782"
+    assert config.capital_account_id_hypothesis3 == "327950877951612062"

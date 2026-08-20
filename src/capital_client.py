@@ -47,6 +47,35 @@ class CapitalClient:
             raise CapitalApiError(f"Réponse de session sans tokens CST/X-SECURITY-TOKEN : {resp.headers}") from exc
         return dict(self._tokens)
 
+    def switch_account(self, account_id: str) -> dict:
+        """Cible EXPLICITEMENT le compte actif (`PUT /session`,
+        `accountId`) — à appeler juste après `login()`, avant tout autre
+        appel qui dépendrait du compte actif (ordres, positions, solde).
+
+        Incident réel du 20/08/2026 (voir docs/DECISIONS.md) : le compte
+        "préféré" par défaut d'un identifiant Capital.com est un état
+        PARTAGÉ entre toutes les clés API de cet identifiant — créer un
+        nouveau compte démo sur la plateforme peut faire basculer
+        silencieusement ce flag vers un compte différent, y compris vide,
+        sans qu'aucun code n'en soit informé. Ne jamais dépendre du
+        compte "préféré" pour une session utilisée en production :
+        toujours cibler explicitement par `accountId`.
+
+        Capture les nouveaux tokens CST/X-SECURITY-TOKEN si la réponse en
+        renvoie (comportement non garanti par la documentation publique) ;
+        sinon conserve ceux déjà obtenus par `login()`, qui restent
+        valides pour le compte nouvellement actif dans ce cas."""
+        resp = self._session.put(
+            f"{self.base_url}/session",
+            headers={**self._headers(), "Content-Type": "application/json"},
+            json={"accountId": account_id},
+            timeout=10,
+        )
+        self._raise_for_status(resp)
+        if "CST" in resp.headers and "X-SECURITY-TOKEN" in resp.headers:
+            self._tokens = {"CST": resp.headers["CST"], "X-SECURITY-TOKEN": resp.headers["X-SECURITY-TOKEN"]}
+        return resp.json()
+
     def _headers(self) -> dict:
         if self._tokens is None:
             raise CapitalApiError("login() doit être appelé avant toute requête")

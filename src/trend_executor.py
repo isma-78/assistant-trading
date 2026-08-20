@@ -166,10 +166,23 @@ def run_trend_loop(config, db_path: str, interval_seconds: int = 60) -> None:
     import anthropic
 
     from src.asset_whitelist import build_asset_whitelist
+    from src.config import ConfigError
     from src.market_data import get_eur_conversion_rate
+
+    # Ciblage explicite de compte, même garde-fou qu'executor.
+    # run_executor_loop (incident réel du 20/08/2026, voir
+    # docs/DECISIONS.md) — le Flux B H1 partage le même compte broker
+    # que Station X (mêmes credentials CAPITAL_API_KEY/IDENTIFIER/
+    # PASSWORD, voir plus haut), donc le même CAPITAL_ACCOUNT_ID.
+    if not config.capital_account_id:
+        raise ConfigError(
+            "CAPITAL_ACCOUNT_ID manquant — requis pour cibler explicitement le compte "
+            "(jamais le compte \"préféré\", instable, voir docs/DECISIONS.md du 20/08/2026)"
+        )
 
     client = CapitalClient(config.capital_api_key, config.capital_identifier, config.capital_api_password, _DEMO_BASE_URL)
     client.login()
+    client.switch_account(config.capital_account_id)
     anthropic_client = anthropic.Anthropic(api_key=config.anthropic_api_key)
 
     caps = RiskCaps(

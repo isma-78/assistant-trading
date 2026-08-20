@@ -60,6 +60,19 @@ class AppConfig:
     capital_identifier_hypothesis3: Optional[str] = None
     capital_api_password_hypothesis3: Optional[str] = None
 
+    # Ciblage explicite de compte (PUT /session, CapitalClient.
+    # switch_account) — incident réel du 20/08/2026 (voir docs/
+    # DECISIONS.md) : le compte "préféré" par défaut d'un identifiant
+    # Capital.com est un état PARTAGÉ entre toutes les clés API de cet
+    # identifiant, qui a basculé silencieusement dès la création d'un
+    # nouveau compte démo sur la plateforme. Optionnels ici pour la même
+    # raison que les champs H3 ci-dessus (aucun process n'a besoin de
+    # tous) — mais run_executor_loop/run_trend_loop les exigent
+    # explicitement à LEUR démarrage (fail-safe local, pas un blocage
+    # global qui casserait telegram_listener/control_bot).
+    capital_account_id: Optional[str] = None
+    capital_account_id_hypothesis3: Optional[str] = None
+
 
 def _require(name: str) -> str:
     value = os.environ.get(name)
@@ -124,4 +137,6 @@ def load_config(dotenv_path: str = ".env") -> AppConfig:
         # absent, jamais l'inverse.
         capital_identifier_hypothesis3=os.environ.get("CAPITAL_IDENTIFIER_HYPOTHESIS3") or os.environ.get("CAPITAL_IDENTIFIER") or None,
         capital_api_password_hypothesis3=os.environ.get("CAPITAL_API_PASSWORD_HYPOTHESIS3") or None,
+        capital_account_id=os.environ.get("CAPITAL_ACCOUNT_ID") or None,
+        capital_account_id_hypothesis3=os.environ.get("CAPITAL_ACCOUNT_ID_HYPOTHESIS3") or None,
     )

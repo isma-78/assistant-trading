@@ -12,6 +12,71 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — Incident : le compte "préféré" Capital.com a basculé silencieusement — ciblage explicite par accountId
+
+Trouvé en préparant le test de connexion du compte démo H3 (entrée
+suivante ci-dessous, chronologiquement avant celle-ci) : une connexion
+fraîche avec la clé API **principale** (Station X/H1) ne voyait soudain
+plus aucune position ouverte, alors que US100 et US30 étaient bien
+réellement ouverts.
+
+**Cause** : Ismaël avait créé deux nouveaux comptes démo sur la
+plateforme Capital.com ("hypothèse 2", "hypothèse 3") en préparation de
+futures hypothèses. Le compte marqué **"préféré"** — celui que `POST
+/session` active par défaut pour toute nouvelle session, en l'absence de
+ciblage explicite — a basculé de "premier test" (le compte historique,
+utilisé par Station X et le Flux B H1 depuis le palier P0) vers
+"hypothèse 2". Confirmé par test direct : **ce flag "préféré" est
+partagé entre TOUTES les clés API d'un même identifiant Capital.com** —
+la clé H3, toute nouvelle, voyait exactement le même compte préféré que
+la clé principale, jamais utilisée avant aujourd'hui pour ce compte.
+`capital_client.py` ne ciblait jusque-là jamais de compte explicitement :
+`login()` active implicitement le compte préféré du moment, et `get_
+account_balance()` (la seule fonction qui lisait `GET /accounts`) suppose
+`preferred: true` sans jamais vérifier lequel.
+
+**Risque encouru** : `executor_loop` et `trend_executor`, alors en
+cours d'exécution depuis avant la création des nouveaux comptes, sont
+restés correctement accrochés à "premier test" — leur session déjà
+établie n'a pas été affectée. Mais **tout redémarrage** (crash, erreur
+429 déjà observée plusieurs fois ce jour, reboot VPS, un déploiement
+comme ceux de toute cette session) se serait reconnecté sur le nouveau
+compte "préféré" — silencieusement, sans erreur, avec perte complète du
+suivi des positions réelles (`get_open_positions()` aurait renvoyé une
+liste vide, `place_limit_order()` aurait ouvert des positions sur un
+compte vide sans rapport avec les enveloppes suivies en base).
+
+**Correctif** : `CapitalClient.switch_account(account_id)` — `PUT
+/session` avec un `accountId` explicite, appelé systématiquement juste
+après `login()`, avant tout autre appel. Plus aucune dépendance au
+flag "préféré" pour les deux boucles de production. `config.py` gagne
+`capital_account_id` (compte principal, partagé Station X + Flux B H1 —
+mêmes credentials, donc même compte) et `capital_account_id_hypothesis3`
+(compte H3, en anticipation — jamais câblé dans une boucle d'exécution
+à ce stade, voir entrée suivante). Les deux sont `Optional[str] = None`
+dans `AppConfig` (aucun process ne les exige tous), mais `run_executor_
+loop`/`run_trend_loop` lèvent une `ConfigError` explicite à LEUR
+démarrage si `CAPITAL_ACCOUNT_ID` manque — échec net plutôt qu'un
+démarrage qui semblerait réussir sur le mauvais compte (invariant #7).
+
+**Pourquoi anticiper aussi pour H3** : même s'il n'existe qu'un seul
+compte "hypothèse 3" aujourd'hui, câbler dès maintenant `capital_
+account_id_hypothesis3` (ciblage explicite, jamais "préféré") évite de
+reproduire exactement cet incident le jour où un quatrième compte démo
+serait créé sur la même plateforme.
+
+**Tests** : `tests/test_capital_client.py` (+5 : ciblage explicite,
+capture des nouveaux tokens si renvoyés, conservation des tokens
+existants sinon, erreur avant login, erreur HTTP propagée),
+`tests/test_config.py` (+2, nouveaux champs). 453 tests passent, 100%
+de couverture maintenue.
+
+**Vérification en conditions réelles** : à compléter juste après le
+déploiement de ce correctif (redémarrage contrôlé d'`executor_loop`,
+confirmation qu'il se reconnecte bien sur "premier test").
+
+---
+
 ## 2026-08-20 — Identifiants du compte démo dédié à l'Hypothèse #3 : préparation, aucun câblage d'exécution
 
 Compte démo Capital.com séparé créé par Ismaël pour l'Hypothèse #3
