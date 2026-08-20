@@ -210,6 +210,19 @@ def test_update_position_stop_uses_put():
     assert session.put.call_args.kwargs["json"] == {"stopLevel": 92000.0}
 
 
+def test_update_position_stop_includes_guaranteed_stop_flag_when_true():
+    # Sans ce champ, Capital.com rejette la mise à jour d'une position
+    # ouverte avec stop garanti (error.vallidation.guaranteed-stop-loss.
+    # required) — bug réel trouvé en production le 20/08/2026, voir
+    # docs/DECISIONS.md.
+    client, session = _logged_in_client()
+    session.put.return_value = _fake_response(json_body={"status": "updated"})
+
+    client.update_position_stop("pos-1", 92000.0, guaranteed_stop=True)
+
+    assert session.put.call_args.kwargs["json"] == {"stopLevel": 92000.0, "guaranteedStop": True}
+
+
 def test_get_prices_passes_resolution_and_max():
     client, session = _logged_in_client()
     session.get.return_value = _fake_response(json_body={"prices": []})

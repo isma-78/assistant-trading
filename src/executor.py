@@ -206,6 +206,7 @@ class OpenTradeState:
     tp1_hit: bool
     tp2_hit: bool
     remaining_fraction: float  # fraction de la taille initiale encore ouverte
+    guaranteed_stop: bool = False  # voir capital_client.update_position_stop, docs/DECISIONS.md (20/08/2026)
 
 
 @dataclass(frozen=True)
@@ -471,13 +472,13 @@ def open_signal(
     with connection_scope(db_path) as conn:
         conn.execute(
             "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
-            "prix_entree_prevu, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "prix_entree_prevu, guaranteed_stop, stop_loss_initial, stop_loss_courant, risque_eur, "
             "pourcentage_risque_applique, ouvert_at, statut) "
-            "VALUES (?, ?, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente')",
+            "VALUES (?, ?, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente')",
             (
                 signal_row["id"], result["deal_id"], signal_row["source"], asset, signal_row["sens"],
-                decision.risk_decision.units, signal_row["entree_min"], signal_row["stop_loss"],
-                signal_row["stop_loss"], decision.risk_decision.risk_amount_eur,
+                decision.risk_decision.units, signal_row["entree_min"], int(stop_distance > 0),
+                signal_row["stop_loss"], signal_row["stop_loss"], decision.risk_decision.risk_amount_eur,
                 (decision.risk_decision.risk_amount_eur / envelope_manager.balance * 100) if envelope_manager.balance else 0.0,
                 now,
             ),
@@ -547,6 +548,7 @@ def _load_open_trade_state(conn, trade_row) -> OpenTradeState:
         tp1=tp1, tp2=tp2,
         tp1_hit=tp1_hit, tp2_hit=tp2_hit,
         remaining_fraction=remaining_fraction,
+        guaranteed_stop=bool(trade_row["guaranteed_stop"]),
     )
 
 
@@ -691,7 +693,7 @@ def _apply_management_action(
     anthropic_client=None, bot_token=None, chat_id=None,
 ) -> None:
     if action.action == ManagementActionType.UPDATE_TRAILING_STOP:
-        client.update_position_stop(state.deal_id, action.new_stop_price)
+        client.update_position_stop(state.deal_id, action.new_stop_price, guaranteed_stop=state.guaranteed_stop)
         with connection_scope(db_path) as conn:
             conn.execute("UPDATE trades SET stop_loss_courant = ? WHERE id = ?", (action.new_stop_price, state.trade_id))
         return

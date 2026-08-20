@@ -56,6 +56,54 @@ redéploiement.
 
 ---
 
+## 2026-08-20 — Bug de production trouvé en déployant le trailing Flux B : `update_position_stop` sans stop garanti
+
+Trouvé immédiatement après le redéploiement du trailing Donchian
+ci-dessus, en observant les tout premiers cycles réels sur le VPS : les
+3 positions Flux B alors ouvertes (EURUSD id=4, GBPUSD id=6, US30 id=7)
+échouaient systématiquement à chaque tentative de resserrement de stop —
+`CapitalApiError: 400 ... error.vallidation.guaranteed-stop-loss.required`.
+
+**Cause** : `capital_client.update_position_stop()` n'envoyait que
+`{"stopLevel": ...}`. Or ce compte démo exige un stop garanti sur de
+nombreux instruments (déjà documenté au palier P0 pour BTCUSD/ETHUSD, et
+"confirmé aussi sur EURUSD" à l'ouverture — voir `CLAUDE.md`) : une
+position ouverte avec `guaranteedStop: true` refuse toute mise à jour de
+`stopLevel` qui ne réaffirme pas `guaranteedStop: true` dans le même
+appel. Vérifié empiriquement en lecture puis en écriture sur le compte
+démo (`GET /positions` confirme `guaranteedStop: true` sur les 3
+positions concernées ; un `PUT` de test avec `guaranteedStop: true`
+ajouté, `stopLevel` inchangé, réussit). Ce bug était **latent depuis le
+palier P2** pour Station X aussi (même fonction, même chemin de code
+pour le trailing ATR post-TP1/TP2) — jamais manifesté faute qu'un trade
+Station X ait déjà atteint ce stade.
+
+**Correctif** :
+- `trades.guaranteed_stop` (nouvelle colonne, migration additive comme
+  `deal_id` en son temps) : persisté à l'ouverture (`open_signal`, déjà
+  calculé via `_compute_guaranteed_stop_distance`), lu par
+  `_load_open_trade_state`, transmis par `_apply_management_action` à
+  `client.update_position_stop(..., guaranteed_stop=state.guaranteed_stop)`.
+- Écarté délibérément : deviner via un texte d'erreur (retry sur
+  `error.vallidation.guaranteed-stop-loss.required`) plutôt que stocker
+  le fait — plus fragile (dépend d'un message d'erreur non contractuel)
+  et contraire au style déterministe déjà en place ici (le fait est déjà
+  connu à l'ouverture, pas besoin de le redécouvrir par l'échec).
+- **Correction ponctuelle des 3 trades déjà ouverts** au moment du bug
+  (`UPDATE trades SET guaranteed_stop = 1 WHERE id IN (4, 6, 7)`) :
+  synchronisation avec un fait déjà vérifié côté broker (`GET /positions`
+  ci-dessus), pas une supposition — même logique que
+  `check_pending_fills` qui réécrit déjà `deal_id` depuis la vérité
+  broker.
+
+**Tests** : `tests/test_capital_client.py` (+1, corps de la requête PUT
+avec `guaranteedStop`) et `tests/test_executor.py` (+1, régression de
+bout en bout : trade Flux B avec stop garanti, trailing déclenché,
+vérifie l'appel exact à `update_position_stop`). 100% de couverture
+maintenue sur les modules critiques.
+
+---
+
 ## 2026-08-20 — Trou dans la détection d'anomalie API (§2.7) : erreurs réseau brutes non capturées
 
 Trouvé en investiguant pourquoi le Flux B semblait ne plus rien tenter

@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS trades (
     prix_entree_prevu REAL,
     prix_entree_reel REAL,
     slippage_entree REAL,
+    guaranteed_stop INTEGER NOT NULL DEFAULT 0,  -- ajout P2.5+ hors §4.5 : voir docs/DECISIONS.md (correctif update_position_stop)
     stop_loss_initial REAL NOT NULL,
     stop_loss_courant REAL NOT NULL,
     risque_eur REAL NOT NULL,
@@ -390,6 +391,7 @@ def get_connection(db_path: str) -> sqlite3.Connection:
 _COLUMN_MIGRATIONS = [
     ("trades", "deal_id", "TEXT"),
     ("trade_analysis", "source", "TEXT NOT NULL DEFAULT 'stationx'"),
+    ("trades", "guaranteed_stop", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

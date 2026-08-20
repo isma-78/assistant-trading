@@ -187,8 +187,21 @@ class CapitalClient:
         body = {"size": size} if size is not None else None
         return self.delete(f"/positions/{deal_id}", body=body)
 
-    def update_position_stop(self, deal_id: str, new_stop_level: float) -> dict:
+    def update_position_stop(self, deal_id: str, new_stop_level: float, guaranteed_stop: bool = False) -> dict:
         """Déplace le stop d'une position déjà ouverte (resserrement
         uniquement — la garde contre l'élargissement est appliquée par
-        l'appelant via risk_engine.evaluate_stop_update, jamais ici)."""
-        return self.put(f"/positions/{deal_id}", {"stopLevel": new_stop_level})
+        l'appelant via risk_engine.evaluate_stop_update, jamais ici).
+
+        `guaranteed_stop` : DOIT valoir True si la position a été ouverte
+        avec un stop garanti (`guaranteedStop`/`stopDistance` passés à
+        place_limit_order/open_position) — sinon Capital.com rejette la
+        mise à jour avec `error.vallidation.guaranteed-stop-loss.required`
+        (bug réel trouvé en production le 20/08/2026 sur les 3 positions
+        Flux B alors ouvertes, EURUSD/GBPUSD/US30 — voir docs/DECISIONS.md).
+        Vérifié empiriquement sur le compte démo : `stopLevel` +
+        `guaranteedStop: true` suffit, pas besoin de `stopDistance` pour
+        une mise à jour (contrairement à l'ouverture)."""
+        body = {"stopLevel": new_stop_level}
+        if guaranteed_stop:
+            body["guaranteedStop"] = True
+        return self.put(f"/positions/{deal_id}", body)

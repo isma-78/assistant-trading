@@ -612,6 +612,58 @@ def test_manage_open_trades_closes_full_stop_and_updates_envelope(tmp_path):
     assert envelope_manager.balance == 490.0  # perte imputée en totalité (§2.3)
 
 
+def test_manage_open_trades_flux_b_trailing_forwards_guaranteed_stop(tmp_path):
+    # Régression du bug réel trouvé en production le 20/08/2026 : les 3
+    # positions Flux B alors ouvertes avaient toutes un stop garanti côté
+    # broker, et la mise à jour du trailing échouait faute de transmettre
+    # ce flag (error.vallidation.guaranteed-stop-loss.required). Voir
+    # docs/DECISIONS.md.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, actif="GBPUSD", sens="short", tp1=None, tp2=None)
+
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, guaranteed_stop, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-gbp', 'hypothesis', 'GBPUSD', 'demo', 'short', 1400.0, "
+            "100.0, 1, 105.0, 105.0, 10.0, 2.0, '2026-08-20T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    window = [{"high": 102.0, "low": 98.0, "open": 100.0, "close": 100.0} for _ in range(DONCHIAN_PERIOD)]
+    window.append({"high": 99.0, "low": 97.0, "open": 99.0, "close": 99.0})
+    prices = [
+        {
+            "snapshotTimeUTC": "t",
+            "openPrice": {"bid": c["open"], "ask": c["open"]},
+            "highPrice": {"bid": c["high"], "ask": c["high"]},
+            "lowPrice": {"bid": c["low"], "ask": c["low"]},
+            "closePrice": {"bid": c["close"], "ask": c["close"]},
+        }
+        for c in window
+    ]
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 98.9, "offer": 99.1, "marketStatus": "TRADEABLE"}}
+    client.get_prices.return_value = {"prices": prices}
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GBPUSD", "demo", 500.0, source="hypothesis")
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("GBPUSD", "hypothesis"): envelope_manager}, envelope_ids={("GBPUSD", "hypothesis"): envelope_id},
+    )
+
+    client.update_position_stop.assert_called_once_with("deal-gbp", 102.0, guaranteed_stop=True)
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT stop_loss_courant FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["stop_loss_courant"] == 102.0
+    finally:
+        conn.close()
+
+
 def _insert_open_trade(db_path, signal_id, source, deal_id):
     with connection_scope(db_path) as conn:
         return conn.execute(
