@@ -71,9 +71,17 @@ existants sinon, erreur avant login, erreur HTTP propagée),
 `tests/test_config.py` (+2, nouveaux champs). 453 tests passent, 100%
 de couverture maintenue.
 
-**Vérification en conditions réelles** : à compléter juste après le
-déploiement de ce correctif (redémarrage contrôlé d'`executor_loop`,
-confirmation qu'il se reconnecte bien sur "premier test").
+**Vérification en conditions réelles, confirmée** : `executor_loop` ET
+`trend_executor` redémarrés délibérément après déploiement du correctif
+(les deux étaient concernés, pas seulement `executor_loop`). Les deux
+ont atteint leur log "Démarrage..." (n'apparaît qu'après `login()` +
+`switch_account()` + construction de la liste blanche — donc après un
+ciblage de compte réussi). Contrôle indépendant supplémentaire : une
+connexion fraîche + `switch_account(cfg.capital_account_id)` exécutée
+séparément a bien retrouvé les deux positions réelles (US100, US30,
+mêmes `dealId` que ceux suivis en base) — la régression est
+définitivement corrigée, plus de dépendance au compte "préféré" pour
+aucun des deux process de production.
 
 ---
 
