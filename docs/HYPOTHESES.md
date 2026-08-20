@@ -270,6 +270,163 @@ même exigence que le reste de ce module critique).
 
 ---
 
-*Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
-ou à une Hypothèse #2 distincte — jamais une modification de ce qui
+## Hypothèse #3 — 20/08/2026
+
+**Statut** : proposée, en attente de validation d'Ismaël. **Non testée,
+aucun code d'exécution n'existe encore.** Nommée "#3" (pas "#2") pour
+rester cohérente avec le compte démo Capital.com dédié qu'Ismaël a déjà
+créé sous ce nom ("hypothèse 3") — un compte "hypothèse 2" existe aussi,
+réservé à une future hypothèse distincte, sans lien avec celle-ci.
+
+### Contexte
+
+L'Hypothèse #1 (MA200 + Donchian(20) sur bougies horaires) tourne en
+production depuis le 20/08/2026. Cette hypothèse teste si le **même
+principe** — régime de fond + rupture de canal, exactement les mêmes
+deux niveaux — se comporte différemment sur une **résolution de bougie
+plus courte**. Objectif explicite : isoler cette question sur un compte
+démo Capital.com **séparé** (identifiants et `accountId` déjà préparés,
+voir `docs/DECISIONS.md`), pour qu'un résultat bon ou mauvais ne
+contamine jamais les statistiques de l'Hypothèse #1 ni celles de Station
+X — trois populations de trades strictement indépendantes.
+
+### Principe retenu : identique à l'Hypothèse #1, seule la résolution de bougie change
+
+**Confirmé explicitement, comme demandé** : aucun autre paramètre ne
+bouge. Même architecture à deux niveaux prescrite par le CDC §2.11
+(reprise à l'identique de l'Hypothèse #1, non redupliquée en détail ici) :
+
+- **Niveau 1 — régime** : MA(200) sur clôtures, même règle de sens
+  unique (long si prix > MA, short si prix < MA, aucune entrée à
+  l'égalité stricte).
+- **Niveau 2 — déclencheur** : rupture du canal de Donchian(20), même
+  calcul de stop initial sur la borne opposée du canal, même mécanique
+  de trailing sur ce canal une fois la position ouverte (voir l'entrée
+  du 20/08/2026 ci-dessus sur la sortie sur profit — s'applique à
+  l'identique ici, aucune raison d'en changer pour ce seul changement de
+  résolution).
+
+**Seul changement** : les bougies passent de `HOUR` à **`MINUTE_15`**
+(résolution confirmée valide contre l'API Capital.com réelle le
+20/08/2026, en lecture seule — `MINUTE15`/`MIN_15` échouent, seul
+`MINUTE_15` est accepté). M5 a été considéré et écarté — voir réserves
+ci-dessous.
+
+### M15 plutôt que M5 — justification et réserves écrites AVANT tout test
+
+**Choix retenu : M15.**
+
+*Justification théorique* : le principe (filtre de tendance long terme +
+déclencheur de rupture court terme) vient de la littérature déjà citée
+pour l'Hypothèse #1 (momentum systématique, Turtle Trading). Cette
+littérature ne prescrit aucune résolution de bougie précise — mais deux
+réserves, écrites ici a priori, avant tout regard sur les données
+produites par ce choix :
+
+1. **Bruit et coût proportionnel du spread.** Sur M5, chaque bougie
+   représente un mouvement de prix bien plus petit qu'en H1 — le spread
+   (fixe en points pour la plupart des instruments de la liste blanche)
+   devient une fraction bien plus importante du mouvement typique
+   capturé par le canal de Donchian(20). Un stop resserré agressivement
+   par un canal qui se redessine toutes les 5 minutes risque d'être
+   touché par du bruit de spread/exécution plutôt que par un vrai
+   retournement. M15 réduit ce risque sans l'éliminer — seule une
+   observation réelle (jamais avant 10 trades, invariant #10) pourra le
+   confirmer ou l'infirmer, jamais un ajustement a priori supplémentaire.
+2. **Affaiblissement de la justification théorique du filtre MA(200) à
+   mesure que la résolution raccourcit** — réserve supplémentaire,
+   trouvée en préparant cette proposition, pas seulement celle déjà
+   discutée sur le bruit. La littérature citée pour l'Hypothèse #1
+   (Faber 2007 notamment) applique MA(200) à des **clôtures
+   quotidiennes** (~200 jours de bourse, proche d'un an) — un régime de
+   fond au sens propre. Sur bougies horaires (Hypothèse #1), MA(200)
+   couvre déjà seulement ~8,3 jours, un écart déjà assumé dans l'entrée
+   du 20/08/2026 ci-dessus. Sur **M15, MA(200) ne couvre plus que ~2
+   jours** — à ce stade, le filtre ne capture plus vraiment un "régime
+   de fond" au sens de la littérature citée, plutôt une micro-tendance
+   très récente. Le CDC §2.11 prescrit littéralement "moyenne mobile
+   longue (200)" sans préciser de résolution, donc ce choix reste
+   conforme à la lettre du CDC — mais la solidité théorique de
+   l'argument s'érode à mesure que la résolution raccourcit. Point de
+   vigilance à surveiller lors de l'analyse des résultats, pas un
+   obstacle à la validation de cette proposition.
+
+M5 aurait aggravé les deux réserves sans justification théorique
+supplémentaire pour compenser — écarté sur cette base, pas sur des
+données (aucune donnée regardée avant cette décision).
+
+### Paramètres exacts (choisis a priori, avant observation)
+
+| Paramètre | Valeur | Statut |
+|---|---|---|
+| Période de la MA de régime | 200 (bougies M15) | **Fixe**, réutilise exactement le paramètre de l'Hypothèse #1 (lui-même prescrit littéralement par le CDC §2.11) — pas un nouveau choix |
+| **Résolution des bougies** | **M15** (`MINUTE_15`) | **Seul paramètre réellement nouveau de cette hypothèse** — voir justification et réserves ci-dessus |
+| Période du canal de Donchian (N) | 20 (bougies M15) | **Fixe**, réutilise exactement le paramètre de l'Hypothèse #1 (système "Turtle" original) — pas un nouveau choix, la valeur numérique ne change pas, seule l'unité de temps qu'elle mesure change |
+
+### Budget de variables (invariant #10) — vérifié avant de proposer cette hypothèse
+
+Repart du bilan de l'Hypothèse #1 (3/5 en lecture large : `confidence_
+threshold`, `STALENESS_FRACTION_OF_STOP_DISTANCE`, N=20 Donchian de
+l'Hypothèse #1 — voir citation exacte du §3.8 dans l'entrée ci-dessus,
+non redupliquée ici).
+
+**MA(200) et N=20 ne sont PAS de nouvelles variables** : valeurs
+identiques à l'Hypothèse #1, même justification théorique, jamais
+recalibrées — comptées une seule fois, déjà faites.
+
+**Le choix de la résolution (M15) EST compté comme une nouvelle
+variable** — décision distincte de l'Hypothèse #1, qui aurait pu être
+tranchée autrement (M5, M30, H4...) et qui a fait l'objet d'un
+arbitrage théorique ci-dessus. Compter cette décision comme "gratuite"
+sous prétexte qu'elle réutilise les mêmes valeurs numériques (200, 20)
+serait sous-évaluer le budget réel du projet.
+
+**Bilan** : cette hypothèse introduit **1 nouvelle variable** (choix de
+résolution M15). Total du projet après validation de cette proposition :
+**4/5** dans la lecture large (`confidence_threshold` + `STALENESS_
+FRACTION` + N=20 Hypothèse #1 + résolution M15 Hypothèse #3) — **il ne
+resterait qu'une seule variable disponible** pour tout le reste du
+projet (y compris une future Hypothèse #2). À garder en tête avant toute
+proposition ultérieure.
+
+### Score de confiance du signal
+
+Identique à l'Hypothèse #1 : signal entièrement déterministe,
+`confidence = 1.0` systématiquement, `boosted = False` (même raison —
+`confidence_scorer.py` non construit).
+
+### Actifs concernés
+
+**Proposition : les mêmes 8 actifs que l'Hypothèse #1** (GOLD, US100,
+US30, EURUSD, GBPUSD, USDJPY, BTCUSD, ETHUSD), pas un sous-ensemble.
+Raisonnement : la restriction initiale de l'Hypothèse #1 à 5 actifs
+visait à éviter le chevauchement avec Station X sur le même compte —
+cette contrainte ne s'applique pas ici, l'Hypothèse #3 tourne sur un
+compte Capital.com **totalement séparé** (`accountId` distinct, ciblage
+explicite déjà en place, voir `docs/DECISIONS.md`), sans risque de
+collision ni avec Station X ni avec l'Hypothèse #1. Aucune raison
+structurelle de restreindre — **à confirmer ou modifier par Ismaël**.
+
+### Ce que cette hypothèse NE fait PAS (rappel des garde-fous)
+
+- Ne modifie, ne remplace, ni ne concurrence l'Hypothèse #1 ni Station X
+  — compte, enveloppes et statistiques strictement séparés dès la
+  conception (pas une étape ultérieure comme ça l'a été pour le Flux B
+  à sa création)
+- N'implique aucun LLM à aucune étape de la décision (invariant #1)
+- Ne sera jamais ajustée automatiquement sur la base de ses propres
+  résultats — toute évolution = nouvelle entrée datée ci-dessous
+- Ne produit aucune conclusion statistique avant **10 trades minimum**
+  (un seul paramètre réglable propre à cette hypothèse, le choix de
+  résolution)
+- **Aucun code d'exécution tant que cette proposition n'est pas validée
+  par Ismaël** — pas de module de détection, pas de process exécuteur,
+  pas de câblage des identifiants déjà préparés (lecture seule
+  uniquement à ce jour)
+
+---
+
+*Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1
+ou #3, ou à une Hypothèse #2 distincte (compte démo déjà réservé, aucune
+proposition écrite à ce jour) — jamais une modification de ce qui
 précède.*
