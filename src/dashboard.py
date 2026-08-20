@@ -14,11 +14,14 @@ construit exclusivement à partir de metrics.py et de requêtes DB
 directes, JAMAIS via CapitalClient : la génération du dashboard ne doit
 dépendre d'aucune session broker ni du réseau Capital.com.
 
-Contenu dans l'ordre exact du §4.6. Trois blocs dépendent de modules non
-construits (confidence_scorer, allocator, hypothesis_engine officiel du
-§3.9) — affichés vides et clairement étiquetés "non construit" plutôt que
-simulés avec des données factices (demande explicite d'Ismaël,
-20/08/2026) : Hypothèses (générateur officiel), Classement, Décisions.
+Contenu dans l'ordre exact du §4.6. Deux blocs dépendent de modules non
+construits (allocator, hypothesis_engine officiel du §3.9) — affichés
+vides et clairement étiquetés "non construit" plutôt que simulés avec
+des données factices (demande explicite d'Ismaël, 20/08/2026) :
+Hypothèses (générateur officiel), Décisions. Le bloc Classement, lui, est
+construit depuis le 20/08/2026 (confidence_scorer.py, §2.4) — en mode
+observation uniquement, voir sa docstring pour le détail des écarts
+assumés et le rappel comparaisons-multiples affiché sur ce bloc.
 """
 
 import html
@@ -26,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from src.circuit_breaker_store import get_active_global_block
+from src.confidence_scorer import MULTIPLE_COMPARISONS_CAVEAT, compute_all_confidence_scores
 from src.db import connection_scope
 from src.metrics import (
     HYPOTHESIS_SOURCE,
@@ -246,8 +250,31 @@ def _render_hypotheses(db_path: str) -> str:
     """
 
 
-def _render_classement() -> str:
-    return "<h2>Classement</h2><p class='not-built'>Score de confiance (§2.4, confidence_scorer) : non construit.</p>"
+def _render_classement(db_path: str) -> str:
+    scores = compute_all_confidence_scores(db_path)
+    if not scores:
+        return "<h2>Classement</h2><p class='empty'>Aucune enveloppe créée</p>"
+
+    rows = []
+    for s in scores:
+        raisons = "; ".join(html.escape(c.detail) for c in s.checks if not c.satisfied) or "—"
+        rows.append(
+            f"<tr><td>{html.escape(s.actif)}</td><td>{html.escape(s.source)}</td>"
+            f"<td>{s.nb_trades}</td><td>{html.escape(s.phase)}</td>"
+            f"<td>{'éligible' if s.eligible else 'non éligible'}</td>"
+            f"<td>{_fmt(s.score, 4) if s.score is not None else '—'}</td>"
+            f"<td>{raisons}</td></tr>"
+        )
+
+    return f"""
+    <h2>Classement</h2>
+    <p><small>{html.escape(MULTIPLE_COMPARISONS_CAVEAT)}</small></p>
+    <table>
+      <tr><th>Actif</th><th>Source</th><th>Nb trades</th><th>Phase</th><th>Statut</th>
+          <th>Score</th><th>Condition(s) non satisfaite(s)</th></tr>
+      {''.join(rows)}
+    </table>
+    """
 
 
 def _render_decisions() -> str:
@@ -298,7 +325,7 @@ def generate_dashboard_html(db_path: str, now: Optional[datetime] = None) -> str
         _safe(_render_periodes, db_path, now),
         _safe(_render_trades, db_path, now),
         _safe(_render_hypotheses, db_path),
-        _render_classement(),
+        _safe(_render_classement, db_path),
         _render_decisions(),
         _safe(_render_historique, db_path),
     ]

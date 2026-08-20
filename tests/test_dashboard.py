@@ -37,9 +37,22 @@ def test_generate_dashboard_html_empty_system(tmp_path):
     assert "Classement" in output
     assert "Décisions" in output
     assert "Historique complet" in output
-    assert "confidence_scorer" in output  # bloc classement clairement étiqueté non construit
+    assert "Aucune enveloppe créée" in output  # bloc classement, aucun actif à ce stade
     assert "allocator" in output
     assert "hypothesis_engine" in output
+
+
+def test_generate_dashboard_html_classement_shows_ranking_with_sample_size(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="stationx")
+    _close_trade(db_path, "GOLD", "stationx", r_multiple=1.0)
+    output = generate_dashboard_html(db_path, NOW)
+
+    assert "non éligible" in output
+    assert "comparaisons multiples" in output.lower() or "sélection multiple" in output.lower()
+    # taille d'échantillon toujours affichée à côté du score (§4.6, §2.4)
+    assert "Nb trades" in output
 
 
 def test_generate_dashboard_html_no_external_resources(tmp_path):

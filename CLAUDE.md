@@ -479,6 +479,41 @@ Plan validé par Ismaël avant codage. Détail des écarts dans
   puis redémarrer `control_bot` sur le VPS — voir `docs/DECISIONS.md`.
   376 tests passent au total.
 
+## Palier P2.8 — `confidence_scorer` (§2.4), mode observation uniquement (20/08/2026)
+
+Demande explicite d'Ismaël, en mode observation uniquement : aucune
+décision réelle n'en dépend encore (`allocator.py` §2.5 et le verrou
+§4.9 restent volontairement non construits). Détail complet des deux
+écarts assumés (unité de `drawdown_max`, choix de ne pas persister
+`confidence_scores` à chaque calcul) et du gap de données identifié
+dans `docs/DECISIONS.md`.
+
+- `src/confidence_scorer.py` — **100% couvert** (demande explicite
+  d'Ismaël, même régime que `risk_engine.py`, y compris l'orchestration
+  I/O). Score exact du §2.4 (conditions éliminatoires + `espérance ×
+  facteur_échantillon × facteur_stabilité`), calculé par (actif, source)
+  séparément, à la demande (pas de snapshot périodique dans
+  `confidence_scores`, même choix que `metrics.py`/`metrics_snapshot`).
+  Constante `MULTIPLE_COMPARISONS_CAVEAT` exposée pour rappeler que ce
+  score est indicatif tant qu'`hypothesis_engine` (§3.9, correction
+  multiple-comparaisons) n'existe pas.
+- **Gap de données réel trouvé en construisant ce module** : la
+  condition éliminatoire "spread médian < 15% du stop typique" ne peut
+  être satisfaite par AUCUN actif à ce jour — `market_snapshots.spread`
+  existe dans le schéma mais n'est écrit par aucun code du projet
+  (`executor.py`/`trend_executor.py` ne l'alimentent jamais). Traité en
+  fail-safe (donnée manquante = condition non satisfaite, jamais
+  court-circuitée à vrai), pas corrigé ici (hors périmètre de la
+  demande, sans impact avant le seuil de 20 trades). Câblage candidat :
+  `market_data.get_price_snapshot()` à l'ouverture d'un trade.
+- `src/dashboard.py` : bloc "Classement" (§4.6) câblé, affiche
+  désormais le classement réel (éligible/non éligible, score, taille
+  d'échantillon, raison(s) d'inéligibilité) au lieu de "non construit".
+- `tests/test_confidence_scorer.py` (42 tests, 100%),
+  `tests/test_dashboard.py` étendu. 496 tests passent au total, 100%
+  toujours vérifié sur `risk_engine`/`capital_manager`/`go_nogo`/
+  `validator`/`trend_strategy`/`circuit_breaker`.
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou

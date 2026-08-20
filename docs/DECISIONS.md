@@ -12,6 +12,83 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — `confidence_scorer.py` (§2.4), mode observation uniquement — deux écarts documentés, un gap de données identifié
+
+Demande explicite d'Ismaël : construire le score de confiance du §2.4
+maintenant que plusieurs flux tournent en parallèle (Station X, Flux B
+H1), en **mode observation uniquement** — aucune décision réelle n'en
+dépend (`allocator.py` §2.5 et le verrou §4.9 restent volontairement non
+construits, rien à décider avec si peu de trades). Bloc "Classement" du
+dashboard (§4.6) câblé, jusque-là affiché vide et étiqueté "non
+construit".
+
+**Formule implémentée telle quelle** : conditions éliminatoires
+(nb_trades ≥ 20 phase A / ≥ 50 phase B, espérance nette > 0, taille
+minimale broker compatible avec l'enveloppe, spread médian < 15% du
+stop typique) puis `score = espérance_nette_R × facteur_échantillon
+(√(nb_trades/50), plafonné à 1) × facteur_stabilité (1 −
+drawdown_max/20%, plancher 0)`. Calculé par (actif, source) séparément,
+jamais un agrégat mélangé.
+
+**Écart 1 — unité de `drawdown_max`** : le CDC écrit "drawdown_max/20%"
+sans préciser l'unité. Le seul drawdown calculé partout ailleurs dans le
+projet (`metrics.AssetMetrics.drawdown_max_r`, `circuit_breaker.py`) est
+en multiples de R, pas en % de capital — aucune mesure en % n'existe
+(la règle de réinvestissement des 50%, §2.3, rend un "% de l'enveloppe"
+glissant, pas trivial à définir sans une nouvelle table de suivi
+dédiée). Approximation retenue : drawdown_% ≈ |drawdown_max_r| ×
+risk_percent (2% par défaut, paramètre explicite du module, jamais lu
+depuis `.env` en direct) — cohérent avec le modèle mental du §2.3 (1R ≈
+risk_percent% du capital engagé), documenté comme approximation, pas
+comme mesure directe, dans la docstring de `confidence_scorer.py`.
+
+**Écart 2 / gap de données — spread médian** : `market_snapshots.spread`
+existe dans le schéma (§4.5) mais n'est alimenté par **aucun code du
+projet à ce jour** — vérifié par grep exhaustif, ni `executor.py` ni
+`trend_executor.py` n'y écrivent jamais. Conséquence : la condition
+"spread médian < 15%" est actuellement **toujours indéterminée**, pour
+tous les actifs — `get_median_spread_ratio()` retourne `None` en
+l'absence de donnée, ce qui fait échouer la condition (fail-safe,
+invariant #7 : donnée manquante bloque l'éligibilité, ne la
+court-circuite jamais à `True`). Concrètement : même un actif/source
+dépassant 50 trades avec une belle espérance restera "non éligible"
+tant que la capture de spread n'est pas câblée quelque part (candidat
+naturel : `market_data.get_price_snapshot()`, déjà appelé à l'ouverture
+d'un trade dans `executor.py`/`trend_executor.py` — pas fait ici, hors
+périmètre de la demande d'aujourd'hui, pas de décision réelle qui en
+dépendrait avant longtemps vu le seuil de 20 trades). Gap connu, pas un
+oubli silencieux.
+
+**Persistance** : `confidence_scores` (table du §4.5) existe dans le
+schéma mais n'est PAS écrite automatiquement à chaque calcul — même
+choix que `metrics.py` pour `metrics_snapshot` (aucun consommateur d'un
+historique de scores n'existe encore, écrire une ligne à chaque
+`/dashboard` serait de la complexité sans lecteur ; réversible dès
+qu'`allocator`/`hypothesis_engine` existeront et en auront besoin).
+
+**Taille minimale broker compatible** : ré-application en lecture seule
+de la formule de dimensionnement de `risk_engine.evaluate_new_entry`
+(`risk_amount_eur / (stop_distance × pip_value_per_unit) ≥ min_units`),
+sur l'enveloppe courante et la distance de stop médiane historique de
+l'(actif, source) — jamais utilisée pour placer un ordre réel (module de
+reporting, l'invariant #3 concerne le flux d'exécution, pas une
+statistique de dashboard). `pip_value_per_unit` vient de la liste
+blanche statique (`asset_whitelist.ASSET_WHITELIST`, taux EUR figés au
+16/08/2026) plutôt que d'un taux rafraîchi en direct — cohérent avec le
+principe déjà établi dans `asset_whitelist.py` : acceptable pour une
+décision d'inclusion/reporting, jamais pour un dimensionnement réel de
+position.
+
+**Tests** : `tests/test_confidence_scorer.py`, 42 tests, 100% de
+couverture sur `src/confidence_scorer.py` (calcul pur ET orchestration
+I/O — même régime que `risk_engine.py`, demande explicite d'Ismaël).
+`tests/test_dashboard.py` étendu (le bloc Classement n'est plus vide).
+496 tests passent au total, aucune régression, 100% toujours vérifié sur
+`risk_engine`/`capital_manager`/`go_nogo`/`validator`/`trend_strategy`/
+`circuit_breaker`.
+
+---
+
 ## 2026-08-20 — Incident : le compte "préféré" Capital.com a basculé silencieusement — ciblage explicite par accountId
 
 Trouvé en préparant le test de connexion du compte démo H3 (entrée
