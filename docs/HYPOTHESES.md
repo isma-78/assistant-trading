@@ -426,7 +426,229 @@ structurelle de restreindre — **à confirmer ou modifier par Ismaël**.
 
 ---
 
-*Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1
-ou #3, ou à une Hypothèse #2 distincte (compte démo déjà réservé, aucune
-proposition écrite à ce jour) — jamais une modification de ce qui
-précède.*
+## Hypothèse #2 (ICT / Smart Money Concepts) — 20/08/2026
+
+**Statut** : proposée, en attente de validation d'Ismaël. **Non testée,
+aucun code d'exécution n'existe encore.** Rigueur volontairement plus
+poussée que pour l'Hypothèse #3, sur demande explicite : l'ICT n'a pas
+de définition mathématique canonique unique, contrairement au
+Donchian/MA200 (systèmes publics, formellement documentés depuis les
+années 1980-2010) — c'est le point faible assumé de cette proposition,
+traité explicitement ci-dessous plutôt que masqué.
+
+**Correction préalable** : aucune entrée ICT ni aucune réserve n'existait
+avant aujourd'hui dans ce fichier (vérifié par recherche exhaustive, pas
+supposé). Le §3.3 du CDC ("Méthodologie ICT du canal") documente le
+style de raisonnement de **Station X lui-même** (FVG, Fibonacci,
+structures de marché, en zones plutôt qu'en points) — utile ici comme
+**vocabulaire de référence déjà présent dans le projet** (repris tel
+quel pour rester cohérent avec `parser.py`/`market_data`), mais ce n'est
+la spécification d'aucune stratégie autonome préexistante.
+
+### Contexte
+
+Teste si un filtre de confluence inspiré de l'ICT (zone de retracement
+Fibonacci + zone de déséquilibre de prix, FVG) améliore la sélectivité
+d'une entrée, par rapport au déclencheur "rupture brute" de l'Hypothèse
+#1. Compte Capital.com dédié ("hypothèse 2", déjà créé), totalement
+isolé de Station X, de l'Hypothèse #1 et de l'Hypothèse #3.
+
+### Principe : deux options, honnêtement comparées — aucune n'élimine totalement l'arbitraire
+
+Les 5 points demandés sont traités un par un. Pour chacun, la définition
+purement géométrique (sans seuil) est séparée de la partie qui exige un
+choix.
+
+#### 1. Définition précise d'un FVG valide — entièrement déterministe, aucun seuil nécessaire
+
+Sur 3 bougies consécutives `C1, C2, C3` (même unité de temps que le
+reste de la logique, voir point 5) :
+
+- **FVG haussier** si `low(C3) > high(C1)` — la zone de déséquilibre est
+  `[high(C1), low(C3)]`.
+- **FVG baissier** si `high(C3) < low(C1)` — la zone est
+  `[high(C3), low(C1)]`.
+
+C'est la définition standard à 3 bougies (comparaison stricte de prix,
+aucun jugement visuel). **Aucun seuil de taille minimale n'est proposé**
+— une lecture stricte de l'invariant #10 : ajouter un filtre "FVG
+significatif seulement" introduirait un seuil sans justification
+théorique écrite a priori. La contrepartie assumée : des FVG
+minuscules, proches du bruit de marché, seront comptés au même titre
+que des FVG larges. Recherchée sur la même fenêtre que le canal (voir
+point 5) — pas une fenêtre séparée, pas un nouveau paramètre.
+
+#### 2. Ancrage des retracements Fibonacci — LE point sans réponse unique, deux options présentées
+
+Aucune définition canonique n'existe pour "quel swing utiliser" — c'est
+un jugement discrétionnaire dans la pratique ICT courante. Deux façons
+de le rendre déterministe, avec des coûts différents (voir budget,
+point 5) :
+
+**Option A — réutiliser le canal de Donchian(20) déjà construit pour
+l'Hypothèse #1** comme proxy d'ancrage (borne haute = plus haut des 20
+dernières bougies, borne basse = plus bas). **Ce n'est PAS un swing
+structurel ICT au sens strict** (un swing ICT est un point de
+retournement local, pas une extrémité glissante sur N bougies) — c'est
+une **simplification assumée**, choisie parce qu'elle ne coûte aucun
+paramètre supplémentaire (réutilise N=20, déjà budgété par
+l'Hypothèse #1) et réutilise du code déjà testé à 100%
+(`compute_donchian_channel`).
+
+**Option B — détection de swings par fractale** (Bill Williams,
+*Trading Chaos*, 1995 — convention algorithmique standard, indépendante
+de l'ICT mais largement reprise par la communauté ICT elle-même faute
+de mieux) : un plus haut de swing à la bougie `i` est confirmé si
+`high(i) > high(i-K)...high(i-1)` ET `high(i) > high(i+1)...high(i+K)`
+(symétrique pour un plus bas). **Introduit un nouveau paramètre K**
+(classiquement K=2, la "fractale à 5 bougies") — plus fidèle à la
+notion ICT de swing réel, mais un paramètre de plus au budget.
+
+**Aucune des deux n'est "la bonne" réponse — c'est un arbitrage, pas une
+équation.** Recommandation : Option A par défaut (budget), sauf si tu
+juges que la fidélité au concept prime sur le budget de variables — à
+trancher explicitement ci-dessous.
+
+#### 3. Cassure de structure — honnêtement, PAS résolue de façon satisfaisante par l'option A
+
+Sous l'**Option A**, il n'y a **pas de détection dédiée de cassure de
+structure** (pas de séquence de plus hauts/plus bas façon BOS/CHoCH) —
+le filtre de régime MA(200), déjà en place pour l'Hypothèse #1, sert de
+proxy grossier ("biais structurel"), sans jamais confirmer une vraie
+cassure au sens ICT. **C'est un angle mort assumé de l'Option A**, pas
+une omission cachée.
+
+Sous l'**Option B**, la cassure de structure devient définissable
+proprement une fois les swings fractals identifiés : **BOS** (poursuite)
+= clôture au-delà du dernier swing dans le sens du biais déjà établi ;
+**CHoCH** (retournement) = clôture au-delà du dernier swing dans le
+sens opposé au biais établi. Déterministe, mais dépend du paramètre K
+du point 2.
+
+#### 4. Règle d'entrée et de sortie découlant des définitions ci-dessus (Option A détaillée)
+
+Régime (inchangé, réutilisé de l'Hypothèse #1) : MA(200) sur clôtures
+horaires, même règle de sens unique.
+
+Canal (inchangé, réutilisé) : Donchian(20), bornes `haut`/`bas`,
+excluant la bougie courante.
+
+**Zone de confluence** (retracement 61,8 %–78,6 %, valeurs **prescrites
+littéralement par le CDC §3.3** — pas un choix pour cette hypothèse) :
+- Régime haussier : zone = `[bas + 0,214×(haut−bas), bas + 0,382×(haut−bas)]`
+  (équivalent à 61,8 %–78,6 % de retracement depuis le haut du canal)
+- Régime baissier : zone = `[bas + 0,618×(haut−bas), bas + 0,786×(haut−bas)]`
+
+**Entrée** (long, régime haussier) : clôture courante dans la zone
+ci-dessus **ET** un FVG haussier (point 1), détecté sur les 20 dernières
+bougies, dont l'intervalle `[high(C1), low(C3)]` chevauche cette zone
+(chevauchement géométrique standard, aucun seuil). Entrée au niveau de
+la clôture, en ordre limite (§2.8, comme partout ailleurs dans le
+projet). Symétrique pour un short en régime baissier.
+
+**Stop initial** : borne opposée du même canal — identique à
+l'Hypothèse #1, aucun paramètre supplémentaire.
+
+**Sortie** : trailing sur le même canal de Donchian(20), **réutilise
+tel quel `compute_trailing_stop_channel`** (module critique déjà
+100% couvert) — aucune nouvelle logique de sortie à écrire.
+
+*Simplification assumée* : contrairement à la pratique ICT
+discrétionnaire courante (qui attend souvent une "bougie de réaction"
+dans la zone avant d'entrer), cette règle entre dès que la condition
+géométrique est remplie, sans confirmation supplémentaire — nécessaire
+pour rester déterministe, au prix d'une fidélité réduite à la pratique
+réelle.
+
+#### 5. Budget de variables (invariant #10) — cumul H1 + H3 + H2
+
+Repart du bilan de l'Hypothèse #3 : 4/5 en lecture large
+(`confidence_threshold`, `STALENESS_FRACTION_OF_STOP_DISTANCE`, N=20
+Donchian de l'Hypothèse #1, résolution M15 de l'Hypothèse #3).
+
+**Résolution horaire (HOUR), pas une nouvelle variable** : cette
+proposition reste délibérément sur l'unité de temps déjà établie par
+l'Hypothèse #1 (pas de changement de résolution) — l'expérimentation de
+résolution reste l'exclusivité de l'Hypothèse #3, pour ne pas cumuler
+deux nouvelles variables de résolution différentes sur deux hypothèses.
+
+**Ratios de Fibonacci (61,8 %/78,6 %), pas une nouvelle variable** :
+prescrits littéralement par le CDC §3.3 — même statut que MA(200) pour
+l'Hypothèse #1 (valeur fixée par le CDC, jamais un choix a priori de ma
+part).
+
+**FVG, pas une nouvelle variable** : définition purement géométrique
+(point 1), aucun seuil.
+
+**Sous l'Option A (recommandée)** : N=20 déjà budgété par l'Hypothèse #1,
+réutilisé tel quel. **Cette hypothèse introduirait donc 0 nouvelle
+variable.** Total du projet resterait à **4/5**, avec 1 slot de marge
+pour la suite.
+
+**Sous l'Option B** : le paramètre K (fenêtre de la fractale) est
+**1 nouvelle variable**. Total du projet passerait à **5/5 — le
+plafond exact**, sans plus aucune marge pour quoi que ce soit d'autre
+sur l'ensemble du projet après validation.
+
+### Score de confiance du signal
+
+Identique aux Hypothèses #1 et #3 : entièrement déterministe,
+`confidence = 1.0`, `boosted = False`.
+
+### Actifs concernés
+
+**Proposition : les mêmes 8 actifs que les Hypothèses #1 et #3** — même
+raisonnement que pour l'Hypothèse #3 (compte Capital.com totalement
+séparé, aucun risque de collision). À confirmer ou modifier.
+
+### Limites et angles morts assumés (demande explicite d'Ismaël)
+
+- **L'ancrage Fibonacci (point 2) n'a pas de réponse non-arbitraire** —
+  c'est un choix entre deux conventions, pas une valeur dérivée
+  objectivement. Présenté comme tel, pas masqué.
+- **Sous l'Option A, aucune cassure de structure n'est réellement
+  détectée** (point 3) — le filtre MA(200) sert de proxy, imparfait par
+  construction pour ce rôle précis.
+- **Aucun filtre de taille minimale sur les FVG** (point 1) — accepte du
+  bruit potentiellement significatif plutôt que d'introduire un seuil
+  non justifié théoriquement.
+- **Aucune confirmation de réaction de prix avant l'entrée** (point 4) —
+  simplification nécessaire pour rester déterministe, au prix d'une
+  fidélité réduite à la pratique ICT réelle.
+- **La littérature ICT elle-même n'a pas le même statut que celle citée
+  pour l'Hypothèse #1** (Moskowitz/Ooi/Pedersen, Faber, Turtle Trading —
+  études publiées, revues, ou système historique documenté) : c'est une
+  méthodologie de pratique retail, largement diffusée mais jamais
+  formalisée ni validée dans une littérature académique équivalente.
+  Cette hypothèse teste une **formalisation de ma conception**, pas une
+  règle ICT canonique — à savoir avant de juger le résultat.
+
+### Ce que cette hypothèse NE fait PAS (rappel des garde-fous)
+
+- Ne modifie, ne remplace, ni ne concurrence Station X, l'Hypothèse #1
+  ou l'Hypothèse #3 — compte, enveloppes et statistiques strictement
+  séparés dès la conception
+- N'implique aucun LLM à aucune étape de la décision (invariant #1)
+- Ne sera jamais ajustée automatiquement sur la base de ses propres
+  résultats — toute évolution = nouvelle entrée datée ci-dessous
+- Ne produit aucune conclusion statistique avant **10 trades minimum**
+  par variable réglable introduite (0 sous l'Option A, 10 minimum sous
+  l'Option B pour le paramètre K)
+- **Aucun code d'exécution tant que cette proposition n'est pas validée
+  par Ismaël** — ni module de détection, ni process exécuteur, ni
+  câblage des identifiants déjà préparés (lecture seule uniquement à ce
+  jour)
+
+### Décisions à trancher avant tout code
+
+1. **Option A ou B** pour l'ancrage Fibonacci / la détection de swing
+   (impacte directement le budget de variables : 4/5 vs 5/5 pour le
+   projet entier).
+2. **Actifs concernés** : les 8, ou un sous-ensemble.
+3. Si Option A : acceptable que la "cassure de structure" (point 3) ne
+   soit qu'un proxy MA(200), sans détection dédiée ?
+
+---
+
+*Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
+#2 ou #3 — jamais une modification de ce qui précède.*
