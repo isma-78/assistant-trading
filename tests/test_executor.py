@@ -451,6 +451,37 @@ def test_open_signal_approved_places_limit_order_and_records_trade(tmp_path):
         conn.close()
 
 
+def test_open_signal_records_market_session_on_open(tmp_path):
+    # Collecte uniquement (§7.2, 20/08/2026, voir docs/DECISIONS.md et
+    # session_marker.py) — vérifie que la session est bien persistée,
+    # cohérente avec compute_market_session pour l'heure UTC réelle.
+    from datetime import datetime, timezone
+
+    from src.session_marker import compute_market_session
+
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-xyz", "level": 100.0}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    expected = compute_market_session(datetime.now(timezone.utc).hour)
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT session_marche FROM trades").fetchone()
+        assert trade["session_marche"] == expected
+    finally:
+        conn.close()
+
+
 def test_open_signal_records_align_matinale_on_open(tmp_path):
     # §3.8, variable #1 — collecte uniquement (docs/DECISIONS.md, 20/08/2026).
     # Signal par défaut : GOLD short (_insert_signal) -> aligné avec un

@@ -152,11 +152,14 @@ def test_generate_and_queue_signal_skipped_when_already_active(tmp_path):
         conn.close()
 
 
-def test_hypothesis_assets_matches_hypotheses_md():
-    # Garde-fou de non-régression : les 5 actifs de l'Hypothèse #1
-    # (docs/HYPOTHESES.md) doivent rester exactement ceux-ci sans une
-    # nouvelle entrée datée dans ce fichier.
-    assert set(HYPOTHESIS_ASSETS) == {"US30", "EURUSD", "GBPUSD", "USDJPY", "ETHUSD"}
+def test_hypothesis_assets_matches_asset_whitelist():
+    # Garde-fou de non-régression : depuis l'extension du périmètre du
+    # 20/08/2026 (docs/DECISIONS.md), le Flux B couvre les 8 actifs de
+    # la liste blanche — doit rester exactement ceux-ci sans une
+    # nouvelle entrée datée dans trend_executor.py.
+    assert set(HYPOTHESIS_ASSETS) == {
+        "US30", "EURUSD", "GBPUSD", "USDJPY", "ETHUSD", "GOLD", "US100", "BTCUSD",
+    }
 
 
 def test_candle_count_covers_ma_period_with_margin():

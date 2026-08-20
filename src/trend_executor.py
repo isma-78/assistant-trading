@@ -1,10 +1,18 @@
 """
 trend_executor.py — Boucle autonome du Flux B (Hypothèse #1,
-docs/HYPOTHESES.md, validée par Ismaël le 20/08/2026). Génère des
-signaux via trend_strategy.evaluate_entry sur les 5 actifs sans (ou peu
-de) couverture Station X, les fait passer par le MÊME validator.py /
-risk_engine.py / executor.py que le flux Station X, dans une enveloppe
-démo strictement séparée (source="hypothesis").
+docs/HYPOTHESES.md, validée par Ismaël le 20/08/2026 ; périmètre étendu
+aux 8 actifs le 20/08/2026, voir docs/DECISIONS.md). Génère des signaux
+via trend_strategy.evaluate_entry sur TOUS les actifs de la liste
+blanche, qu'ils soient couverts par Station X ou non, les fait passer
+par le MÊME validator.py / risk_engine.py / executor.py que le flux
+Station X, dans une enveloppe démo strictement séparée
+(source="hypothesis") — les deux flux coexistent délibérément sur un
+même actif sans se gêner : enveloppes, coupe-circuits R et plafond
+d'exposition sont tous calculés par (actif, source), jamais mélangés
+entre les deux flux (vérifié explicitement le 20/08/2026, voir
+docs/DECISIONS.md). Seule exception assumée, pré-existante et non
+changée ici : la pause manuelle `/pause [actif]` (§7.1) reste par
+construction commune aux deux flux, jamais scopée par source.
 
 Process indépendant de executor.py, tourne dans sa propre session tmux
 sur le VPS, aux côtés de telegram_listener et executor_loop (demande
@@ -49,12 +57,16 @@ from src.trend_strategy import MA_PERIOD, evaluate_entry
 
 logger = logging.getLogger(__name__)
 
-# Les 5 actifs de la liste blanche sans (ou peu de) signal Station X —
-# constat du 19-20/08/2026, figé ici pour rester cohérent avec
-# l'Hypothèse #1 telle que validée (docs/HYPOTHESES.md). Toute évolution
-# de cette liste = nouvelle entrée datée dans ce fichier de référence,
-# pas un ajustement silencieux de cette constante.
-HYPOTHESIS_ASSETS = ["US30", "EURUSD", "GBPUSD", "USDJPY", "ETHUSD"]
+# Les 8 actifs de la liste blanche (asset_whitelist.py) — étendu le
+# 20/08/2026 depuis les 5 initiaux (US30/EURUSD/GBPUSD/USDJPY/ETHUSD,
+# choisis le 19-20/08 comme "sans signal Station X à l'époque") pour
+# couvrir GOLD/US100/BTCUSD également, sur décision explicite d'Ismaël :
+# les deux flux tournent désormais sur TOUS les actifs, sans exclusivité
+# — quand Station X est silencieux sur un actif, le Flux B continue
+# quand même dessus (voir docs/DECISIONS.md). Toute évolution de cette
+# liste = nouvelle entrée datée dans ce fichier de référence, pas un
+# ajustement silencieux de cette constante.
+HYPOTHESIS_ASSETS = ["US30", "EURUSD", "GBPUSD", "USDJPY", "ETHUSD", "GOLD", "US100", "BTCUSD"]
 
 # Marge au-delà de MA_PERIOD pour garantir un historique suffisant même
 # si quelques bougies manquent côté broker.
@@ -71,7 +83,7 @@ def _next_synthetic_msg_id() -> int:
     """Identifiant synthétique pour raw_messages.telegram_msg_id — ce
     flux ne vient pas de Telegram. Précision milliseconde : un appel API
     Capital.com prend déjà plus d'une milliseconde, donc deux
-    évaluations successives (5 actifs par cycle) ne peuvent pas
+    évaluations successives (8 actifs par cycle) ne peuvent pas
     collisionner en pratique avec la contrainte UNIQUE(channel,
     telegram_msg_id)."""
     return int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -168,9 +180,12 @@ def run_trend_loop(config, db_path: str, interval_seconds: int = 60) -> None:
     usd_to_eur = get_eur_conversion_rate(client, "USD")
     jpy_to_eur = get_eur_conversion_rate(client, "JPY")
     full_whitelist = build_asset_whitelist(usd_to_eur, jpy_to_eur)
-    # Restreinte aux 5 actifs du Flux B — défense en profondeur : un
-    # signal hors liste serait de toute façon rejeté par validator.py,
-    # mais ce module ne doit pas prétendre couvrir les 8 actifs.
+    # Restreinte à HYPOTHESIS_ASSETS — depuis le 20/08/2026 les 8 actifs
+    # de la liste blanche (extension du périmètre, voir docs/DECISIONS.md),
+    # donc un no-op en pratique tant que les deux listes restent
+    # identiques. Gardé comme défense en profondeur : si asset_whitelist.py
+    # gagne un nouvel actif sans mise à jour de HYPOTHESIS_ASSETS ici, ce
+    # module ne doit jamais prétendre le couvrir silencieusement.
     whitelist = {k: v for k, v in full_whitelist.items() if k in HYPOTHESIS_ASSETS}
     risk_engine = RiskEngine(caps=caps, whitelist=whitelist)
     go_nogo_status = GoNoGoStatus(allowed=True, reason="mode démo — verrou réel non applicable (§4.1 du CDC)")
@@ -240,7 +255,7 @@ def run_trend_loop(config, db_path: str, interval_seconds: int = 60) -> None:
             for signal_row in pending_signals:
                 key = (signal_row["actif"], HYPOTHESIS_SOURCE)
                 if key not in envelope_managers:
-                    continue  # ne devrait pas arriver (whitelist déjà restreinte aux 5 actifs), audit
+                    continue  # ne devrait pas arriver (whitelist déjà restreinte à HYPOTHESIS_ASSETS), audit
                 open_signal(
                     db_path, client, signal_row, risk_engine, whitelist,
                     envelope_managers[key], envelope_ids[key],

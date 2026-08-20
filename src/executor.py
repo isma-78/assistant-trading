@@ -68,6 +68,7 @@ from src.db import connection_scope
 from src.envelope_store import load_or_create_envelope, load_reserve_total, persist_trade_result
 from src.go_nogo import GoNoGoStatus
 from src.market_data import Candle, compute_atr, get_candles, get_price_snapshot
+from src.session_marker import compute_market_session
 from src.risk_engine import (
     ExistingPosition,
     RiskCaps,
@@ -531,18 +532,26 @@ def open_signal(
         logger.exception("Échec du placement de l'ordre limite pour le signal %s", signal_row["id"])
         return None
 
+    # Session de marché à l'ouverture (collecte uniquement, demande
+    # explicite d'Ismaël, 20/08/2026 — voir docs/DECISIONS.md et
+    # session_marker.py). Calculée sur `now`, le même horodatage que
+    # `ouvert_at` : une seule source de vérité pour "l'heure d'ouverture",
+    # jamais un second appel horloge qui pourrait diverger.
+    session_marche = compute_market_session(datetime.fromisoformat(now).hour)
+
     with connection_scope(db_path) as conn:
         cursor = conn.execute(
             "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
             "prix_entree_prevu, guaranteed_stop, stop_loss_initial, stop_loss_courant, risque_eur, "
-            "pourcentage_risque_applique, ouvert_at, statut, stop_elargi, stop_origine_signal) "
-            "VALUES (?, ?, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?)",
+            "pourcentage_risque_applique, ouvert_at, statut, stop_elargi, stop_origine_signal, session_marche) "
+            "VALUES (?, ?, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?)",
             (
                 signal_row["id"], result["deal_id"], signal_row["source"], asset, signal_row["sens"],
                 units, signal_row["entree_min"], int(adjustment.stop_distance > 0),
                 adjustment.stop_price, adjustment.stop_price, risk_amount_eur,
                 (risk_amount_eur / envelope_manager.balance * 100) if envelope_manager.balance else 0.0,
                 now, int(adjustment.widened), signal_row["stop_loss"] if adjustment.widened else None,
+                session_marche,
             ),
         )
         trade_id = cursor.lastrowid

@@ -12,6 +12,84 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — Flux B étendu aux 8 actifs (coexistence assumée avec Station X) + marquage de session horaire
+
+**Décision explicite d'Ismaël**, suite à l'audit du jour montrant que
+GOLD/US100/BTCUSD étaient exclus par construction du Flux B alors que
+Station X n'y apporte pas (ou peu) de volume : les deux flux tournent
+désormais sur les 8 actifs de la liste blanche, sans exclusivité — quand
+Station X est silencieux sur un actif, le Flux B continue quand même
+dessus, chacun avec sa propre enveloppe et ses propres métriques.
+
+### 1. Extension du périmètre
+
+`trend_executor.HYPOTHESIS_ASSETS` passe de 5 à 8 :
+`["US30", "EURUSD", "GBPUSD", "USDJPY", "ETHUSD", "GOLD", "US100", "BTCUSD"]`.
+Aucune autre modification de code nécessaire — la boucle, la génération
+de signal, l'exécution partagée (`executor.open_signal`/
+`manage_open_trades`) sont déjà génériques par actif.
+
+**Vérification demandée avant déploiement — non-mélange des deux flux
+sur un même actif, confirmée par lecture du code, pas supposée** :
+- `circuit_breaker_store.get_open_risk_eur()` (plafond d'exposition
+  simultanée, §2.3, 10% de l'enveloppe) filtre déjà par `source`
+  normalisée — l'exposition Station X et Flux B sur un même actif sont
+  comptées et plafonnées séparément, jamais mélangées.
+- `get_closed_trades_r()` / `_is_day_triggered_today()` / `_is_latched()`
+  (coupe-circuits R, §2.7 : jour/semaine/drawdown) : tous scopés par
+  `(actif, source normalisée)` — un coupe-circuit R déclenché côté
+  Station X sur GOLD ne bloque jamais le Flux B sur GOLD, et
+  réciproquement.
+- Routage d'enveloppe (`envelope_managers`/`envelope_ids`, clé
+  `(actif, "stationx"|"hypothesis")`) : déjà strictement séparé depuis
+  P2.5, aucune collision possible.
+- **Seule exception, pré-existante et volontairement non changée** :
+  `_is_manual_pause_active()` (`/pause [actif]`, §7.1) n'est **pas**
+  scopée par source — une pause manuelle sur un actif coupe les DEUX
+  flux à la fois. Documenté comme tel dans le code depuis P2.6 ("§7.1 ne
+  distingue pas"), confirmé toujours volontaire ici : si Ismaël pause un
+  actif, l'hypothèse par défaut est qu'il veut les deux flux à l'arrêt
+  dessus, pas seulement celui qui posait problème.
+
+### 2. Marquage de session horaire (collecte uniquement)
+
+`src/session_marker.py` (nouveau, pur, 100% couvert) :
+`compute_market_session(hour_utc)` classe l'heure UTC en `"asie"` |
+`"europe"` | `"us"` | `"hors_session"`.
+
+**Convention retenue** (plages fournies par Ismaël, chevauchements à
+résoudre) : Asie 00h-08h UTC, Europe 07h-16h UTC, US 13h-21h UTC.
+Chevauchements résolus par priorité **US > Europe > Asie** — la session
+qui démarre le plus tard dans un chevauchement est conventionnellement
+celle où la liquidité bascule (l'arrivée de New York domine
+l'après-midi européenne 13h-16h ; l'arrivée de Londres domine la fin de
+nuit asiatique 07h-08h). Un choix de convention explicite, pas une
+mesure — documenté ici pour ne jamais être présumé plus tard. Résidu
+21h-24h UTC (creux de liquidité mondial, hors des trois plages
+fournies) : `"hors_session"`.
+
+**Câblé au même point qu'`align_matinale`** (`executor.open_signal()`,
+juste après l'insertion du trade) : `trades.session_marche` (nouvelle
+colonne), calculée sur `now` — le même horodatage que `ouvert_at`, pas
+un second appel horloge qui pourrait diverger. "Ouverture" = placement
+de l'ordre limite, pas remplissage — même convention qu'`align_matinale`
+pour rester cohérent entre les deux collectes.
+
+**Collecte uniquement, confirmé** : aucun code ne lit `session_marche`
+pour une décision — ni `risk_engine`, ni `validator`, ni `executor`.
+N'est **pas** une variable du §3.8 (invariant #10) : elle n'entre dans
+aucune décision, contrairement aux 5 variables dont le budget est
+explicitement suivi dans `docs/HYPOTHESES.md` — pas soumise à la règle
+des 10 trades/variable, comme demandé.
+
+**Tests** : `tests/test_session_marker.py` (+11, toutes les branches et
+bornes, y compris les deux chevauchements et l'heure invalide),
+`tests/test_executor.py` (+1, persistance bout en bout),
+`tests/test_trend_executor.py` (garde-fou mis à jour pour les 8 actifs).
+441 tests passent, 100% de couverture maintenue.
+
+---
+
 ## 2026-08-20 — Le stop garanti trop serré est désormais ÉLARGI, plus rejeté — remplace l'entrée du 16/08/2026
 
 **Remplace explicitement** l'entrée "2026-08-16 — Bug réel trouvé avant
