@@ -113,14 +113,14 @@ def test_compute_period_pnl_requires_timezone_aware_movement_timestamp():
 # Orchestration I/O (DB SQLite temporaire réelle)
 # ---------------------------------------------------------------------------
 
-def _close_trade(db_path, actif, source, r_multiple, ferme_at):
+def _close_trade(db_path, actif, source, r_multiple, ferme_at, cloture_reason=None):
     with connection_scope(db_path) as conn:
         conn.execute(
             "INSERT INTO trades (source, actif, mode, direction, taille_initiale, "
             "stop_loss_initial, stop_loss_courant, risque_eur, pourcentage_risque_applique, "
-            "ouvert_at, ferme_at, r_multiple_total, statut) "
-            "VALUES (?, ?, 'demo', 'long', 0.01, 1.0, 1.0, 10.0, 2.0, ?, ?, ?, 'ferme')",
-            (source, actif, ferme_at, ferme_at, r_multiple),
+            "ouvert_at, ferme_at, r_multiple_total, statut, cloture_reason) "
+            "VALUES (?, ?, 'demo', 'long', 0.01, 1.0, 1.0, 10.0, 2.0, ?, ?, ?, 'ferme', ?)",
+            (source, actif, ferme_at, ferme_at, r_multiple, cloture_reason),
         )
 
 
@@ -144,6 +144,21 @@ def test_get_asset_metrics_reads_closed_trades(tmp_path):
     m = get_asset_metrics(db_path, "GOLD", "stationx")
     assert m.nb_trades == 2
     assert m.esperance_r == pytest.approx(0.5)
+
+
+def test_get_asset_metrics_excludes_stop_urgence_closures(tmp_path):
+    # §7.2/§7.1, 20/08/2026 (voir docs/DECISIONS.md) : un arrêt d'urgence
+    # sort à un prix arbitraire, jamais représentatif du calibrage
+    # stop/TP/trailing de la stratégie — exclu des stats en R, pas du P&L
+    # en euros (envelope_ledger, non testé ici, non filtré ailleurs).
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    _close_trade(db_path, "GOLD", "stationx", 2.0, "2026-08-18T00:00:00+00:00")
+    _close_trade(db_path, "GOLD", "stationx", -100.0, "2026-08-19T00:00:00+00:00", cloture_reason="stop_urgence")
+
+    m = get_asset_metrics(db_path, "GOLD", "stationx")
+    assert m.nb_trades == 1
+    assert m.esperance_r == pytest.approx(2.0)
 
 
 def test_get_all_asset_metrics_covers_every_envelope(tmp_path):

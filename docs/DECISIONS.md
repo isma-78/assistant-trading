@@ -12,6 +12,68 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — `trades.cloture_reason` : distinguer une clôture forcée (/stop_urgence) d'une sortie organique
+
+Ismaël s'apprêtait à déclencher `/stop_urgence` lui-même depuis Telegram
+pour se familiariser avec la commande (déjà validée techniquement en
+production, ceci est un test de prise en main, pas une vérification
+supplémentaire) — sur les positions Flux B alors ouvertes (GBPUSD id=6,
+US30 id=7). Demande explicite : que cette clôture soit identifiable comme
+forcée, pas confondue avec un stop/trailing organique.
+
+**Constat avant correctif** : rien ne distinguait les deux cas dans les
+données structurées. `trade_partials.palier` vaut `"sl"` pour TOUTE
+`CLOSE_FULL_STOP` (stop initial, breakeven, trailing, ET /stop_urgence
+confondus — voir son commentaire dans `db.py`) ; `trade_analysis.
+denouement` (dérivé du dernier palier via `trade_analyzer.py`) aurait
+donc affiché `"sl_hit"` pour un arrêt d'urgence, indiscernable d'un vrai
+stop touché. Seul le texte libre `trade_partials.motif`/`action.detail`
+("Arrêt d'urgence (/stop_urgence)") portait l'information, jamais
+structuré ni filtrable.
+
+**`trades.cloture_reason`** (nouvelle colonne, migration additive comme
+les autres du jour) : code parmi `"stop_initial"` | `"stop_breakeven"` |
+`"trailing"` | `"stop_urgence"`. Réutilise la fonction `_infer_close_
+reason()` déjà écrite aujourd'hui pour la notification de clôture (§7.2,
+entrée précédente) — un seul endroit calcule la distinction, la
+notification et la colonne DB lisent la même valeur (`_CLOSE_REASON_
+LABELS` traduit le code en libellé français pour l'affichage, jamais
+l'inverse).
+
+**Décision sur `metrics.py` : exclu des statistiques en R, pas du P&L en
+euros.** Un arrêt d'urgence sort au prix du marché à un instant
+arbitraire (déclenché manuellement, ou par une anomalie système) — ça ne
+mesure jamais si le placement du stop/TP/trailing de la stratégie est
+bien calibré, contrairement à une sortie organique ; le mélanger aux
+statistiques d'espérance/profit factor fausserait l'évaluation de la
+stratégie elle-même. Nouvelle fonction `metrics.get_closed_trades_r_for_
+stats()` (filtre `cloture_reason != 'stop_urgence'`), utilisée à la
+place de `circuit_breaker_store.get_closed_trades_r()` — **jamais
+l'inverse** : le coupe-circuit (§2.7) doit rester informé de TOUTE perte
+réalisée y compris un arrêt d'urgence (invariant #7, fail-safe) ; filtrer
+cette fonction aurait été une régression de sécurité, pas une
+amélioration statistique. Le P&L en euros (`envelope_ledger`) n'est PAS
+filtré non plus : l'argent a réellement bougé sur l'enveloppe, peu
+importe pourquoi le trade s'est fermé. `get_trade_counts_by_period`
+(nombre de trades, bloc "Trades" du dashboard) n'est pas filtré non plus,
+volontairement — c'est un compte d'activité/audit, pas une mesure de
+performance de la stratégie.
+
+**Message `/stop_urgence` du bot de contrôle renforcé** : mentionne
+désormais explicitement "Station X ET Flux B" (pas seulement le flux qui
+avait des positions ouvertes au moment du test) et le rappel `/reprendre`
+en évidence — la version précédente disait déjà "jusqu'à /reprendre"
+mais sans jamais nommer les deux flux, risque de confusion pour un test
+ciblé sur un seul des deux.
+
+**Tests** : `tests/test_executor.py` (+2 : les 4 branches de `_infer_
+close_reason`, `cloture_reason='stop_urgence'` + libellé notifié bout en
+bout via `force_close_all_open_trades`), `tests/test_metrics.py` (+1,
+exclusion confirmée), `tests/test_control_bot.py` (+3 assertions sur le
+message renforcé). 424 tests passent, 100% de couverture maintenue.
+
+---
+
 ## 2026-08-20 — §7.2 : notifications ouverture/clôture de position ajoutées + audit complet
 
 Remonté par Ismaël : les deux trades Flux B (GBPUSD, US30) ont été

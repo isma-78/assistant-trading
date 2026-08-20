@@ -726,23 +726,43 @@ def manage_open_trades(
             logger.exception("Erreur non gérée en gérant le trade %s — passage au suivant", trade_row["id"])
 
 
+# Codes structurés persistés dans trades.cloture_reason (20/08/2026, voir
+# docs/DECISIONS.md) — jamais les libellés français directement en base,
+# pour que metrics.py puisse filtrer par code sans dépendre d'un texte.
+_CLOSE_REASON_LABELS = {
+    "stop_initial": "stop initial",
+    "stop_breakeven": "stop au breakeven",
+    "trailing": "stop suiveur (trailing)",
+    "stop_urgence": "arrêt d'urgence",
+}
+
+
 def _infer_close_reason(action: "ManagementAction", state: OpenTradeState) -> str:
-    """Raison lisible d'une clôture totale (§7.2) — reconstruite depuis
-    l'état plutôt que stockée telle quelle : `trade_partials.palier` vaut
-    toujours "sl" pour toute CLOSE_FULL_STOP (stop initial, breakeven ou
-    trailing confondus, voir son commentaire dans db.py), et `action.detail`
-    ne distingue pas non plus ces trois cas pour une clôture par stop
-    (toujours "Stop touché (initial, breakeven ou trailing)" — voir
-    _evaluate_position_management). Comparer state.stop_price à state.
-    initial_stop_price/entry_price au moment de la clôture est le seul
-    moyen fiable de savoir lequel des trois a réellement été touché."""
+    """Code de raison d'une clôture totale (§7.2, §7.1) — reconstruit
+    depuis l'état plutôt que stocké tel quel : `trade_partials.palier`
+    vaut toujours "sl" pour toute CLOSE_FULL_STOP (stop initial, breakeven,
+    trailing ET /stop_urgence confondus, voir son commentaire dans db.py),
+    et `action.detail` ne distingue pas non plus les trois cas de stop
+    "normal" (toujours "Stop touché (initial, breakeven ou trailing)" —
+    voir _evaluate_position_management). Comparer state.stop_price à
+    state.initial_stop_price/entry_price au moment de la clôture est le
+    seul moyen fiable de savoir lequel des trois a réellement été touché ;
+    /stop_urgence est détecté séparément et prioritaire (force_close_all_
+    open_trades construit un prix de sortie au marché qui ne correspond à
+    aucun des trois niveaux de stop, donc ne serait de toute façon jamais
+    confondu — cette priorité est une garde explicite, pas un besoin
+    strictement nécessaire).
+
+    Retourne une clé de _CLOSE_REASON_LABELS, jamais un texte libre —
+    l'appelant traduit pour l'affichage humain (notification), jamais
+    l'inverse."""
     if "urgence" in (action.detail or "").lower():
-        return "arrêt d'urgence"
+        return "stop_urgence"
     if state.stop_price == state.initial_stop_price:
-        return "stop initial"
+        return "stop_initial"
     if state.stop_price == state.entry_price:
-        return "stop au breakeven"
-    return "stop suiveur (trailing)"
+        return "stop_breakeven"
+    return "trailing"
 
 
 def _weighted_r_multiple_for_trade(db_path: str, trade_id: int) -> float:
@@ -813,7 +833,8 @@ def _apply_management_action(
     if is_full_close:
         pnl_eur = _trade_pnl_eur(db_path, state.trade_id, action.r_multiple)
         r_multiple_total = _weighted_r_multiple_for_trade(db_path, state.trade_id)
-        raison = _infer_close_reason(action, state)
+        reason_code = _infer_close_reason(action, state)
+        raison_label = _CLOSE_REASON_LABELS[reason_code]
         envelope_key = (state.asset, source_label)
         manager, envelope_id = envelope_managers[envelope_key], envelope_ids[envelope_key]
         balance_before = manager.balance
@@ -823,14 +844,15 @@ def _apply_management_action(
 
         with connection_scope(db_path) as conn:
             conn.execute(
-                "UPDATE trades SET statut = 'ferme', ferme_at = ?, r_multiple_total = ?, pnl_net = ? WHERE id = ?",
-                (now, r_multiple_total, pnl_eur, state.trade_id),
+                "UPDATE trades SET statut = 'ferme', ferme_at = ?, r_multiple_total = ?, pnl_net = ?, "
+                "cloture_reason = ? WHERE id = ?",
+                (now, r_multiple_total, pnl_eur, reason_code, state.trade_id),
             )
 
         if bot_token and chat_id:
             send_notification(
                 bot_token, chat_id,
-                format_trade_closed_notification(state.asset, source_label, r_multiple_total, raison, pnl_eur),
+                format_trade_closed_notification(state.asset, source_label, r_multiple_total, raison_label, pnl_eur),
             )
 
         # La clôture est déjà journalisée ci-dessus avant cet appel :

@@ -198,8 +198,11 @@ def handle_command(
     if command == "stop_urgence":
         trigger_stop_urgence(db_path, triggered_by)
         return (
-            "\U0001F6D1 ARRÊT D'URGENCE déclenché. Toutes les positions ouvertes seront fermées "
-            "au prochain cycle de chaque boucle (jusqu'à ~60s). Entrées bloquées jusqu'à /reprendre."
+            "\U0001F6D1 ARRÊT D'URGENCE déclenché — GLOBAL, Station X ET Flux B. "
+            "Toutes les positions ouvertes (les deux flux) seront fermées au prochain "
+            "cycle de chaque boucle (jusqu'à ~60s), toutes les nouvelles entrées sont "
+            "bloquées (Station X ET Flux B, pas seulement celui qui était ouvert).\n\n"
+            "⚠️ Tape /reprendre pour tout relancer — sans ça, plus aucune entrée nulle part."
         )
 
     if command == "dashboard":

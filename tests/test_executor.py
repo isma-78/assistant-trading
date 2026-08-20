@@ -684,6 +684,25 @@ def test_manage_open_trades_closes_full_stop_and_updates_envelope(tmp_path):
     assert envelope_manager.balance == 490.0  # perte imputée en totalité (§2.3)
 
 
+def test_infer_close_reason_all_branches():
+    from src.executor import ManagementAction, _infer_close_reason
+
+    base_state = _state(entry_price=100.0, initial_stop_price=101.0)
+
+    urgence_action = ManagementAction(action=ManagementActionType.CLOSE_FULL_STOP, detail="Arrêt d'urgence (/stop_urgence)")
+    assert _infer_close_reason(urgence_action, base_state) == "stop_urgence"
+
+    normal_action = ManagementAction(action=ManagementActionType.CLOSE_FULL_STOP, detail="Stop touché")
+    stop_initial_state = _state(entry_price=100.0, initial_stop_price=101.0, stop_price=101.0)
+    assert _infer_close_reason(normal_action, stop_initial_state) == "stop_initial"
+
+    breakeven_state = _state(entry_price=100.0, initial_stop_price=101.0, stop_price=100.0)
+    assert _infer_close_reason(normal_action, breakeven_state) == "stop_breakeven"
+
+    trailing_state = _state(entry_price=100.0, initial_stop_price=101.0, stop_price=99.5)
+    assert _infer_close_reason(normal_action, trailing_state) == "trailing"
+
+
 def test_weighted_r_multiple_for_trade_combines_all_partials(tmp_path):
     # Bug réel trouvé le 20/08/2026 (voir docs/DECISIONS.md) :
     # trades.r_multiple_total ne stockait que le R du DERNIER palier
@@ -1030,22 +1049,30 @@ def test_force_close_all_open_trades_closes_position_and_credits_envelope(tmp_pa
     client.get_market_snapshot.return_value = {"snapshot": {"bid": 99.0, "offer": 99.2, "marketStatus": "TRADEABLE"}}
 
     envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="stationx")
-    with patch("src.trade_analyzer.send_notification"):
+    with patch("src.trade_analyzer.send_notification"), patch("src.executor.send_notification") as mock_notify:
         closed = force_close_all_open_trades(
             db_path, client,
             envelope_managers={("GOLD", "stationx"): envelope_manager},
             envelope_ids={("GOLD", "stationx"): envelope_id},
+            bot_token="tok", chat_id="42",
         )
 
     assert closed == 1
     client.close_position.assert_called_once()
     conn = get_connection(db_path)
     try:
-        trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        trade = conn.execute("SELECT statut, cloture_reason FROM trades WHERE id = ?", (trade_id,)).fetchone()
         assert trade["statut"] == "ferme"
+        # §7.1/§7.2, 20/08/2026 (docs/DECISIONS.md) : une clôture forcée
+        # par /stop_urgence doit être identifiable comme telle, pas
+        # confondue avec une sortie organique (stop/trailing).
+        assert trade["cloture_reason"] == "stop_urgence"
     finally:
         conn.close()
     assert envelope_manager.balance > 500.0  # trade gagnant -> enveloppe créditée
+
+    close_message = mock_notify.call_args[0][2]
+    assert "arrêt d'urgence" in close_message
 
 
 def test_force_close_all_open_trades_respects_source_filter(tmp_path):

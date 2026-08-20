@@ -93,6 +93,12 @@ def test_handle_command_stop_urgence_sets_global_block(tmp_path):
     reply = handle_command(db_path, "stop_urgence", None, triggered_by="ismael")
     assert "URGENCE" in reply
     assert get_active_global_block(db_path) == "stop_urgence"
+    # 20/08/2026 (docs/DECISIONS.md) : /stop_urgence est global (Station X
+    # ET Flux B), pas scopé à un seul flux — le message doit le dire
+    # explicitement et rappeler /reprendre, pas le laisser implicite.
+    assert "Station X" in reply
+    assert "Flux B" in reply
+    assert "/reprendre" in reply
 
 
 def test_handle_command_unknown_lists_available_commands(tmp_path):

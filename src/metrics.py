@@ -17,13 +17,26 @@ Source de vérité : `trades.r_multiple_total` (jamais recalculé depuis
 pour les métriques en R, `envelope_ledger` pour les gains/pertes en euros
 réellement crédités/débités aux enveloppes (donc déjà après la règle des
 50%, §2.3 — pas le PnL brut du trade).
+
+Trades clos par `/stop_urgence` (`trades.cloture_reason = 'stop_urgence'`,
+ajouté le 20/08/2026) EXCLUS des statistiques en R (espérance, profit
+factor, taux de réussite, drawdown) — voir docs/DECISIONS.md pour le
+raisonnement complet : un arrêt d'urgence sort au prix du marché à un
+instant arbitraire (déclenché manuellement, ou par une anomalie système),
+ça ne mesure jamais si le placement du stop/TP/trailing de la stratégie
+est bien calibré, contrairement à une sortie organique. Le P&L en euros
+(`envelope_ledger`), lui, N'EST PAS filtré : l'argent a réellement bougé
+sur l'enveloppe, peu importe pourquoi le trade s'est fermé — filtrer
+l'un et pas l'autre est un choix explicite, pas un oubli. `get_closed_
+trades_r()` (circuit_breaker_store.py) N'EST PAS ce module : il alimente
+le coupe-circuit §2.7, qui doit rester informé même d'une perte issue
+d'un arrêt d'urgence (invariant #7, fail-safe) — jamais réutilisé ici.
 """
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
-from src.circuit_breaker_store import get_closed_trades_r
 from src.db import connection_scope
 
 # Même normalisation que circuit_breaker_store._normalize_source /
@@ -152,8 +165,24 @@ def get_all_asset_keys(db_path: str) -> List[Tuple[str, str]]:
     return [(row["actif"], row["source"]) for row in rows]
 
 
+def get_closed_trades_r_for_stats(db_path: str, actif: str, source: str) -> List[Tuple[str, float]]:
+    """Comme circuit_breaker_store.get_closed_trades_r, mais EXCLUT les
+    trades clos par /stop_urgence (voir docstring du module) — jamais
+    réutilisée par le coupe-circuit, qui a besoin de connaître TOUTE
+    perte réalisée, y compris un arrêt d'urgence."""
+    normalized = _normalize_source(source)
+    with connection_scope(db_path) as conn:
+        rows = conn.execute(
+            "SELECT ferme_at, r_multiple_total, source FROM trades "
+            "WHERE actif = ? AND statut = 'ferme' AND r_multiple_total IS NOT NULL "
+            "AND (cloture_reason IS NULL OR cloture_reason != 'stop_urgence')",
+            (actif,),
+        ).fetchall()
+    return [(row["ferme_at"], row["r_multiple_total"]) for row in rows if _normalize_source(row["source"]) == normalized]
+
+
 def get_asset_metrics(db_path: str, actif: str, source: str) -> AssetMetrics:
-    trades_r = get_closed_trades_r(db_path, actif, source)
+    trades_r = get_closed_trades_r_for_stats(db_path, actif, source)
     trades_r.sort(key=lambda pair: pair[0])  # chronologique, requis pour le drawdown
     r_multiples = [r for _, r in trades_r]
     return compute_asset_metrics(actif, _normalize_source(source), r_multiples)
