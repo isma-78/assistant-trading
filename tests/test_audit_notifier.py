@@ -10,6 +10,9 @@ from unittest.mock import MagicMock, patch
 from src.audit_notifier import (
     format_matinale_notification,
     format_signal_notification,
+    format_trade_closed_notification,
+    format_trade_opened_notification,
+    format_trade_partial_notification,
     send_document,
     send_notification,
 )
@@ -72,6 +75,33 @@ def test_format_matinale_notification_no_contradiction():
     text = format_matinale_notification("BTCUSD", "baissier", "baissier", False)
     assert "Contradiction" not in text
     assert "BTCUSD" in text
+
+
+def test_format_trade_opened_notification():
+    text = format_trade_opened_notification("GBPUSD", "hypothesis", "long", 1.36321, 1.355245, 1400.0)
+    assert "GBPUSD" in text
+    assert "hypothesis" in text
+    assert "long" in text
+    assert "1.36321" in text
+    assert "1.355245" in text
+    assert "1400.0" in text
+
+
+def test_format_trade_partial_notification():
+    text = format_trade_partial_notification("GOLD", "stationx", "TP1", 1.0)
+    assert "GOLD" in text
+    assert "stationx" in text
+    assert "TP1" in text
+    assert "+1.00R" in text
+
+
+def test_format_trade_closed_notification():
+    text = format_trade_closed_notification("US30", "hypothesis", -1.0, "stop initial", -9.78)
+    assert "US30" in text
+    assert "hypothesis" in text
+    assert "stop initial" in text
+    assert "-1.00R" in text
+    assert "-9.78" in text
 
 
 def test_format_matinale_notification_falls_back_to_tag_when_corps_indetermine():

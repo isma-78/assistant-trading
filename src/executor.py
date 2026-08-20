@@ -55,6 +55,12 @@ from typing import List, Optional, Tuple
 import requests
 
 from src import circuit_breaker_store
+from src.audit_notifier import (
+    format_trade_closed_notification,
+    format_trade_opened_notification,
+    format_trade_partial_notification,
+    send_notification,
+)
 from src.capital_client import CapitalApiError, CapitalClient
 from src.capital_manager import CapitalManager, apply_trade_result
 from src.circuit_breaker import evaluate_exposure_cap
@@ -69,6 +75,7 @@ from src.risk_engine import (
     RiskEngine,
     TradeSignal,
     compute_r_multiple,
+    compute_weighted_r_multiple,
 )
 from src.trade_analyzer import analyze_closed_trade
 from src.trade_features_store import record_align_matinale_for_trade
@@ -565,7 +572,10 @@ def _load_open_trade_state(conn, trade_row) -> OpenTradeState:
     )
 
 
-def check_pending_fills(db_path: str, client: CapitalClient, sources: Optional[list] = None) -> int:
+def check_pending_fills(
+    db_path: str, client: CapitalClient, sources: Optional[list] = None,
+    bot_token: Optional[str] = None, chat_id: Optional[str] = None,
+) -> int:
     """Détecte les ordres limite (statut='en_attente') qui ont été
     exécutés depuis le dernier passage.
 
@@ -574,6 +584,15 @@ def check_pending_fills(db_path: str, client: CapitalClient, sources: Optional[l
     indépendantes (Station X, Flux B) qui tournent en parallèle sur la
     même base (voir manage_open_trades, docs/DECISIONS.md). Sans filtre
     par défaut, comportement historique.
+
+    `bot_token`/`chat_id` : notifie l'ouverture effective du trade (§7.2 —
+    absent avant le 20/08/2026, voir docs/DECISIONS.md : un signal placé
+    en ordre limite n'était jusque-là JAMAIS annoncé, même une fois
+    rempli). Notifié ICI (au remplissage, pas à `open_signal`) parce que
+    c'est le seul moment où `prix_entree_reel` est connu — un ordre
+    limite placé mais jamais rempli (péremption §2.8) ne doit jamais
+    apparaître comme "ouvert". Omis (None), le remplissage est quand même
+    détecté et journalisé, seule la notification est sautée.
 
     Bug réel trouvé le 16/08/2026 pendant le test encadré : Capital.com
     N'attribue PAS le même dealId à l'ordre limite et à la position
@@ -627,6 +646,12 @@ def check_pending_fills(db_path: str, client: CapitalClient, sources: Optional[l
                 "Ordre limite exécuté : trade_id=%s, deal_id ordre=%s -> deal_id position=%s, niveau=%s",
                 trade_row["id"], order_deal_id, new_deal_id, entry_level,
             )
+            if bot_token and chat_id:
+                message = format_trade_opened_notification(
+                    trade_row["actif"], _envelope_source_key(trade_row["source"]), trade_row["direction"],
+                    entry_level, trade_row["stop_loss_initial"], trade_row["taille_initiale"],
+                )
+                send_notification(bot_token, chat_id, message)
     return filled
 
 
@@ -701,6 +726,40 @@ def manage_open_trades(
             logger.exception("Erreur non gérée en gérant le trade %s — passage au suivant", trade_row["id"])
 
 
+def _infer_close_reason(action: "ManagementAction", state: OpenTradeState) -> str:
+    """Raison lisible d'une clôture totale (§7.2) — reconstruite depuis
+    l'état plutôt que stockée telle quelle : `trade_partials.palier` vaut
+    toujours "sl" pour toute CLOSE_FULL_STOP (stop initial, breakeven ou
+    trailing confondus, voir son commentaire dans db.py), et `action.detail`
+    ne distingue pas non plus ces trois cas pour une clôture par stop
+    (toujours "Stop touché (initial, breakeven ou trailing)" — voir
+    _evaluate_position_management). Comparer state.stop_price à state.
+    initial_stop_price/entry_price au moment de la clôture est le seul
+    moyen fiable de savoir lequel des trois a réellement été touché."""
+    if "urgence" in (action.detail or "").lower():
+        return "arrêt d'urgence"
+    if state.stop_price == state.initial_stop_price:
+        return "stop initial"
+    if state.stop_price == state.entry_price:
+        return "stop au breakeven"
+    return "stop suiveur (trailing)"
+
+
+def _weighted_r_multiple_for_trade(db_path: str, trade_id: int) -> float:
+    """R-multiple total pondéré sur l'ensemble des paliers déjà clos
+    (§2.10, risk_engine.compute_weighted_r_multiple) — jamais le seul R du
+    dernier palier. Bug réel trouvé le 20/08/2026 en câblant la
+    notification de clôture (ci-dessous) : compute_weighted_r_multiple
+    existait dans risk_engine.py, testée, mais jamais appelée depuis ce
+    module — trades.r_multiple_total ne reflétait que le R du dernier
+    palier fermé, pas le total pondéré malgré son nom. Voir docs/DECISIONS.md."""
+    with connection_scope(db_path) as conn:
+        partials = conn.execute(
+            "SELECT fraction, r_atteint FROM trade_partials WHERE trade_id = ?", (trade_id,)
+        ).fetchall()
+    return compute_weighted_r_multiple([(p["fraction"], p["r_atteint"]) for p in partials])
+
+
 def _apply_management_action(
     db_path, client, state, action, envelope_managers, envelope_ids,
     anthropic_client=None, bot_token=None, chat_id=None,
@@ -722,6 +781,7 @@ def _apply_management_action(
         ManagementActionType.CLOSE_PARTIAL_TP1: "tp1",
         ManagementActionType.CLOSE_PARTIAL_TP2: "tp2",
     }[action.action]
+    source_label = _envelope_source_key(state.source)
 
     # Chaque connection_scope ci-dessous s'ouvre et se referme (commit)
     # séquentiellement, jamais imbriquée dans une autre : persist_trade_
@@ -738,9 +798,23 @@ def _apply_management_action(
         if action.new_stop_price is not None:
             conn.execute("UPDATE trades SET stop_loss_courant = ? WHERE id = ?", (action.new_stop_price, state.trade_id))
 
+    # Clôture partielle (§7.2, absent avant le 20/08/2026 — voir
+    # docs/DECISIONS.md) : uniquement TP1/TP2 Station X — le Flux B n'a
+    # structurellement aucune clôture partielle (pas de TP1/TP2, voir
+    # docs/HYPOTHESES.md), sa seule notification est la clôture finale
+    # ci-dessous (raison="stop suiveur (trailing)" quand le trailing
+    # Donchian est touché).
+    if not is_full_close and bot_token and chat_id:
+        send_notification(
+            bot_token, chat_id,
+            format_trade_partial_notification(state.asset, source_label, palier.upper(), action.r_multiple),
+        )
+
     if is_full_close:
         pnl_eur = _trade_pnl_eur(db_path, state.trade_id, action.r_multiple)
-        envelope_key = (state.asset, _envelope_source_key(state.source))
+        r_multiple_total = _weighted_r_multiple_for_trade(db_path, state.trade_id)
+        raison = _infer_close_reason(action, state)
+        envelope_key = (state.asset, source_label)
         manager, envelope_id = envelope_managers[envelope_key], envelope_ids[envelope_key]
         balance_before = manager.balance
         reserve_before = load_reserve_total(db_path)
@@ -750,7 +824,13 @@ def _apply_management_action(
         with connection_scope(db_path) as conn:
             conn.execute(
                 "UPDATE trades SET statut = 'ferme', ferme_at = ?, r_multiple_total = ?, pnl_net = ? WHERE id = ?",
-                (now, action.r_multiple, pnl_eur, state.trade_id),
+                (now, r_multiple_total, pnl_eur, state.trade_id),
+            )
+
+        if bot_token and chat_id:
+            send_notification(
+                bot_token, chat_id,
+                format_trade_closed_notification(state.asset, source_label, r_multiple_total, raison, pnl_eur),
             )
 
         # La clôture est déjà journalisée ci-dessus avant cet appel :
@@ -763,7 +843,7 @@ def _apply_management_action(
         try:
             analyze_closed_trade(
                 db_path, state.trade_id, anthropic_client, bot_token, chat_id,
-                source=_envelope_source_key(state.source),
+                source=source_label,
             )
         except Exception:
             logger.exception(
@@ -978,7 +1058,7 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
                 time.sleep(interval_seconds)
                 continue
 
-            check_pending_fills(db_path, client)
+            check_pending_fills(db_path, client, bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id)
             cancel_stale_working_orders(db_path, client)
 
             # Exclut le Flux B (source="hypothesis", géré par

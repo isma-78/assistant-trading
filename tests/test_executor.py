@@ -553,6 +553,40 @@ def test_check_pending_fills_transitions_to_ouvert(tmp_path):
         conn.close()
 
 
+def test_check_pending_fills_sends_open_notification(tmp_path):
+    # §7.2, absent avant le 20/08/2026 (voir docs/DECISIONS.md) : les deux
+    # premiers trades réels du Flux B avaient été ouverts sans aucune
+    # notification.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_prevu, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-xyz', 'hypothesis', 'GOLD', 'demo', 'short', 0.01, 100.0, 101.0, 101.0, 10.0, 2.0, "
+            "'2026-08-16T00:00:00Z', 'en_attente')",
+            (signal_row["id"],),
+        )
+
+    client = MagicMock()
+    client.get_working_orders.return_value = []
+    client.get_open_positions.return_value = [
+        {"position": {"dealId": "position-nouveau-id", "workingOrderId": "deal-xyz", "level": 99.98}}
+    ]
+
+    with patch("src.executor.send_notification") as mock_notify:
+        check_pending_fills(db_path, client, bot_token="tok", chat_id="42")
+
+    mock_notify.assert_called_once()
+    message = mock_notify.call_args[0][2]
+    assert "GOLD" in message
+    assert "hypothesis" in message
+    assert "99.98" in message
+    assert "101.0" in message
+
+
 def test_check_pending_fills_still_pending_no_change(tmp_path):
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
@@ -648,6 +682,92 @@ def test_manage_open_trades_closes_full_stop_and_updates_envelope(tmp_path):
     finally:
         conn.close()
     assert envelope_manager.balance == 490.0  # perte imputée en totalité (§2.3)
+
+
+def test_weighted_r_multiple_for_trade_combines_all_partials(tmp_path):
+    # Bug réel trouvé le 20/08/2026 (voir docs/DECISIONS.md) :
+    # trades.r_multiple_total ne stockait que le R du DERNIER palier
+    # fermé, jamais le total pondéré sur l'ensemble des paliers malgré
+    # son nom — compute_weighted_r_multiple existait, testée, mais
+    # jamais appelée depuis executor.py.
+    from src.executor import _weighted_r_multiple_for_trade
+
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-xyz', 'station_x', 'GOLD', 'demo', 'short', 0.01, 100.0, 101.0, 100.0, 10.0, 2.0, "
+            "'2026-08-16T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO trade_partials (trade_id, palier, fraction, prix_sortie, r_atteint, motif, executed_at) "
+            "VALUES (?, 'tp1', 0.5, 98.0, 2.0, 'TP1 touché', '2026-08-16T00:01:00Z')",
+            (trade_id,),
+        )
+        conn.execute(
+            "INSERT INTO trade_partials (trade_id, palier, fraction, prix_sortie, r_atteint, motif, executed_at) "
+            "VALUES (?, 'sl', 0.5, 100.0, 0.0, 'Stop touché', '2026-08-16T00:02:00Z')",
+            (trade_id,),
+        )
+
+    # Ancien comportement (bugué) : aurait retourné 0.0 (seul le dernier
+    # palier). Comportement correct : 0.5*2.0 + 0.5*0.0 = 1.0.
+    assert _weighted_r_multiple_for_trade(db_path, trade_id) == pytest.approx(1.0)
+
+
+def test_manage_open_trades_multi_leg_close_uses_weighted_r_and_notifies(tmp_path):
+    # Bout en bout : TP1 touché (clôture partielle notifiée) puis stop au
+    # breakeven touché (clôture finale notifiée avec le R total pondéré,
+    # pas seulement le R du dernier palier — même bug que le test ci-dessus).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)  # short, entrée=100, stop=101, tp1=98, tp2=96
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-xyz', 'station_x', 'GOLD', 'demo', 'short', 1.0, "
+            "100.0, 101.0, 101.0, 10.0, 2.0, '2026-08-16T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    client = MagicMock()
+    client.get_prices.return_value = {"prices": []}
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="stationx")
+    envelopes = {("GOLD", "stationx"): envelope_manager}
+    envelope_ids = {("GOLD", "stationx"): envelope_id}
+
+    with patch("src.executor.send_notification") as mock_notify:
+        # Cycle 1 : prix à 98 -> TP1 touché (R=+2.0), stop remonté au breakeven (100).
+        client.get_market_snapshot.return_value = {"snapshot": {"bid": 98.0, "offer": 98.0, "marketStatus": "TRADEABLE"}}
+        manage_open_trades(db_path, client, make_engine(), envelopes, envelope_ids, bot_token="tok", chat_id="42")
+
+        # Cycle 2 : prix à 100 -> stop breakeven touché (R=0.0 sur ce palier).
+        client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.0, "marketStatus": "TRADEABLE"}}
+        manage_open_trades(db_path, client, make_engine(), envelopes, envelope_ids, bot_token="tok", chat_id="42")
+
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT * FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["statut"] == "ferme"
+        # 0.5*2.0 (TP1) + 0.5*0.0 (breakeven) = 1.0 — jamais 0.0 (dernier palier seul).
+        assert trade["r_multiple_total"] == pytest.approx(1.0)
+    finally:
+        conn.close()
+
+    assert mock_notify.call_count == 2
+    partial_message = mock_notify.call_args_list[0][0][2]
+    close_message = mock_notify.call_args_list[1][0][2]
+    assert "TP1" in partial_message
+    assert "+2.00R" in partial_message
+    assert "stop au breakeven" in close_message
+    assert "+1.00R" in close_message
 
 
 def test_manage_open_trades_flux_b_trailing_forwards_guaranteed_stop(tmp_path):

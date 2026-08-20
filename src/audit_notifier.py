@@ -101,3 +101,30 @@ def format_matinale_notification(asset, biais_corps, sentiment_tag, contradictio
     # inventer de biais si aucun des deux n'est résolu.
     biais_effectif = biais_corps if biais_corps != "indetermine" else (sentiment_tag or "indetermine")
     return f"📰 Matinale — {asset} : biais {biais_effectif}"
+
+
+# ---------------------------------------------------------------------------
+# Ouverture / gestion / clôture de position (§7.2) — ajouté le 20/08/2026,
+# absent avant (voir docs/DECISIONS.md) : les deux premiers trades réels du
+# Flux B avaient été ouverts sans aucune notification.
+# ---------------------------------------------------------------------------
+
+def format_trade_opened_notification(actif, source, direction, entry_price, stop_price, size) -> str:
+    return (
+        f"🟢 Position ouverte — {actif} ({source})\n"
+        f"{direction} | entrée : {entry_price} | stop initial : {stop_price} | taille : {size}"
+    )
+
+
+def format_trade_partial_notification(actif, source, palier_label, r_atteint) -> str:
+    return (
+        f"🎯 Clôture partielle — {actif} ({source})\n"
+        f"Palier {palier_label} touché : {r_atteint:+.2f}R"
+    )
+
+
+def format_trade_closed_notification(actif, source, r_multiple_total, raison, pnl_net) -> str:
+    return (
+        f"🔴 Position clôturée — {actif} ({source})\n"
+        f"Raison : {raison} | R-multiple total : {r_multiple_total:+.2f}R | P&L net : {pnl_net:+.2f}€"
+    )

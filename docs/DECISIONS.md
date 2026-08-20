@@ -12,6 +12,91 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — §7.2 : notifications ouverture/clôture de position ajoutées + audit complet
+
+Remonté par Ismaël : les deux trades Flux B (GBPUSD, US30) ont été
+ouverts sans aucune notification — découvert en vérifiant lui-même sur
+l'app Capital.com. Le §7.2 exige explicitement une notification à
+l'ouverture, à chaque clôture partielle, et à la clôture finale (avec
+R-multiple). Ni `executor.py` ni `trend_executor.py` n'en envoyaient
+aucune — confirmé par grep (`send_notification`/`send_document`
+n'apparaissaient dans aucun des deux avant ce jour).
+
+**Ouverture — notifiée au REMPLISSAGE, pas au placement de l'ordre**
+(`check_pending_fills`, nouveaux paramètres `bot_token`/`chat_id`) : un
+ordre limite placé (`open_signal`) peut être annulé par péremption sans
+jamais être exécuté (§2.8) — le notifier à ce stade aurait annoncé des
+positions qui n'existent parfois jamais vraiment. `prix_entree_reel`
+n'est de toute façon connu qu'au remplissage. Contenu : actif, source
+(`stationx`/`hypothesis`, normalisée comme partout ailleurs), sens, prix
+d'entrée réel, stop initial, taille.
+
+**Clôture partielle — uniquement TP1/TP2 Station X.** Le Flux B n'a
+structurellement aucune clôture partielle (`trend_strategy.evaluate_entry`
+ne produit jamais de TP1/TP2, voir docs/HYPOTHESES.md du 20/08/2026) —
+la phrase du prompt "palier de trailing pour Flux B" est couverte par la
+clôture FINALE ci-dessous (raison="stop suiveur (trailing)"), pas par
+une notification de palier intermédiaire qui n'existe pas pour ce flux.
+
+**Clôture finale — raison reconstruite depuis l'état, pas stockée
+littéralement.** `trade_partials.palier` vaut toujours `"sl"` pour toute
+`CLOSE_FULL_STOP` (stop initial, breakeven, trailing confondus — voir
+son commentaire dans `db.py`), et `action.detail` ne les distingue pas
+non plus. `_infer_close_reason()` compare `state.stop_price` à
+`state.initial_stop_price`/`entry_price` au moment de la clôture pour
+retrouver lequel des trois a réellement été touché ("arrêt d'urgence"
+détecté séparément via `action.detail`). La raison "fermeture macro
+anticipée" mentionnée dans la demande n'a **aucun chemin de code
+existant** (dépend du futur `macro_calendar`, §2.9, absent) — non
+implémentée, pas de raison inventée pour un cas qui ne peut pas se
+produire aujourd'hui.
+
+**Bug réel trouvé en câblant cette notification** : `trades.r_multiple_total`
+ne stockait que le R du DERNIER palier fermé (`action.r_multiple`),
+jamais le total pondéré sur l'ensemble des paliers, malgré son nom.
+`risk_engine.compute_weighted_r_multiple()` existait déjà (§2.10, testée
+à 100%) mais n'était appelée nulle part dans `executor.py` — trouvé en
+voulant afficher un "R-multiple total" correct dans la notification de
+clôture. Corrigé (`_weighted_r_multiple_for_trade()`, lit tous les
+`trade_partials` du trade et pondère). Impact rétroactif : les trades
+déjà clos en base avant ce correctif gardent leur `r_multiple_total`
+sous-estimé/faux pour tout trade ayant eu au moins un palier partiel
+avant sa clôture finale — aucun trade réel de ce type n'existe encore à
+ce jour (vérifié : les seuls trades fermés à ce jour sont des clôtures à
+paliers uniques, non affectés), donc aucune correction rétroactive de
+données nécessaire.
+
+**Audit complet §7.2** (état vérifié dans le code, pas supposé) :
+
+| Notification (§7.2) | État | Détail |
+|---|---|---|
+| Ouverture et clôture de position (R-multiple) | ✅ Présent (corrigé aujourd'hui) | `check_pending_fills`/`_apply_management_action` |
+| Clôture partielle à chaque palier | ✅ Présent (corrigé aujourd'hui) | TP1/TP2 Station X uniquement, voir ci-dessus |
+| Déclenchement de coupe-circuit | ✅ Présent (déjà en place, P2.6) | `circuit_breaker_store.record_trigger` |
+| Bascule 2 %↔4 % | ⬜ Sans objet | Aucun chemin de code ne met `boosted=True` — dépend de `confidence_scorer.py`, non construit (confirmé, docs/HYPOTHESES.md) |
+| Réallocation de capital (§2.5) | ⬜ Sans objet | Mécanisme d'allocation réel multi-actifs par score de confiance — aucun capital réel, `confidence_scorer.py` non construit |
+| Contradiction Matinale (§3.4) | ✅ Présent (déjà en place, P1) | `telegram_listener._handle_matinale`, notifiée en permanence même hors `audit_all` |
+| Signal hors liste blanche | ❌ Absent | Rejeté et journalisé dans `risk_decisions` (`ASSET_NOT_WHITELISTED`), jamais notifié spécifiquement — non corrigé aujourd'hui (hors périmètre demandé) |
+| Échec d'extraction répété | ❌ Absent | Seul un flag ponctuel (`raison_rejet='extraction_incomplete'`) existe par signal ; aucun compteur de répétition (contrairement à `api_error_streak`, §2.7) — non corrigé aujourd'hui |
+| Absence de message depuis 7 jours | ✅ Présent (déjà en place, P2.6) | `circuit_breaker_store.check_channel_inactivity` |
+| Erreur API | ✅ Présent (déjà en place, P2.6 ; trou de détection réseau corrigé plus tôt le 20/08/2026) | `circuit_breaker_store.record_api_result`, seuil 3 échecs consécutifs |
+| Franchissement d'un palier de métriques | ❌ Absent | Aucune notion de "palier"/seuil dans `metrics.py` — calcul strictement à la demande (`/metriques`, `/dashboard`), confirmé par grep, pas de mécanisme proactif du tout |
+| Actif atteignant les critères de passage en réel | ⬜ Sans objet | Aucun code, aucune trace, aucun stub — confirmé par grep (`passer_reel`, `passage.*reel` : zéro résultat dans `control_bot.py`/`go_nogo.py`) |
+| *(hors CDC, ajout P2.6)* Absence de processus | ✅ Présent | `scripts/process_watchdog.py`, alerte une fois par transition vivant→mort |
+
+Trois items restent **absents** (signal hors liste blanche, échec
+d'extraction répété, franchissement de palier de métriques) — non
+corrigés aujourd'hui, hors périmètre de la demande ("vérifie", pas
+"corrige" pour ces trois). Candidats pour un futur palier si souhaité.
+
+**Tests** : `tests/test_audit_notifier.py` (+3, nouveaux formats),
+`tests/test_executor.py` (+4 : notification d'ouverture, régression du
+R pondéré en isolation, bout en bout multi-paliers avec les deux
+notifications). 422 tests passent, 100% de couverture maintenue sur les
+modules critiques.
+
+---
+
 ## 2026-08-20 — §3.8 : collecte de la variable #1 (`align_matinale`) activée
 
 Suite directe de la recalibration de `extract_matinale()` ci-dessous, qui

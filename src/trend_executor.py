@@ -227,7 +227,10 @@ def run_trend_loop(config, db_path: str, interval_seconds: int = 60) -> None:
             for asset in HYPOTHESIS_ASSETS:
                 _generate_and_queue_signal(db_path, client, asset)
 
-            check_pending_fills(db_path, client, sources=[HYPOTHESIS_SOURCE])
+            check_pending_fills(
+                db_path, client, sources=[HYPOTHESIS_SOURCE],
+                bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,
+            )
             cancel_stale_working_orders(db_path, client)
 
             with connection_scope(db_path) as conn:
