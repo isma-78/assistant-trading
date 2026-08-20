@@ -511,7 +511,19 @@ def open_signal(
 def cancel_stale_working_orders(db_path: str, client: CapitalClient, max_age_seconds: int = LIMIT_ORDER_EXPIRY_SECONDS) -> int:
     """Annule les ordres limite en attente depuis trop longtemps (§2.8,
     péremption). Retourne le nombre d'ordres annulés. N'affecte jamais
-    une position déjà ouverte (uniquement /workingorders, pas /positions)."""
+    une position déjà ouverte (uniquement /workingorders, pas /positions).
+
+    Bug réel trouvé le 20/08/2026 (voir docs/DECISIONS.md) : cette
+    fonction annulait bien l'ordre côté BROKER mais ne mettait jamais à
+    jour `trades.statut` en base — le trade restait indéfiniment
+    "en_attente", un trade fantôme qui bloquait silencieusement tout
+    nouveau signal sur cet actif via `_has_active_hypothesis_signal_or_
+    trade()` (Flux B). Corrigé : la ligne `trades` correspondante
+    (rapprochée par `deal_id`, identifiant broker unique — aucun filtre
+    par source nécessaire, contrairement à check_pending_fills) passe à
+    `statut='annule'` UNIQUEMENT après confirmation de l'annulation côté
+    broker (jamais en cas d'échec de `cancel_working_order` — pas de
+    statut modifié sur une base incertaine, invariant #7)."""
     cancelled = 0
     now = datetime.now(timezone.utc)
     for order in client.get_working_orders():
@@ -528,6 +540,12 @@ def cancel_stale_working_orders(db_path: str, client: CapitalClient, max_age_sec
                 logger.info("Ordre limite périmé annulé : dealId=%s, âge=%.0fs", data["dealId"], age)
             except CapitalApiError:
                 logger.exception("Échec d'annulation de l'ordre limite périmé %s", data.get("dealId"))
+                continue
+            with connection_scope(db_path) as conn:
+                conn.execute(
+                    "UPDATE trades SET statut = 'annule' WHERE deal_id = ? AND statut = 'en_attente'",
+                    (data["dealId"],),
+                )
     return cancelled
 
 

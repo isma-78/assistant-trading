@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src import circuit_breaker_store
+from src.capital_client import CapitalApiError
 from src.capital_manager import CapitalManager
 from src.db import connection_scope, get_connection, init_db
 from src.envelope_store import load_or_create_envelope
@@ -637,14 +638,82 @@ def test_check_pending_fills_sources_filter_ignores_other_sources(tmp_path):
 
 
 def test_cancel_stale_working_orders_cancels_old_ones(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
     client = MagicMock()
     client.get_working_orders.return_value = [
         {"workingOrderData": {"dealId": "old-1", "createdDateUTC": "2020-01-01T00:00:00.000"}},
         {"workingOrderData": {"dealId": "recent-1", "createdDateUTC": None}},
     ]
-    cancelled = cancel_stale_working_orders("unused.db", client, max_age_seconds=60)
+    cancelled = cancel_stale_working_orders(db_path, client, max_age_seconds=60)
     assert cancelled == 1
     client.cancel_working_order.assert_called_once_with("old-1")
+
+
+def test_cancel_stale_working_orders_marks_trade_annule(tmp_path):
+    # Bug réel trouvé le 20/08/2026 (voir docs/DECISIONS.md) : l'ordre
+    # était bien annulé côté broker mais trades.statut restait bloqué à
+    # "en_attente" indéfiniment — trade fantôme qui bloquait tout nouveau
+    # signal Flux B sur l'actif concerné.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, actif="ETHUSD")
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_prevu, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-eth', 'hypothesis', 'ETHUSD', 'demo', 'long', 0.05, 2100.0, 1900.0, 1900.0, 10.0, 2.0, "
+            "'2026-08-19T20:21:18Z', 'en_attente')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    client = MagicMock()
+    client.get_working_orders.return_value = [
+        {"workingOrderData": {"dealId": "deal-eth", "createdDateUTC": "2020-01-01T00:00:00.000"}},
+    ]
+    cancelled = cancel_stale_working_orders(db_path, client, max_age_seconds=60)
+
+    assert cancelled == 1
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["statut"] == "annule"
+    finally:
+        conn.close()
+
+
+def test_cancel_stale_working_orders_does_not_touch_trade_on_api_failure(tmp_path):
+    # Fail-safe (invariant #7) : si l'annulation échoue côté broker, le
+    # trade doit rester "en_attente" — jamais marqué annulé sur une base
+    # incertaine.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, actif="ETHUSD")
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_prevu, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-eth', 'hypothesis', 'ETHUSD', 'demo', 'long', 0.05, 2100.0, 1900.0, 1900.0, 10.0, 2.0, "
+            "'2026-08-19T20:21:18Z', 'en_attente')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    client = MagicMock()
+    client.get_working_orders.return_value = [
+        {"workingOrderData": {"dealId": "deal-eth", "createdDateUTC": "2020-01-01T00:00:00.000"}},
+    ]
+    client.cancel_working_order.side_effect = CapitalApiError("boom")
+    cancelled = cancel_stale_working_orders(db_path, client, max_age_seconds=60)
+
+    assert cancelled == 0
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["statut"] == "en_attente"
+    finally:
+        conn.close()
 
 
 def test_manage_open_trades_closes_full_stop_and_updates_envelope(tmp_path):

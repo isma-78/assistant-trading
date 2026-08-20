@@ -12,6 +12,58 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-20 — Fuite de trade fantôme : `cancel_stale_working_orders()` ne mettait jamais à jour `trades.statut`
+
+Trouvé le même jour en cherchant un ordre en attente pour vérifier les
+notifications §7.2 (entrée plus bas) : `trades.id=5` (ETHUSD, Flux B)
+bloqué "en_attente" depuis le 19/08 20h21 — 21 heures — alors que l'ordre
+n'existait plus du tout côté broker (annulé pour péremption, log
+"Ordre limite périmé annulé... âge=912s"). Ismaël a confirmé et demandé
+la correction.
+
+**Cause** : `cancel_stale_working_orders()` appelait bien `client.
+cancel_working_order()` (annulation réelle côté broker, confirmée par le
+log) mais ne touchait jamais `trades.statut` en base — le trade restait
+un fantôme "en_attente" indéfiniment.
+
+**Conséquence concrète, pas seulement cosmétique** :
+`_has_active_hypothesis_signal_or_trade()` (trend_executor.py) voit ce
+trade fantôme et bloque silencieusement tout nouveau signal Flux B sur
+l'actif concerné — ETHUSD était de facto exclu du Flux B depuis 21h sans
+aucune erreur ni alerte visible.
+
+**Correctif** : après confirmation de l'annulation côté broker
+(`client.cancel_working_order()` n'a pas levé d'exception), la ligne
+`trades` correspondante — rapprochée par `deal_id`, identifiant broker
+unique, aucun filtre par source nécessaire (contrairement à `check_
+pending_fills`, cohérent avec le choix déjà documenté de ne jamais
+filtrer cette fonction par source) — passe à **`statut='annule'`**
+(nouvelle valeur, jamais utilisée avant dans ce projet). Fail-safe
+(invariant #7) : en cas d'échec de `cancel_working_order`, le trade
+reste "en_attente" sans modification — jamais annulé en base sur une
+incertitude côté broker.
+
+**Pas de filtre supplémentaire requis ailleurs** : les requêtes déjà
+existantes sur `statut = 'en_attente'` (`_has_active_hypothesis_signal_
+or_trade`, `check_pending_fills`, `manage_open_trades`, etc.) excluent
+déjà naturellement `'annule'` sans aucune modification — un statut
+terminal de plus dans un `WHERE statut = 'en_attente'` littéral n'a
+besoin d'aucun câblage particulier.
+
+**Correction rétroactive du trade fantôme** (`id=5`, VPS) : marqué
+`statut='annule'` directement en base (le broker avait déjà confirmé
+l'annulation il y a 21h, fait déjà vérifié, pas une supposition) — Flux B
+peut de nouveau générer des signaux sur ETHUSD dès le prochain cycle.
+
+**Tests** : `tests/test_executor.py` (+2 : trade marqué `annule` après
+annulation confirmée, trade laissé `en_attente` si l'annulation échoue
+côté broker) + le test existant migré vers une vraie base temporaire
+(utilisait jusque-là un chemin `"unused.db"` littéral, jamais initialisé
+— suffisant tant que la fonction ne touchait pas la DB, plus maintenant).
+426 tests passent, 100% de couverture maintenue.
+
+---
+
 ## 2026-08-20 — `trades.cloture_reason` : distinguer une clôture forcée (/stop_urgence) d'une sortie organique
 
 Ismaël s'apprêtait à déclencher `/stop_urgence` lui-même depuis Telegram
