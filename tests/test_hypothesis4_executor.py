@@ -1,0 +1,67 @@
+from dataclasses import dataclass
+from unittest.mock import MagicMock, patch
+
+from src.hypothesis4_executor import (
+    HYPOTHESIS4_ASSETS,
+    _describe_signal,
+    run_hypothesis4_loop,
+)
+
+
+@dataclass(frozen=True)
+class _FakeSignal:
+    direction: str
+    entry_price: float
+    stop_price: float
+    take_profit: float
+
+
+def test_hypothesis4_assets_matches_hypothesis1_2_and_3():
+    assert set(HYPOTHESIS4_ASSETS) == {
+        "US30", "EURUSD", "GBPUSD", "USDJPY", "ETHUSD", "GOLD", "US100", "BTCUSD",
+    }
+
+
+def test_describe_signal_mentions_bollinger_and_take_profit():
+    text = _describe_signal("Hypothèse #4", "GOLD", _FakeSignal("long", 2400.0, 2380.0, 2410.0))
+    assert "Bollinger" in text
+    assert "GOLD" in text
+    assert "2410.0" in text  # take profit mentionné, pas seulement entrée/stop
+
+
+def test_run_hypothesis4_loop_forwards_h4_credentials_and_resolution():
+    config = MagicMock()
+    config.capital_api_key_hypothesis4 = "key4"
+    config.capital_identifier_hypothesis4 = "id4"
+    config.capital_api_password_hypothesis4 = "pwd4"
+    config.capital_account_id_hypothesis4 = "acc4"
+
+    with patch("src.hypothesis4_executor.run_technical_strategy_loop") as mock_loop:
+        run_hypothesis4_loop(config, "db.sqlite", interval_seconds=42)
+
+    mock_loop.assert_called_once()
+    _, kwargs = mock_loop.call_args
+    assert kwargs["source"] == "hypothesis4"
+    assert kwargs["resolution"] == "HOUR"
+    assert kwargs["api_key"] == "key4"
+    assert kwargs["identifier"] == "id4"
+    assert kwargs["password"] == "pwd4"
+    assert kwargs["account_id"] == "acc4"
+    assert kwargs["interval_seconds"] == 42
+    assert set(kwargs["assets"]) == set(HYPOTHESIS4_ASSETS)
+
+
+def test_run_hypothesis4_loop_raises_configerror_when_credentials_missing():
+    from src.config import ConfigError
+
+    config = MagicMock()
+    config.capital_api_key_hypothesis4 = None
+    config.capital_identifier_hypothesis4 = None
+    config.capital_api_password_hypothesis4 = None
+    config.capital_account_id_hypothesis4 = None
+
+    try:
+        run_hypothesis4_loop(config, "db.sqlite")
+        assert False, "ConfigError attendue"
+    except ConfigError:
+        pass

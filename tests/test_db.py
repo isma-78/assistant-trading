@@ -140,6 +140,28 @@ def test_init_db_migrates_trade_analysis_source_column(tmp_path):
         conn.close()
 
 
+def test_init_db_migrates_signals_take_profit_column(tmp_path):
+    # signals.take_profit (Hypothèse #4, retour à la moyenne, voir
+    # docs/HYPOTHESES.md) : une base créée avant son ajout doit la
+    # recevoir au prochain init_db(), même patron que deal_id ci-dessus.
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    conn.execute(
+        "CREATE TABLE signals (id INTEGER PRIMARY KEY AUTOINCREMENT, actif TEXT, statut TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    conn = get_connection(db_path)
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(signals)")}
+        assert "take_profit" in columns
+    finally:
+        conn.close()
+
+
 def test_init_db_is_idempotent(tmp_path):
     db_path = str(tmp_path / "test.db")
     init_db(db_path)

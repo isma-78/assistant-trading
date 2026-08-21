@@ -345,6 +345,69 @@ def test_management_flux_b_stop_hit_takes_priority_over_trailing():
     assert action.action == ManagementActionType.CLOSE_FULL_STOP
 
 
+# --- evaluate_position_management — Hypothèse #4 (TP fixe, pas de trailing) ---
+# Validée par Ismaël le 21/08/2026 (voir docs/HYPOTHESES.md, docs/DECISIONS.md).
+# 3e patron de sortie, distinct de Station X (tp1/tp2) et Flux B (trailing
+# Donchian perpétuel) : take_profit fixe, clôture 100% en une fois, jamais
+# de trailing. state.tp1/tp2 = None ici aussi (comme Flux B) — les deux
+# tests ci-dessous vérifient explicitement que le trade ne tombe PAS dans
+# le trailing Donchian du Flux B malgré ce point commun.
+
+def _h4_state(**overrides):
+    base = dict(
+        trade_id=1, deal_id="deal-1", asset="EURUSD", source="hypothesis4", direction="long",
+        entry_price=100.0, initial_stop_price=98.0, stop_price=98.0,
+        tp1=None, tp2=None, tp1_hit=False, tp2_hit=False, remaining_fraction=1.0,
+        take_profit=102.0,
+    )
+    base.update(overrides)
+    return OpenTradeState(**base)
+
+
+def test_management_h4_take_profit_hit_closes_full_position():
+    action = evaluate_position_management(_h4_state(), current_price=102.0, atr=None, risk_engine=make_engine())
+    assert action.action == ManagementActionType.CLOSE_FULL_TP
+    assert action.fraction_to_close == 1.0
+    assert action.exit_price == 102.0
+    assert action.r_multiple == pytest.approx(1.0)  # (102-100)/(100-98)
+
+
+def test_management_h4_take_profit_hit_short_direction():
+    state = _h4_state(direction="short", entry_price=100.0, initial_stop_price=102.0, stop_price=102.0, take_profit=98.0)
+    action = evaluate_position_management(state, current_price=98.0, atr=None, risk_engine=make_engine())
+    assert action.action == ManagementActionType.CLOSE_FULL_TP
+    assert action.r_multiple == pytest.approx(1.0)
+
+
+def test_management_h4_stop_hit_before_take_profit():
+    # Le stop fixe est vérifié EN PREMIER (bloc commun à tous les flux) —
+    # touché ici plutôt que le TP, jamais de clôture par "take-profit".
+    action = evaluate_position_management(_h4_state(), current_price=98.0, atr=None, risk_engine=make_engine())
+    assert action.action == ManagementActionType.CLOSE_FULL_STOP
+    assert action.fraction_to_close == 1.0
+
+
+def test_management_h4_no_condition_met_returns_none_never_trailing():
+    # Prix entre stop et TP, avec des candles fournies (qui déclencheraient
+    # le trailing Donchian du Flux B si ce trade y tombait à tort, puisque
+    # tp1 est aussi None ici) : doit rester NONE, jamais UPDATE_TRAILING_STOP.
+    window = [_flux_b_candle(100.0) for _ in range(DONCHIAN_PERIOD)]
+    candles = window + [_flux_b_candle(101.0)]
+    action = evaluate_position_management(
+        _h4_state(), current_price=101.0, atr=None, risk_engine=make_engine(), candles=candles,
+    )
+    assert action.action == ManagementActionType.NONE
+    assert "Hypothèse #4" in action.detail
+
+
+def test_management_h4_ignores_atr_trailing_even_after_tp1_style_state():
+    # Défense en profondeur : même avec atr fourni, un trade H4 (take_profit
+    # défini) ne doit jamais atteindre le bloc de trailing ATR (Station X)
+    # ni le bloc Donchian (Flux B) — la branche H4 retourne toujours avant.
+    action = evaluate_position_management(_h4_state(), current_price=101.0, atr=1.0, risk_engine=make_engine())
+    assert action.action == ManagementActionType.NONE
+
+
 # --- _compute_guaranteed_stop_adjustment -----------------------------------
 # Décision du 20/08/2026 (Ismaël, assumée) : élargir le stop au minimum
 # garanti plutôt que de rejeter — remplace le comportement du 16/08/2026
@@ -451,7 +514,10 @@ def test_guaranteed_stop_adjustment_unknown_direction_raises():
 
 # --- orchestration (DB réelle temporaire + CapitalClient simulé) ---------
 
-def _insert_signal(db_path, actif="GOLD", sens="short", entree=100.0, stop=101.0, tp1=98.0, tp2=96.0, tp3=None, confiance=1.0, statut="a_valider"):
+def _insert_signal(
+    db_path, actif="GOLD", sens="short", entree=100.0, stop=101.0, tp1=98.0, tp2=96.0, tp3=None,
+    take_profit=None, confiance=1.0, statut="a_valider", source="station_x",
+):
     with connection_scope(db_path) as conn:
         raw_id = conn.execute(
             "INSERT INTO raw_messages (telegram_msg_id, channel, received_at, raw_text, message_type) "
@@ -459,9 +525,9 @@ def _insert_signal(db_path, actif="GOLD", sens="short", entree=100.0, stop=101.0
         ).lastrowid
         signal_id = conn.execute(
             "INSERT INTO signals (raw_message_id, source, actif, sens, entree_min, entree_max, stop_loss, "
-            "tp1, tp2, tp3, confiance, statut, created_at) "
-            "VALUES (?, 'station_x', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '2026-08-16T00:00:00Z')",
-            (raw_id, actif, sens, entree, entree, stop, tp1, tp2, tp3, confiance, statut),
+            "tp1, tp2, tp3, take_profit, confiance, statut, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '2026-08-16T00:00:00Z')",
+            (raw_id, source, actif, sens, entree, entree, stop, tp1, tp2, tp3, take_profit, confiance, statut),
         ).lastrowid
         row = conn.execute("SELECT * FROM signals WHERE id = ?", (signal_id,)).fetchone()
         return dict(row)
@@ -1022,6 +1088,52 @@ def test_manage_open_trades_closes_full_stop_and_updates_envelope(tmp_path):
     assert envelope_manager.balance == 490.0  # perte imputée en totalité (§2.3)
 
 
+def test_manage_open_trades_closes_full_tp_h4_and_updates_envelope(tmp_path):
+    # Bout en bout Hypothèse #4 : take_profit chargé depuis signals.take_profit
+    # (jamais tp1/tp2, restés NULL) -> _load_open_trade_state -> dispatch
+    # CLOSE_FULL_TP -> palier "tp", cloture_reason "take_profit_fixe".
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(
+        db_path, actif="EURUSD", sens="long", entree=100.0, stop=98.0,
+        tp1=None, tp2=None, take_profit=102.0, source="hypothesis4",
+    )
+
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-h4', 'hypothesis4', 'EURUSD', 'demo', 'long', 0.01, 100.0, 98.0, 98.0, 10.0, 2.0, "
+            "'2026-08-21T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 102.0, "offer": 102.2, "marketStatus": "TRADEABLE"}}
+    client.get_prices.return_value = {"prices": []}
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "EURUSD", "demo", 500.0, source="hypothesis4")
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("EURUSD", "hypothesis4"): envelope_manager}, envelope_ids={("EURUSD", "hypothesis4"): envelope_id},
+    )
+
+    client.close_position.assert_called_once()
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT * FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["statut"] == "ferme"
+        assert trade["r_multiple_total"] == pytest.approx(1.0)
+        assert trade["pnl_net"] == pytest.approx(10.0)
+        assert trade["cloture_reason"] == "take_profit_fixe"
+        partial = conn.execute("SELECT palier FROM trade_partials WHERE trade_id = ?", (trade_id,)).fetchone()
+        assert partial["palier"] == "tp"
+    finally:
+        conn.close()
+    assert envelope_manager.balance == 505.0  # gain : règle des 50% (§2.3) -> moitié enveloppe, moitié réserve
+
+
 def test_manage_open_trades_reconciles_when_broker_already_closed_position(tmp_path):
     # Incident réel du 21/08/2026 (voir docs/DECISIONS.md) : un stop
     # garanti s'exécute instantanément côté broker ; si notre boucle
@@ -1120,6 +1232,12 @@ def test_infer_close_reason_all_branches():
 
     trailing_state = _state(entry_price=100.0, initial_stop_price=101.0, stop_price=99.5)
     assert _infer_close_reason(normal_action, trailing_state) == "trailing"
+
+    # Hypothèse #4 : court-circuite la comparaison state.stop_price —
+    # même si stop_price == initial_stop_price (comme ici), le code de
+    # raison doit rester "take_profit_fixe", jamais "stop_initial".
+    tp_action = ManagementAction(action=ManagementActionType.CLOSE_FULL_TP, detail="Take-profit fixe touché (Hypothèse #4)")
+    assert _infer_close_reason(tp_action, stop_initial_state) == "take_profit_fixe"
 
 
 def test_weighted_r_multiple_for_trade_combines_all_partials(tmp_path):

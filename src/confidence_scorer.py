@@ -95,7 +95,8 @@ from src.risk_engine import AssetSpec
 HYPOTHESIS_SOURCE = "hypothesis"    # Hypothèse #1
 HYPOTHESIS3_SOURCE = "hypothesis3"  # Hypothèse #3
 HYPOTHESIS2_SOURCE = "hypothesis2"  # Hypothèse #2
-_KNOWN_HYPOTHESIS_SOURCES = {HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE}
+HYPOTHESIS4_SOURCE = "hypothesis4"  # Hypothèse #4 (21/08/2026 — validée en démo, non déployée)
+_KNOWN_HYPOTHESIS_SOURCES = {HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE, HYPOTHESIS4_SOURCE}
 
 
 def _normalize_source(source: str) -> str:

@@ -57,6 +57,10 @@ CREATE TABLE IF NOT EXISTS signals (
     tp1 REAL,
     tp2 REAL,
     tp3 REAL,
+    take_profit REAL,  -- ajout P2.9+ hors §4.5 : cible fixe unique (Hypothèse #4, retour à la moyenne,
+                        -- voir docs/HYPOTHESES.md) — DÉLIBÉRÉMENT distincte de tp1/tp2/tp3 (mécanisme
+                        -- Station X, 3 paliers + trailing) pour qu'aucun trade ne puisse ambiguïser les
+                        -- deux dispatches de gestion de position (executor._evaluate_position_management)
     confiance REAL,
     statut TEXT NOT NULL DEFAULT 'a_valider',
     raison_rejet TEXT,
@@ -420,6 +424,7 @@ _COLUMN_MIGRATIONS = [
     ("trades", "stop_elargi", "INTEGER NOT NULL DEFAULT 0"),
     ("trades", "stop_origine_signal", "REAL"),
     ("trades", "session_marche", "TEXT"),
+    ("signals", "take_profit", "REAL"),
 ]
 
 

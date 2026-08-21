@@ -85,6 +85,17 @@ class AppConfig:
     capital_api_password_hypothesis2: Optional[str] = None
     capital_account_id_hypothesis2: Optional[str] = None
 
+    # Compte démo dédié à l'Hypothèse #4 (retour à la moyenne, Bandes de
+    # Bollinger, validée en démo par Ismaël le 21/08/2026 — voir
+    # docs/HYPOTHESES.md). **Aucun identifiant dédié fourni à ce jour** —
+    # Ismaël les fournira directement (jamais dans la conversation, même
+    # principe que H2/H3). `hypothesis4_executor.run_hypothesis4_loop`
+    # échoue net (ConfigError) tant qu'ils restent absents.
+    capital_api_key_hypothesis4: Optional[str] = None
+    capital_identifier_hypothesis4: Optional[str] = None
+    capital_api_password_hypothesis4: Optional[str] = None
+    capital_account_id_hypothesis4: Optional[str] = None
+
 
 def _require(name: str) -> str:
     value = os.environ.get(name)
@@ -155,4 +166,8 @@ def load_config(dotenv_path: str = ".env") -> AppConfig:
         capital_identifier_hypothesis2=os.environ.get("CAPITAL_IDENTIFIER_HYPOTHESIS2") or os.environ.get("CAPITAL_IDENTIFIER") or None,
         capital_api_password_hypothesis2=os.environ.get("CAPITAL_API_PASSWORD_HYPOTHESIS2") or None,
         capital_account_id_hypothesis2=os.environ.get("CAPITAL_ACCOUNT_ID_HYPOTHESIS2") or None,
+        capital_api_key_hypothesis4=os.environ.get("CAPITAL_API_KEY_HYPOTHESIS4") or None,
+        capital_identifier_hypothesis4=os.environ.get("CAPITAL_IDENTIFIER_HYPOTHESIS4") or os.environ.get("CAPITAL_IDENTIFIER") or None,
+        capital_api_password_hypothesis4=os.environ.get("CAPITAL_API_PASSWORD_HYPOTHESIS4") or None,
+        capital_account_id_hypothesis4=os.environ.get("CAPITAL_ACCOUNT_ID_HYPOTHESIS4") or None,
     )

@@ -12,6 +12,183 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-21 — Hypothèse #4 : décisions d'Ismaël appliquées, dispatch de gestion construit, exécuteur câblé — toujours NON déployée
+
+Suite à l'entrée précédente (ci-dessous) : Ismaël a tranché les quatre
+points laissés ouverts. Détail complet des décisions dans
+`docs/HYPOTHESES.md` ("Hypothèse #4 : décisions d'Ismaël — 21/08/2026").
+Résumé des changements de code qui en découlent :
+
+**Plafond §3.9** : décision permanente consignée dans `docs/HYPOTHESES.md`
+— H4 autorisée en démo, mais toute future évaluation/validation d'une
+hypothèse (promotion en réel, comparaison inter-hypothèses, décision
+d'arrêt) devra appliquer la correction pour comparaisons multiples
+calibrée sur 4 hypothèses simultanées. Aucun code n'implémente cette
+correction aujourd'hui (`hypothesis_engine` du §3.9 n'existe toujours
+pas) — la décision est documentée pour s'appliquer le jour où ce calcul
+sera construit, pas un correctif immédiat.
+
+**`STOP_WIDTH_MULTIPLIER`** (`src/mean_reversion_strategy.py`) : la
+valeur (1.0) est inchangée, mais s'applique désormais à la DEMI-largeur
+de bande (`(bande_haute - bande_basse) / 2`, soit 2σ) plutôt qu'à
+l'écart complet (4σ) — stop et cible symétriques (R:R ≈ 1:1). Tests mis
+à jour en conséquence (mêmes 13 tests, assertions recalculées).
+
+**Dispatch de gestion de position** (`src/executor.py`) — 3e branche
+ajoutée à `_evaluate_position_management`, module critique 100% couvert
+partagé par les 4 flux existants (Station X, H1, H3, H2) :
+- Nouveau `ManagementActionType.CLOSE_FULL_TP`.
+- `OpenTradeState.take_profit: Optional[float] = None` (nouveau champ,
+  défaut None — sans effet sur les trades des 3 autres flux).
+- Branche évaluée juste après le stop-hit commun, AVANT les blocs
+  Station X (tp1/tp2) et Flux B (trailing Donchian) : un trade H4 a
+  `state.tp1 is None` comme un trade Flux B, donc DOIT retourner
+  explicitement (TP touché -> clôture 100%, ou NONE) plutôt que de
+  laisser l'exécution retomber dans le bloc trailing Donchian, qui le
+  traiterait à tort comme un trade Flux B.
+- `_apply_management_action` : `is_full_close` inclut désormais
+  `CLOSE_FULL_TP` ; `palier` mappé sur `"tp"` (jamais `"tp1"`/`"tp2"`,
+  réservés à Station X) ; `_infer_close_reason` court-circuite sur
+  `CLOSE_FULL_TP` -> `"take_profit_fixe"` AVANT la comparaison
+  `state.stop_price` (non pertinente ici, le stop de H4 ne bouge jamais).
+- `_load_open_trade_state` lit désormais `signals.take_profit` (nouvelle
+  colonne, migration `_COLUMN_MIGRATIONS` dans `src/db.py`, testée sur
+  une base pré-existante comme les migrations précédentes) — jamais
+  `tp1`/`tp2` : les stocker là aurait fait basculer à tort ces trades
+  dans le dispatch Station X (bug qu'on cherche précisément à éviter).
+
+**Génération de signal** (`src/technical_strategy_executor.py`) :
+`_generate_and_queue_signal` écrit désormais `getattr(signal,
+"take_profit", None)` dans la nouvelle colonne `signals.take_profit` —
+`getattr` avec défaut, jamais un accès direct, car TrendSignal/ICT
+(H1/H2/H3) n'ont pas ce champ. `tp1`/`tp2` restent NULL pour toute
+stratégie technique complémentaire, comme avant.
+
+**`src/hypothesis4_executor.py`** (nouveau) : câblé sur le même modèle
+que H2/H3 (`run_technical_strategy_loop`, résolution HOUR, 8 actifs,
+`mean_reversion_strategy.evaluate_entry`). `src/config.py` étendu
+(`capital_*_hypothesis4`, tous `Optional[str] = None`, même patron que
+H2/H3 — repli de l'identifiant sur `CAPITAL_IDENTIFIER` si absent).
+
+**`_KNOWN_HYPOTHESIS_SOURCES`** : `HYPOTHESIS4_SOURCE = "hypothesis4"`
+ajoutée aux 4 copies dupliquées (`executor.py`, `metrics.py`,
+`circuit_breaker_store.py`, `confidence_scorer.py`) —
+`tests/test_source_normalization_consistency.py` mis à jour
+(`"hypothesis4"` déplacée du groupe "inconnue -> stationx" au groupe
+"connue -> elle-même" ; `"hypothesis5"` ajoutée comme nouvelle sentinelle
+"future hypothèse non enregistrée").
+
+**Tests** : `tests/test_mean_reversion_strategy.py` (assertions
+recalculées pour la demi-largeur), `tests/test_executor.py` (+9 tests :
+5 sur `evaluate_position_management`/H4 — TP touché long/short, stop
+prioritaire sur TP, aucune fuite vers le trailing Donchian même avec des
+`candles` fournies, aucune fuite vers l'ATR Station X ; 1 sur
+`_infer_close_reason` ; 1 bout-en-bout via `manage_open_trades` vérifiant
+`palier="tp"`, `cloture_reason="take_profit_fixe"`, et la règle des 50%
+de réinvestissement sur le gain), `tests/test_db.py` (+1, migration
+`signals.take_profit`), `tests/test_technical_strategy_executor.py` (+1,
+persistance de `take_profit` sans jamais toucher `tp1`/`tp2`),
+`tests/test_config.py` (+2), `tests/test_hypothesis4_executor.py`
+(nouveau, 4 tests, même patron que `test_hypothesis2_executor.py`).
+592 tests au total, aucune régression, 100% toujours vérifié sur
+`risk_engine`/`capital_manager`/`go_nogo`/`validator`/`trend_strategy`/
+`circuit_breaker`/`ict_strategy`/`mean_reversion_strategy`.
+
+**Toujours NON déployé, volontairement** : aucun identifiant
+`CAPITAL_*_HYPOTHESIS4` dans `.env` (ni local ni VPS), `hypothesis4_
+executor` absent de `scripts/process_watchdog.py` (même précédent que
+H2 avant ses identifiants — l'ajouter aurait déclenché une fausse
+alerte), aucun process démarré. `run_hypothesis4_loop` échoue net
+(`ConfigError`) si invoqué sans ces identifiants, jamais un repli
+silencieux — comportement vérifié par test. En attente des identifiants
+du compte démo H4, qu'Ismaël fournira directement dans le terminal,
+jamais dans la conversation.
+
+---
+
+## 2026-08-21 — Hypothèse #4 (retour à la moyenne, Bollinger) — proposée, logique de signal construite, exécution NON câblée
+
+Demande explicite d'Ismaël, avec instruction explicite de ne pas câbler
+l'exécution réelle tant que les identifiants du compte démo H4 ne sont
+pas fournis (directement, jamais dans la conversation — même principe
+que H2/H3). Pré-enregistrement complet écrit dans `docs/HYPOTHESES.md`
+AVANT tout code, aucune donnée H4 n'existe (invariant #10).
+
+**Point signalé en premier, non tranché** : H1+H3+H2 totalisent déjà 3
+hypothèses simultanées, exactement le plafond du §3.9 ("3 hypothèses par
+cycle maximum"). L'entrée du 21/08/2026 sur la correction du modèle de
+budget de variables avait explicitement noté ce scénario comme "à
+traiter le jour venu, pas une décision à prendre seul" — ce jour est
+arrivé avec H4. Deux lectures en tension (littérale : le générateur
+§3.9 n'existe pas, donc le plafond formel ne s'applique pas à des
+hypothèses écrites à la main ; par l'esprit du texte : le risque de
+comparaisons multiples que ce plafond protège s'applique quelle que
+soit l'origine des hypothèses). **Non résolu ici** — détail complet et
+question posée à Ismaël dans `docs/HYPOTHESES.md`. Sans conséquence
+immédiate : aucun identifiant H4 n'est câblé, donc aucune exécution
+réelle n'est possible tant que ce point n'est pas tranché.
+
+**`src/mean_reversion_strategy.py`** (nouveau, module critique, 100% de
+couverture) : réutilise `trend_strategy.compute_regime`/`MA_PERIOD` à
+l'identique pour le régime de fond (pas recalculé différemment,
+demande explicite d'Ismaël). Déclencheur propre : Bandes de Bollinger
+SMA(20)±2σ horaires, `compute_bollinger_bands` calculée sur une fenêtre
+INCLUANT la bougie courante (convention Bollinger standard et cohérente
+avec `compute_regime`, à la différence de
+`compute_donchian_channel` qui l'exclut). Entrée uniquement dans le sens
+du retour à la moyenne à l'intérieur du régime (jamais contre le
+régime) : long si clôture ≤ bande basse en régime haussier, short si
+clôture ≥ bande haute en régime baissier. Sortie = TP fixe à la bande
+médiane figée à l'entrée, stop fixe à 1× la largeur complète de bande
+(4σ), **aucun trailing** — écart volontaire avec H1/H2/H3 (invariant #5 :
+un stop qui ne bouge jamais ne peut jamais être élargi, trivialement
+respecté).
+
+**Deux choix de calcul non spécifiés par la proposition d'Ismaël,
+retenus par défaut et signalés comme ambiguïtés réelles plutôt que
+tranchés silencieusement** (voir `docs/HYPOTHESES.md` pour le détail) :
+1. "Largeur de bande" pour le stop = écart complet (haute−basse=4σ),
+   pas le demi-écart (2σ) — impact direct sur le ratio gain/risque
+   (facteur 2), codé comme constante nommée (`STOP_WIDTH_MULTIPLIER`)
+   pour rester trivialement réversible.
+2. Écart-type de population (division par 20), pas d'échantillon
+   (division par 19) — convention Bollinger standard, écart mineur
+   (~2,6%) mais réel.
+
+**Écart d'architecture identifié, documenté, PAS implémenté** :
+la génération de signal (`_generate_and_queue_signal` du moteur
+générique `technical_strategy_executor.py`) tolère par duck-typing le
+champ `take_profit` supplémentaire porté par `MeanReversionSignal`
+(absent de `TrendSignal`), mais la GESTION de position
+(`executor._evaluate_position_management`, module critique partagé par
+les 4 flux existants) ne connaît que deux patrons : "Station X"
+(tp1 défini → 3 paliers avec trailing ATR) et "Flux B" (tp1 absent →
+trailing Donchian continu sans TP). Le mécanisme de H4 (1 seul TP,
+clôture à 100%, zéro trailing) ne correspond à aucun des deux —
+câbler `tp1=take_profit` naïvement déclencherait à tort la machinerie
+de clôtures partielles/trailing de Station X. Conclusion : nécessite une
+3e branche de dispatch dans ce module critique partagé. **Non ajoutée
+aujourd'hui**, conformément à l'instruction explicite d'Ismaël de ne pas
+câbler l'exécution avant d'avoir les identifiants H4.
+
+**Tests** : `tests/test_mean_reversion_strategy.py`, 13 tests, 100% de
+couverture sur `mean_reversion_strategy.py` (45/45 lignes). Les bandes
+attendues sont vérifiées via `statistics.pstdev` (bibliothèque standard,
+chemin de calcul indépendant de l'implémentation) plutôt que des valeurs
+codées à la main, pour garantir une vérification réellement indépendante.
+578 tests au total, aucune régression, 100% toujours vérifié sur
+`risk_engine`/`capital_manager`/`go_nogo`/`validator`/`trend_strategy`/
+`circuit_breaker`/`ict_strategy`/`mean_reversion_strategy`.
+
+**Non fait, volontairement** : aucun identifiant `.env`, aucun
+`hypothesis4_executor.py`, aucune entrée dans `_KNOWN_HYPOTHESIS_SOURCES`
+(les 4 copies dupliquées dans `executor.py`/`metrics.py`/
+`circuit_breaker_store.py`/`confidence_scorer.py`), aucun déploiement
+VPS. Ce module est un composant de signal/sizing pur, non branché à
+quoi que ce soit d'exécutable — cohérent avec l'instruction reçue.
+
+---
+
 ## 2026-08-21 — Lancement de l'Hypothèse #2 — bug générique trouvé et corrigé au premier démarrage
 
 Ismaël a fourni les identifiants Capital.com dédiés à l'Hypothèse #2

@@ -120,7 +120,17 @@ def _generate_and_queue_signal(
     `describe_signal` : formatte le texte d'audit (raw_messages.raw_text)
     — optionnel, chaque hypothèse peut décrire son propre mécanisme
     (ex: "rupture de canal Donchian(20)" pour l'Hypothèse #1) ; par
-    défaut, une description générique neutre."""
+    défaut, une description générique neutre.
+
+    `signal.take_profit` (Hypothèse #4 UNIQUEMENT, voir
+    mean_reversion_strategy.MeanReversionSignal) est écrit dans la
+    colonne dédiée `signals.take_profit` si présente sur l'objet signal
+    (`getattr`, jamais un accès direct — TrendSignal/ICT n'ont pas ce
+    champ), JAMAIS dans tp1/tp2 : ces deux colonnes restent NULL pour
+    toute stratégie technique complémentaire, comme avant (voir
+    docs/DECISIONS.md, 21/08/2026, pour la raison — le dispatch de
+    gestion de position d'executor.py distingue les trois mécanismes de
+    sortie par la colonne renseignée, jamais par une valeur partagée)."""
     if _has_active_signal_or_trade(db_path, asset, source):
         return
 
@@ -141,11 +151,12 @@ def _generate_and_queue_signal(
         raw_message_id = raw_cursor.lastrowid
         conn.execute(
             "INSERT INTO signals (raw_message_id, source, type, actif, sens, entree_min, entree_max, stop_loss, "
-            "confiance, statut, created_at) "
-            "VALUES (?, ?, 'signal', ?, ?, ?, ?, ?, ?, 'a_valider', ?)",
+            "take_profit, confiance, statut, created_at) "
+            "VALUES (?, ?, 'signal', ?, ?, ?, ?, ?, ?, ?, 'a_valider', ?)",
             (
                 raw_message_id, source, asset, signal.direction,
                 signal.entry_price, signal.entry_price, signal.stop_price,
+                getattr(signal, "take_profit", None),
                 signal.confidence, now,
             ),
         )

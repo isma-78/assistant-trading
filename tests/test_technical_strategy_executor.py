@@ -34,8 +34,23 @@ class _FakeSignal:
     confidence: float = 1.0
 
 
+@dataclass(frozen=True)
+class _FakeSignalWithTakeProfit:
+    # Forme d'un MeanReversionSignal (Hypothèse #4) : porte take_profit,
+    # contrairement à TrendSignal/ICT (_FakeSignal ci-dessus).
+    direction: str
+    entry_price: float
+    stop_price: float
+    take_profit: float
+    confidence: float = 1.0
+
+
 def _fake_entry_fn(asset, candles):
     return _FakeSignal(direction="long", entry_price=1.2, stop_price=1.1)
+
+
+def _fake_entry_fn_with_take_profit(asset, candles):
+    return _FakeSignalWithTakeProfit(direction="long", entry_price=1.2, stop_price=1.1, take_profit=1.15)
 
 
 def _no_entry_fn(asset, candles):
@@ -111,6 +126,39 @@ def test_generate_and_queue_signal_inserts_with_correct_source_and_channel(tmp_p
     finally:
         conn.close()
     client.get_prices.assert_called_once_with("EURUSD", resolution="MINUTE_15", max_bars=220)
+    assert signal["tp1"] is None
+    assert signal["take_profit"] is None  # _FakeSignal n'a pas ce champ (TrendSignal/ICT) -> getattr replie sur None
+
+
+def test_generate_and_queue_signal_persists_take_profit_never_tp1_tp2(tmp_path):
+    # Hypothèse #4 (mean_reversion_strategy.MeanReversionSignal) : le
+    # champ take_profit doit atterrir dans signals.take_profit, JAMAIS
+    # dans tp1/tp2 — voir docs/DECISIONS.md (21/08/2026) pour la raison :
+    # le dispatch de gestion de position d'executor.py distingue les
+    # trois mécanismes de sortie par la colonne renseignée.
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.return_value = {
+        "prices": [{
+            "snapshotTimeUTC": "2026-08-21T00:00:00Z",
+            "openPrice": {"bid": 1.2, "ask": 1.2}, "highPrice": {"bid": 1.2, "ask": 1.2},
+            "lowPrice": {"bid": 1.2, "ask": 1.2}, "closePrice": {"bid": 1.2, "ask": 1.2},
+        }]
+    }
+    _generate_and_queue_signal(
+        db_path, client, "EURUSD",
+        source="hypothesis4", resolution="HOUR", entry_fn=_fake_entry_fn_with_take_profit,
+        channel="hypothesis4_channel", hypothesis_label="Hypothèse #4",
+    )
+    conn = get_connection(db_path)
+    try:
+        signal = conn.execute("SELECT * FROM signals").fetchone()
+        assert signal["take_profit"] == pytest.approx(1.15)
+        assert signal["tp1"] is None
+        assert signal["tp2"] is None
+    finally:
+        conn.close()
 
 
 def test_generate_and_queue_signal_uses_custom_describe_signal(tmp_path):

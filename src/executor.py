@@ -114,7 +114,8 @@ DIRECTION_TO_API = {"long": "BUY", "short": "SELL"}
 HYPOTHESIS_SOURCE = "hypothesis"    # Hypothèse #1 (docs/HYPOTHESES.md, 20/08/2026)
 HYPOTHESIS3_SOURCE = "hypothesis3"  # Hypothèse #3 (docs/HYPOTHESES.md, 21/08/2026)
 HYPOTHESIS2_SOURCE = "hypothesis2"  # Hypothèse #2 (docs/HYPOTHESES.md, 21/08/2026)
-_KNOWN_HYPOTHESIS_SOURCES = {HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE}
+HYPOTHESIS4_SOURCE = "hypothesis4"  # Hypothèse #4 (docs/HYPOTHESES.md, 21/08/2026 — validée en démo, non déployée)
+_KNOWN_HYPOTHESIS_SOURCES = {HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE, HYPOTHESIS4_SOURCE}
 
 # Résolution de bougie utilisée pour recalculer le canal de Donchian du
 # trailing (§2.11) de chaque hypothèse — Station X n'y figure jamais
@@ -130,6 +131,7 @@ _TREND_CANDLE_RESOLUTION = {
     HYPOTHESIS_SOURCE: "HOUR",
     HYPOTHESIS3_SOURCE: "MINUTE_15",
     HYPOTHESIS2_SOURCE: "HOUR",
+    HYPOTHESIS4_SOURCE: "HOUR",  # sans effet pratique : l'Hypothèse #4 n'a pas de trailing (voir take_profit ci-dessous)
 }
 
 
@@ -259,6 +261,7 @@ class ManagementActionType(str, Enum):
     CLOSE_PARTIAL_TP1 = "close_partial_tp1"
     CLOSE_PARTIAL_TP2 = "close_partial_tp2"
     UPDATE_TRAILING_STOP = "update_trailing_stop"
+    CLOSE_FULL_TP = "close_full_tp"  # Hypothèse #4 (retour à la moyenne) — voir docs/HYPOTHESES.md, docs/DECISIONS.md
 
 
 @dataclass(frozen=True)
@@ -277,6 +280,9 @@ class OpenTradeState:
     tp2_hit: bool
     remaining_fraction: float  # fraction de la taille initiale encore ouverte
     guaranteed_stop: bool = False  # voir capital_client.update_position_stop, docs/DECISIONS.md (20/08/2026)
+    take_profit: Optional[float] = None  # Hypothèse #4 UNIQUEMENT (signals.take_profit, jamais tp1/tp2 —
+                                          # voir docs/DECISIONS.md 21/08/2026 : stocker la cible fixe de H4
+                                          # dans tp1 aurait à tort déclenché le dispatch Station X 3-paliers)
 
 
 @dataclass(frozen=True)
@@ -350,6 +356,32 @@ def _evaluate_position_management(
             exit_price=state.stop_price,
             r_multiple=r,
             detail="Stop touché (initial, breakeven ou trailing)",
+        )
+
+    # Hypothèse #4 (retour à la moyenne, §2.11, docs/HYPOTHESES.md,
+    # VALIDÉE en démo le 21/08/2026) — 3e patron de sortie, distinct des
+    # deux ci-dessous : take-profit FIXE unique (`state.take_profit`,
+    # jamais `state.tp1`/`state.tp2` — voir docs/DECISIONS.md pour la
+    # raison de cette séparation), clôture à 100% en une fois, AUCUN
+    # trailing (conforme invariant #5). Doit être évalué et retourner
+    # AVANT le bloc Station X (tp1/tp2) et le bloc Flux B (trailing
+    # Donchian ci-dessous) : un trade H4 a toujours state.tp1 is None,
+    # donc tomberait à tort dans le trailing Donchian perpétuel du Flux B
+    # si cette branche ne renvoyait pas explicitement NONE en l'absence
+    # de TP touché.
+    if state.take_profit is not None:
+        if _is_target_hit(state.direction, current_price, state.take_profit):
+            r = compute_r_multiple(state.direction, state.entry_price, state.initial_stop_price, state.take_profit)
+            return ManagementAction(
+                action=ManagementActionType.CLOSE_FULL_TP,
+                fraction_to_close=state.remaining_fraction,
+                exit_price=state.take_profit,
+                r_multiple=r,
+                detail="Take-profit fixe touché (Hypothèse #4) : clôture 100%, aucun trailing",
+            )
+        return ManagementAction(
+            action=ManagementActionType.NONE,
+            detail="Take-profit fixe non atteint, stop fixe non touché (Hypothèse #4, pas de trailing)",
         )
 
     if not state.tp1_hit and state.tp1 is not None and _is_target_hit(state.direction, current_price, state.tp1):
@@ -693,13 +725,14 @@ def _load_open_trade_state(conn, trade_row) -> OpenTradeState:
     dérivés de trade_partials (déjà les clôtures effectivement
     exécutées) plutôt que stockés comme un état séparé qui pourrait
     diverger de l'historique réel."""
-    tp1 = tp2 = None
+    tp1 = tp2 = take_profit = None
     if trade_row["signal_id"] is not None:
         signal_row = conn.execute(
-            "SELECT tp1, tp2 FROM signals WHERE id = ?", (trade_row["signal_id"],)
+            "SELECT tp1, tp2, take_profit FROM signals WHERE id = ?", (trade_row["signal_id"],)
         ).fetchone()
         if signal_row is not None:
             tp1, tp2 = signal_row["tp1"], signal_row["tp2"]
+            take_profit = signal_row["take_profit"]
 
     partials = conn.execute(
         "SELECT palier, fraction FROM trade_partials WHERE trade_id = ?", (trade_row["id"],)
@@ -721,6 +754,7 @@ def _load_open_trade_state(conn, trade_row) -> OpenTradeState:
         tp1_hit=tp1_hit, tp2_hit=tp2_hit,
         remaining_fraction=remaining_fraction,
         guaranteed_stop=bool(trade_row["guaranteed_stop"]),
+        take_profit=take_profit,
     )
 
 
@@ -909,6 +943,7 @@ _CLOSE_REASON_LABELS = {
     "stop_breakeven": "stop au breakeven",
     "trailing": "stop suiveur (trailing)",
     "stop_urgence": "arrêt d'urgence",
+    "take_profit_fixe": "take-profit fixe (Hypothèse #4)",
 }
 
 
@@ -931,6 +966,12 @@ def _infer_close_reason(action: "ManagementAction", state: OpenTradeState) -> st
     Retourne une clé de _CLOSE_REASON_LABELS, jamais un texte libre —
     l'appelant traduit pour l'affichage humain (notification), jamais
     l'inverse."""
+    if action.action == ManagementActionType.CLOSE_FULL_TP:
+        # Hypothèse #4 : clôture par cible atteinte, jamais par stop —
+        # court-circuite la comparaison state.stop_price ci-dessous
+        # (non pertinente ici, le stop de H4 n'a par construction jamais
+        # bougé, voir OpenTradeState.take_profit).
+        return "take_profit_fixe"
     if "urgence" in (action.detail or "").lower():
         return "stop_urgence"
     if state.stop_price == state.initial_stop_price:
@@ -1003,7 +1044,7 @@ def _apply_management_action(
         return
 
     # Clôtures (partielles ou totales)
-    is_full_close = action.action == ManagementActionType.CLOSE_FULL_STOP
+    is_full_close = action.action in (ManagementActionType.CLOSE_FULL_STOP, ManagementActionType.CLOSE_FULL_TP)
     close_size = None if is_full_close else round(action.fraction_to_close * _initial_size(db_path, state.trade_id), 10)
     try:
         client.close_position(state.deal_id, size=close_size)
@@ -1043,6 +1084,7 @@ def _apply_management_action(
         ManagementActionType.CLOSE_FULL_STOP: "sl",
         ManagementActionType.CLOSE_PARTIAL_TP1: "tp1",
         ManagementActionType.CLOSE_PARTIAL_TP2: "tp2",
+        ManagementActionType.CLOSE_FULL_TP: "tp",  # Hypothèse #4 — cible fixe unique, jamais "tp1"/"tp2" (Station X)
     }[action.action]
     source_label = _envelope_source_key(state.source)
 

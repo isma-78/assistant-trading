@@ -828,5 +828,235 @@ statut opérationnel.
 
 ---
 
+## Hypothèse #4 (retour à la moyenne, Bandes de Bollinger) — 21/08/2026
+
+**Statut** : proposée, en attente de validation d'Ismaël. **Non testée,
+aucun code d'exécution n'existe encore.** Pré-enregistrée avant toute
+observation de données H4 (aucune n'existe).
+
+### ⚠️ Point à trancher avant tout autre chose : le plafond des 3 hypothèses par cycle (§3.9)
+
+Signalé explicitement le 21/08/2026 (voir `docs/DECISIONS.md`, correction
+du modèle de budget) comme un scénario à traiter "le jour venu, pas une
+décision à prendre seul" — **ce jour est arrivé**. Citation exacte,
+`docs/CDC_v4.md` §3.9 : *« 3 hypothèses par cycle maximum. Au-delà, la
+correction pour comparaisons multiples rend la barre inatteignable —
+tester 20 idées en fait "gagner" quelques-unes par pur hasard. »*
+
+H1 + H3 + H2 = déjà 3, exactement au plafond. H4 serait une **4e
+hypothèse prédictive simultanée**. Deux lectures honnêtement en tension,
+aucune tranchée ici :
+- **Lecture littérale** : §3.9 décrit le générateur d'hypothèses
+  officiel trimestriel, non construit à ce jour — H1 à H4 ne sont pas
+  produites par ce processus, donc le plafond ne s'applique pas
+  littéralement à elles.
+- **Lecture par l'esprit du texte** : le risque statistique que ce
+  plafond protège (comparaisons multiples, "trouver un pattern par pur
+  hasard" en testant trop d'idées à la fois) ne dépend en rien de
+  savoir si les hypothèses viennent d'un générateur formel ou sont
+  écrites à la main — H1/H2/H3/H4 tournant simultanément sur le même
+  volume de trades exposent au même risque, sous une autre étiquette.
+
+Cette tension n'a pas été résolue unilatéralement. **Aucune conséquence
+sur ce qui suit** : la construction de la logique de détection ci-dessous
+n'engage aucune exécution réelle (pas d'identifiants H4), donc aucun
+risque statistique n'est couru tant que ce point n'est pas tranché — mais
+il doit l'être avant tout passage en exécution, même démo.
+
+### Contexte
+
+H1/H3 (suivi de tendance) et H2 (confluence ICT) testent tous la
+continuation directionnelle à l'intérieur du régime de fond. H4 teste
+l'hypothèse inverse à court terme : à l'intérieur du même régime, une
+extension de prix au-delà de 2 écarts-types de sa moyenne courte (20
+périodes) tend à revenir vers cette moyenne avant de reprendre sa
+direction de fond — un retour à la moyenne à court terme, jamais un
+pari contre le régime lui-même.
+
+*Justification théorique* (écrite par Ismaël avant toute donnée H4,
+reproduite ici) : contrairement aux trois autres hypothèses, la sortie
+est un take-profit fixe (pas de trailing) — par construction, ça produit
+des clôtures plus rapides et plus fréquentes (gains réguliers plutôt que
+rares et grands), sans toucher à la fréquence d'entrée ni au timeframe
+(donc aucune dérive vers le scalping exclu par le CDC §1.2/§2.8).
+
+*Littérature* — mêmes réserves de calibrage que pour H2 (proposition du
+20/08/2026) : les Bandes de Bollinger elles-mêmes sont un outil
+d'analyse technique largement diffusé et documenté (John Bollinger,
+*"Bollinger on Bollinger Bands"*, 2001) mais relèvent d'une convention
+de pratique, pas d'une étude académique à comité de lecture comme les
+citations de l'Hypothèse #1 (Moskowitz/Ooi/Pedersen, Faber) — honnêteté
+à conserver en jugeant les résultats. Le phénomène de retour à la
+moyenne à court terme sur les rendements a par ailleurs une littérature
+académique propre (ex. Jegadeesh, *"Evidence of Predictable Behavior of
+Security Returns"*, Journal of Finance, 1990, sur les renversements à
+court terme) — distincte de l'outil Bollinger lui-même, citée ici comme
+support du principe général, pas comme validation de cette
+implémentation précise.
+
+### Principe retenu : MA(200) de régime + Bandes de Bollinger(20, 2σ) comme déclencheur de retour à la moyenne
+
+Même architecture à deux niveaux que H1/H2/H3 (§2.11) :
+
+**Niveau 1 — Régime de fond** : identique à H1/H2/H3, `trend_strategy.
+compute_regime` réutilisé tel quel (MA200 horaire) — **pas recalculé
+différemment**, pas un nouveau paramètre.
+
+**Niveau 2 — Déclencheur** : Bandes de Bollinger sur 20 bougies horaires
+(bande médiane = moyenne mobile simple des 20 dernières clôtures ;
+bandes haute/basse = médiane ± 2 écarts-types). On ne fade **jamais**
+contre le régime de fond, seulement les extensions à court terme à
+l'intérieur du régime autorisé :
+- Régime haussier (clôture > MA200) → achat autorisé **uniquement** si
+  la clôture courante touche ou dépasse la bande basse.
+- Régime baissier → vente autorisée **uniquement** au toucher de la
+  bande haute.
+
+### Deux choix de calcul non spécifiés par la proposition — signalés, pas masqués (même exigence que pour l'Hypothèse #2)
+
+1. **"Largeur de bande" pour le stop — ambiguïté réelle.** La
+   proposition dit "stop fixe à 1× la largeur de bande à l'entrée" sans
+   préciser si "largeur" désigne l'écart complet bande haute − bande
+   basse (= 4 écarts-types) ou le demi-écart médiane→bande (= 2
+   écarts-types) — un facteur 2 d'écart entre les deux lectures, avec un
+   impact direct et important sur le ratio gain/risque (avec TP à la
+   médiane à 2σ de l'entrée : R:R ≈ 1:2 si stop = 4σ, R:R ≈ 1:1 si
+   stop = 2σ). **Choix retenu par défaut ici, à confirmer** : largeur
+   complète (4σ), lecture la plus littérale du mot "largeur". Codé comme
+   une constante nommée (`STOP_WIDTH_MULTIPLIER` appliqué à la largeur
+   complète), donc trivial à inverser si l'autre lecture est voulue.
+2. **Écart-type population vs échantillon.** Convention Bollinger
+   standard (et celle de la plupart des plateformes de graphiques) :
+   écart-type de **population** (division par 20, pas par 19). Retenu
+   ici. Écart avec la version "échantillon" : facteur √(20/19) ≈ 1,026,
+   soit ~2,6% — mineur comparé au point 1, mais un choix réel, pas une
+   évidence.
+
+### Paramètres exacts (choisis a priori, avant observation)
+
+| Paramètre | Valeur | Statut |
+|---|---|---|
+| Période de la MA de régime | 200 (bougies horaires) | **Fixe**, réutilisée à l'identique de H1/H2/H3 — pas un nouveau choix |
+| **Config des bandes** (période + multiplicateur d'écart-type) | SMA(20), ±2σ | **Paramètre #1** — convention Bollinger standard, non arbitraire (voir littérature ci-dessus), période et multiplicateur toujours utilisés ensemble, jamais ajustés séparément |
+| **Multiplicateur de largeur pour le stop** | 1× (voir ambiguïté ci-dessus sur "largeur") | **Paramètre #2** |
+| Take-profit | Bande médiane (SMA20) **au moment de l'entrée**, figée — jamais recalculée en continu | Découle mécaniquement du paramètre #1, **pas un 3e paramètre libre** |
+| Résolution des bougies | HOUR | Fixe, identique à H1 |
+| Trailing | **Aucun** — stop fixe après ouverture (conforme invariant #5 : un stop qui ne bouge jamais ne peut jamais être élargi) | Décision explicite, contrairement à H1/H2/H3 |
+
+**2 paramètres propres à cette hypothèse**, dans la limite des 2-3
+imposée par §2.11 — 1 slot de marge.
+
+### Simplification assumée à documenter (demande explicite d'Ismaël)
+
+**Aucun filtre de force de tendance** (type ADX) pour éviter le fade en
+régime très directionnel, où une extension à 2σ peut n'être que le
+début d'un mouvement plus large plutôt qu'un excès à corriger. Limite
+connue, volontairement pas ajoutée comme 3e paramètre a priori — à
+surveiller dans les résultats, pas un obstacle à la validation de cette
+proposition.
+
+### Budget de variables (invariant #10) — vérifié avant de proposer cette hypothèse
+
+Modèle corrigé du 21/08/2026 (voir `docs/HYPOTHESES.md` ci-dessus et
+`docs/DECISIONS.md`) : chaque hypothèse a son propre budget de 2-3
+paramètres (§2.11), jamais partagé avec les 5 variables de sélection de
+signal du §3.8 (`adaptive_rules`, toujours à 0/5, jamais touché par
+aucune hypothèse à ce jour) ni avec le budget des autres hypothèses.
+H4 : 2/3 propres. Voir la section dédiée plus haut sur le plafond
+séparé du §3.9 (3 hypothèses par cycle) — un point distinct, non résolu.
+
+### Score de confiance du signal
+
+Identique aux Hypothèses #1/#2/#3 : entièrement déterministe,
+`confidence = 1.0`, `boosted = False`.
+
+### Actifs concernés
+
+Les 8 actifs de la liste blanche, comme H1/H2/H3 — aucune variable de
+sélection supplémentaire.
+
+### Ce que cette hypothèse NE fait PAS (rappel des garde-fous)
+
+- Ne fade jamais contre le régime de fond (MA200) — uniquement les
+  extensions à court terme à l'intérieur du régime autorisé.
+- N'implique aucun LLM à aucune étape de la décision (invariant #1).
+- Ne sera jamais ajustée automatiquement sur la base de ses propres
+  résultats — toute évolution = nouvelle entrée datée.
+- Ne produit aucune conclusion statistique avant **10 trades minimum
+  par variable réglable** (2 variables ici → 20 trades minimum avant
+  toute interprétation, invariant #10).
+- **Aucun identifiant Capital.com câblé** — compte démo H4 pas encore
+  configuré (Ismaël les fournira directement, jamais dans la
+  conversation, même principe que H2/H3).
+- **Aucune exécution réelle, même démo** — voir la question ouverte sur
+  le plafond §3.9 en tête de cette entrée, à trancher avant.
+
+### Décisions à trancher avant toute exécution (même démo)
+
+1. Le plafond des 3 hypothèses par cycle (§3.9) s'applique-t-il à H4 —
+   lecture littérale (générateur non construit, ne s'applique pas) ou
+   lecture par l'esprit du texte (le risque de comparaisons multiples
+   s'applique quelle que soit l'origine des hypothèses) ?
+2. "Largeur de bande" pour le stop : écart complet (4σ, retenu par
+   défaut ici) ou demi-écart (2σ) ?
+3. Écart-type population (retenu par défaut) ou échantillon ?
+4. Intégration avec le moteur générique (`technical_strategy_
+   executor.py`) — voir `docs/DECISIONS.md` : la génération de signal
+   s'y intègre presque proprement (ajout mineur), la **gestion de
+   position ne s'y intègre pas** en l'état (nécessite une nouvelle
+   branche dans `executor._evaluate_position_management`, un module
+   critique à 100% de couverture partagé par les 4 flux existants) —
+   décrit en détail, pas implémenté aujourd'hui.
+
+---
+
+## Hypothèse #4 : décisions d'Ismaël — 21/08/2026
+
+Les quatre points laissés ouverts par la proposition initiale (section
+"⚠️ Point à trancher" et "Décisions à trancher" ci-dessus) sont tranchés.
+Cette entrée ne modifie rien de ce qui précède, elle vient s'ajouter
+après (convention append-only du fichier).
+
+**1. Plafond §3.9 ("3 hypothèses par cycle maximum")** : Hypothèse #4
+autorisée en exécution DÉMO (aucun capital réel engagé, statistiques déjà
+isolées par source, voir `envelopes.source`). Décision permanente et
+explicite, applicable à toute future hypothèse (H1, H2, H3, H4 ou
+au-delà) : **toute évaluation ou validation d'un résultat** (passage en
+réel, comparaison entre hypothèses, décision d'arrêt/poursuite) devra
+désormais appliquer la correction statistique pour comparaisons
+multiples calibrée sur **4 hypothèses simultanées, jamais 3** — le risque
+que le plafond §3.9 protège (trouver un pattern par pur hasard en testant
+trop d'idées à la fois) se matérialise au moment de JUGER un résultat,
+pas à l'exécution démo sans risque. Aucune hypothèse ne sera promue ou
+comparée sans cette correction à 4. Voir `docs/DECISIONS.md` (21/08/2026)
+pour l'implémentation de cette règle le jour où `hypothesis_engine`
+(§3.9) ou une comparaison inter-hypothèses sera construite.
+
+**2. "Largeur de bande" pour le stop** : DEMI-largeur de bande (médiane
+-> bande = 2σ), pas l'écart complet (4σ) retenu par erreur dans la
+proposition initiale. Avec le TP à la bande médiane (2σ de la clôture
+d'entrée) et ce choix, stop et cible sont désormais symétriques : R:R ≈
+1:1, au lieu du 2:1 défavorable de la première version (le stop était
+deux fois plus large que la cible, un déséquilibre non intentionnel).
+`STOP_WIDTH_MULTIPLIER` dans `src/mean_reversion_strategy.py` reste à
+1.0, mais s'applique désormais à `(bande_haute - bande_basse) / 2` au
+lieu de `bande_haute - bande_basse`.
+
+**3. Écart-type** : population confirmé sans changement (convention
+Bollinger standard).
+
+**4. Intégration avec le moteur générique** : la 3e branche de dispatch
+a été construite dans `executor._evaluate_position_management`
+(`ManagementActionType.CLOSE_FULL_TP`), sans toucher aux deux branches
+existantes (Station X, Flux B) — tests de non-régression dédiés dans
+`tests/test_executor.py`. `hypothesis4_executor.py` câblé sur le même
+modèle que H2/H3 (`technical_strategy_executor.run_technical_strategy_
+loop`). **Exécution réelle toujours NON activée** : aucun identifiant
+`.env`, aucun déploiement VPS — en attente des identifiants du compte
+démo H4, qu'Ismaël fournira directement (jamais dans la conversation).
+Détail complet dans `docs/DECISIONS.md`.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
-#2 ou #3 — jamais une modification de ce qui précède.*
+#2, #3 ou #4 — jamais une modification de ce qui précède.*
