@@ -12,6 +12,107 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-21 — INCIDENT CRITIQUE trouvé en redémarrant executor_loop : gestion croisée H1/H3/H2, trades fantômes, positions orphelines non suivies — RIEN CORRIGÉ, rapport factuel uniquement
+
+Trouvé par accident en redémarrant `executor_loop` pour déployer le
+correctif de péremption ci-dessous — sans lien direct avec ce correctif,
+mais découvert par sa mise en œuvre. Pas encore rapporté à Ismaël au
+moment de l'écriture de cette entrée ; aucune correction appliquée.
+
+### 1. `executor.run_executor_loop` ne s'exclut pas correctement des sources H3/H2 — CONFIRMÉ dans le code
+
+`run_executor_loop` (Station X) filtre ses signaux/trades avec
+`exclude_sources=[HYPOTHESIS_SOURCE]` (`manage_open_trades` ligne 1218,
+`force_close_all_open_trades` ligne 1187) et
+`"SELECT * FROM signals WHERE ... source != ?"` avec `HYPOTHESIS_SOURCE`
+(ligne 1203) — mais `HYPOTHESIS_SOURCE` vaut littéralement `"hypothesis"`
+(l'Hypothèse #1 seule). **Ni `"hypothesis3"` ni `"hypothesis2"` ne sont
+exclus.** Conséquence : `executor_loop` gère AUSSI, en double avec
+`hypothesis3_executor`, tous les trades et signaux de l'Hypothèse #3
+(et gérerait ceux de l'Hypothèse #2 si son process tournait), avec
+l'enveloppe et la liste blanche de STATION X plutôt que celles de
+l'hypothèse concernée. Ce bug existe depuis le déploiement de H3 ce
+matin — n'affectait rien avant (H1 seule existait, et H1 est
+correctement exclue).
+
+### 2. Preuve en direct : deux process se disputent la même position, en boucle infinie
+
+Confirmé dans les logs (`logs/executor_loop.log` ET
+`logs/hypothesis3_executor.log`) : le trade H3 id=15 (USDJPY, deal_id
+`00000000-5d58-1b1b-...`) génère un `CapitalApiError 404
+error.not-found.dealId` à **chaque cycle des deux process**, sans
+interruption, depuis son stop (le broker ne connaît plus ce dealId —
+position déjà fermée par ailleurs), parce que `trades.statut` est resté
+`'ouvert'` en base. Chaque process retente indéfiniment sans jamais
+corriger cet état — aucune alerte, aucun arrêt, juste un bruit d'erreur
+continu et des appels API gaspillés par deux process au lieu d'un.
+
+### 3. Quatre trades DB "ouvert" dont la position n'existe plus chez le broker (fantômes)
+
+Vérifié en direct via `GET /positions` sur le compte "hypothèse 3"
+(7 positions réelles ouvertes) comparé aux 8 trades marqués `'ouvert'`
+en base pour `source='hypothesis3'` :
+
+| Trade DB | Actif | Statut DB | Position broker réelle ? |
+|---|---|---|---|
+| 13 | GOLD | ouvert | ✅ correspond |
+| 14 | BTCUSD | ouvert | ❌ absente (fantôme) |
+| 15 | USDJPY | ouvert | ❌ absente (fantôme, voir point 2) |
+| 16 | ETHUSD | ouvert | ❌ deal_id ne correspond à AUCUNE des 4 positions ETHUSD réelles (voir point 4) |
+| 19 | GBPUSD | ouvert | ❌ absente (fantôme) |
+| 23 | US100 | ouvert | ❌ absente (fantôme) |
+| 24 | EURUSD | ouvert | ✅ correspond |
+| 25 | US30 | ouvert | ✅ correspond |
+
+**Cause probable, pas encore confirmée avec certitude** : le point 1
+(gestion croisée) crée un scénario où `executor_loop` ET
+`hypothesis3_executor` peuvent chacun tenter de fermer la même position
+au même stop touché — l'un réussit, journalise la clôture ; l'autre
+arrive après coup, échoue (404, position déjà fermée par le premier),
+et son échec passe par le `except Exception` générique de
+`manage_open_trades` sans jamais corriger `trades.statut`. Cohérent
+avec le fait que ces 4 trades fantômes ont tous un `stop_loss_courant`
+proche de niveaux de marché plausibles pour un stop touché — mais pas
+vérifié trade par trade avec certitude.
+
+### 4. PLUS GRAVE : quatre positions ETHUSD réelles ouvertes sur le compte, dont trois ne sont tracées par AUCUNE ligne de la base
+
+`GET /positions` sur le compte "hypothèse 3" montre **4 positions
+ETHUSD distinctes**, deal_ids `00000000-5d2e-c7dd...`, `...ca43...`,
+`...d023...`, `...d1a3...`, tailles 0,226/0,228/0,229/0,256. La base ne
+contient qu'**une seule** ligne `trades` pour ETHUSD/hypothesis3 de
+toute son histoire (id=16, deal_id `00000000-5d58-1f3f...`, taille
+0,19) — un deal_id et une taille qui ne correspondent à AUCUNE des 4
+positions réelles. **Trois positions réelles, avec du capital démo
+engagé dessus, existent sur le broker sans qu'aucune ligne de la base
+n'en ait jamais connaissance** — donc jamais gérées, jamais de stop
+suivi, jamais de clôture possible par le système.
+
+**Hypothèse de cause, non confirmée** : `check_pending_fills` construit
+`positions_by_working_order_id = {p["position"]["workingOrderId"]: p
+for p in positions}` (executor.py ligne 703) — un dict Python, qui ne
+garde qu'UNE position par `workingOrderId` si plusieurs positions
+partagent la même clé. Si l'ordre limite placé par `open_signal` pour
+ce signal ETHUSD a été rempli en plusieurs fois par le broker (fills
+partiels créant plusieurs positions distinctes, toutes rattachées au
+même `workingOrderId` d'origine), ce dict n'en retiendrait qu'une —
+les autres fills resteraient invisibles à `check_pending_fills`, jamais
+rattachés à aucune ligne `trades`. Les tailles proches mais différentes
+des 4 positions réelles (0,226 à 0,256) sont cohérentes avec des fills
+successifs d'un même ordre plutôt qu'avec 4 signaux indépendants
+(auquel cas `_has_active_signal_or_trade` aurait dû bloquer les
+suivants). **Non vérifié avec certitude — hypothèse la plus probable
+identifiée, pas confirmée.**
+
+### Rien corrigé
+
+Aucune ligne de code touchée pour ces quatre points — uniquement
+constaté et journalisé ici, en attendant qu'Ismaël soit informé et
+tranche la suite (les deux process continuent de tourner en l'état, y
+compris la boucle d'erreur 404 du point 2, jusqu'à nouvel ordre).
+
+---
+
 ## 2026-08-21 — Péremption calculée sur le stop d'origine au lieu du stop élargi — corrigé
 
 Trouvé en investiguant, à la demande d'Ismaël, pourquoi les 10 signaux
@@ -71,9 +172,21 @@ below_minimum`) ; nouveau test de non-régression explicite sur le cas
 sans élargissement. 64 tests sur `test_executor.py`, 550 au total,
 aucune régression, 100% toujours vérifié sur les modules critiques.
 
-**Vérification en conditions réelles** : voir résultat daté ci-dessous
-(rejeu d'un signal structuré comme les 5 rejets réels, contre des
-données de marché GOLD en direct, à travers le code corrigé).
+**Vérification en conditions réelles** (21/08/2026, après déploiement) :
+rejeu d'un signal structuré exactement comme les 5 signaux réellement
+rejetés (short, stop à 3 points), avec entrée = prix GOLD en direct
+(drift de péremption nul par construction, isole la question du stop
+élargi) : `_compute_guaranteed_stop_adjustment` élargit correctement
+3 → 46,1 points, `decide_entry` **approuve** (validator + risk_engine,
+0,25 unité, 9,87€ de risque ≈ 1,97% de l'enveloppe) — les paramètres
+exacts de l'ordre limite qui aurait été soumis ont été calculés et
+affichés (`place_limit_order(epic=GOLD, direction=SELL, size=0.25,
+level=4610.85, guaranteed_stop=True, stop_distance=46.1)`). **Aucun
+ordre réel soumis** délibérément — lecture seule au-delà de ce point,
+pour ne pas mélanger un trade de vérification synthétique aux
+statistiques réelles de Station X (voir aussi l'incident critique
+découvert juste après, entrée séparée ci-dessous, qui rendait cette
+prudence d'autant plus justifiée).
 
 ---
 
