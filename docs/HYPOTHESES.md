@@ -814,5 +814,19 @@ le détail complet et les options pour Ismaël.
 
 ---
 
+## 2026-08-21 — Hypothèse #2 : déployée
+
+Identifiants Capital.com dédiés reçus d'Ismaël, `hypothesis2_executor`
+démarré avec succès (voir `docs/DECISIONS.md` pour le détail, y compris
+un bug générique de `switch_account()` trouvé et corrigé au premier
+démarrage — sans rapport avec cette hypothèse spécifiquement). 8
+enveloppes créées, séparées de Station X/H1/H3. **Statut réel à partir
+de cette date : en autonomie.** L'entrée d'origine du 20/08/2026 et la
+décision finale du 21/08/2026 ci-dessus gardent leur texte intact
+(convention de ce fichier) — c'est cette entrée-ci qui fait foi sur le
+statut opérationnel.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2 ou #3 — jamais une modification de ce qui précède.*

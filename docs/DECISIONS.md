@@ -52,8 +52,16 @@ implicitement du comportement par défaut d'un `MagicMock` non configuré
 (fragile, corrigé en même temps). 565 tests au total, 100% toujours
 vérifié sur les modules critiques, `capital_client.py` à 100% également.
 
-**`hypothesis2_executor` relancé après correctif** — voir résultat daté
-ci-dessous.
+**`hypothesis2_executor` relancé après correctif — démarré avec succès**
+(tmux `hypothesis2_executor` sur le VPS) : log de démarrage conforme
+(`source=hypothesis2, résolution=HOUR, 8 actifs`), les 8 enveloppes
+créées en base avec `source='hypothesis2'` (capital initial 500€
+chacune, distinctes des enveloppes des autres sources sur les mêmes
+actifs), process resté stable. Vérifié en direct contre le broker après
+lancement : 0 position, 0 ordre en attente sur le compte "hypothèse 2"
+— cohérent avec un tout premier démarrage. **Hypothèse #2 tourne
+désormais en autonomie**, quatrième et dernier flux prévu à ce jour aux
+côtés de Station X, H1 et H3.
 
 `hypothesis2_executor` ajouté à `process_watchdog.py` (retiré de la
 liste d'exclusion documentée le 21/08/2026 : "à ajouter le jour où il
