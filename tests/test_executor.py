@@ -22,12 +22,14 @@ from src.executor import (
     ManagementActionType,
     OpenTradeState,
     _compute_guaranteed_stop_adjustment,
+    _is_stationx_source,
     cancel_stale_working_orders,
     check_pending_fills,
     compute_tp_allocations,
     compute_trailing_stop_level,
     decide_entry,
     evaluate_position_management,
+    force_close_all_open_trades,
     manage_open_trades,
     open_signal,
 )
@@ -44,6 +46,36 @@ def make_engine():
         caps=RiskCaps(risk_percent_default=2.0, risk_percent_boosted=4.0, envelope_initial=500.0),
         whitelist=WHITELIST,
     )
+
+
+# --- _is_stationx_source (§2.11, incident du 21/08/2026) -----------------
+
+_TELEGRAM_CHANNEL = "-1002481537588"  # id numérique réel du canal Station X, voir CLAUDE.md
+
+
+def test_is_stationx_source_true_for_configured_channel_and_conventional_literal():
+    # signals.source/trades.source stockent la valeur brute du canal
+    # Telegram pour Station X en production (config.telegram_channel),
+    # jamais la chaîne littérale "stationx" — reconnue aussi car utilisée
+    # par convention dans les tests.
+    assert _is_stationx_source(_TELEGRAM_CHANNEL, _TELEGRAM_CHANNEL) is True
+    assert _is_stationx_source("stationx", _TELEGRAM_CHANNEL) is True
+
+
+def test_is_stationx_source_false_for_known_hypotheses():
+    assert _is_stationx_source("hypothesis", _TELEGRAM_CHANNEL) is False
+    assert _is_stationx_source("hypothesis3", _TELEGRAM_CHANNEL) is False
+    assert _is_stationx_source("hypothesis2", _TELEGRAM_CHANNEL) is False
+
+
+def test_is_stationx_source_false_for_unknown_future_hypothesis():
+    # Le point exact de l'incident du 21/08/2026 : une source jamais
+    # explicitement enregistrée nulle part doit être exclue de Station X
+    # par défaut (fail-safe), jamais incluse par oubli — c'est pourquoi
+    # la reconnaissance est positive (== canal configuré), jamais "tout
+    # ce qui n'est pas une hypothèse connue" (voir docstring du module).
+    assert _is_stationx_source("hypothesis4", _TELEGRAM_CHANNEL) is False
+    assert _is_stationx_source("un-canal-jamais-vu", _TELEGRAM_CHANNEL) is False
 
 
 # --- decide_entry --------------------------------------------------------
@@ -777,6 +809,41 @@ def test_check_pending_fills_still_pending_no_change(tmp_path):
     assert filled == 0
 
 
+def test_check_pending_fills_source_filter_only_stationx(tmp_path):
+    # Corrigé le 21/08/2026 (voir docs/DECISIONS.md) : run_executor_loop
+    # appelait check_pending_fills SANS aucun filtre — traitait donc
+    # aussi les remplissages d'ordres hypothesis3/hypothesis2. Vérifie le
+    # nouveau paramètre source_filter (Python), pas seulement `sources`
+    # (liste SQL) déjà couvert par le test précédent.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_prevu, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-h3', 'hypothesis3', 'GOLD', 'demo', 'short', 0.01, 100.0, 101.0, 101.0, 10.0, 2.0, "
+            "'2026-08-21T00:00:00Z', 'en_attente')",
+            (signal_row["id"],),
+        )
+
+    client = MagicMock()
+    client.get_working_orders.return_value = []
+    client.get_open_positions.return_value = [
+        {"position": {"dealId": "position-nouveau-id", "workingOrderId": "deal-h3", "level": 99.98}}
+    ]
+
+    filled = check_pending_fills(db_path, client, source_filter=lambda s: _is_stationx_source(s, _TELEGRAM_CHANNEL))
+    assert filled == 0
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT statut FROM trades WHERE deal_id = 'deal-h3'").fetchone()
+        assert trade["statut"] == "en_attente"  # jamais touché par le filtre stationx
+    finally:
+        conn.close()
+
+
 def test_check_pending_fills_sources_filter_ignores_other_sources(tmp_path):
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
@@ -1147,6 +1214,43 @@ def test_manage_open_trades_include_sources_only_hypothesis(tmp_path):
     assert stationx_manager.balance == 500.0  # enveloppe stationx jamais affectée
 
 
+def test_manage_open_trades_source_filter_only_stationx_ignores_hypothesis3(tmp_path):
+    # Incident réel du 21/08/2026 (voir docs/DECISIONS.md) : executor_loop
+    # excluait exclude_sources=["hypothesis"] uniquement — "hypothesis3"
+    # n'était jamais exclue, executor_loop gérait donc AUSSI les trades
+    # de hypothesis3_executor, en double, avec la mauvaise enveloppe.
+    # Vérifie que source_filter=_is_stationx_source protège correctement
+    # contre une hypothèse non prévue explicitement dans une liste.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+    stationx_trade_id = _insert_open_trade(db_path, signal_row["id"], "stationx", "deal-sx")
+    h3_trade_id = _insert_open_trade(db_path, signal_row["id"], "hypothesis3", "deal-h3")
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 101.0, "offer": 101.2, "marketStatus": "TRADEABLE"}}
+    client.get_prices.return_value = {"prices": []}
+
+    stationx_id, stationx_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="stationx")
+    h3_id, h3_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis3")
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("GOLD", "stationx"): stationx_manager, ("GOLD", "hypothesis3"): h3_manager},
+        envelope_ids={("GOLD", "stationx"): stationx_id, ("GOLD", "hypothesis3"): h3_id},
+        source_filter=lambda s: _is_stationx_source(s, _TELEGRAM_CHANNEL),
+    )
+
+    conn = get_connection(db_path)
+    try:
+        stationx_trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (stationx_trade_id,)).fetchone()
+        h3_trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (h3_trade_id,)).fetchone()
+        assert stationx_trade["statut"] == "ferme"    # stop touché, géré
+        assert h3_trade["statut"] == "ouvert"          # jamais touché : pas Station X
+    finally:
+        conn.close()
+    assert h3_manager.balance == 500.0  # enveloppe hypothesis3 jamais affectée
+
+
 def test_manage_open_trades_triggers_trade_analysis_on_full_close(tmp_path):
     # Bug réel trouvé le 16/08/2026 pendant le test encadré : trade_analyzer.py
     # était entièrement construit et testé mais jamais appelé depuis
@@ -1335,6 +1439,33 @@ def test_force_close_all_open_trades_respects_source_filter(tmp_path):
     conn = get_connection(db_path)
     try:
         trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (hyp_trade_id,)).fetchone()
+        assert trade["statut"] == "ouvert"
+    finally:
+        conn.close()
+
+
+def test_force_close_all_open_trades_source_filter_only_stationx(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+    h3_trade_id = _insert_open_trade(db_path, signal_row["id"], "hypothesis3", "deal-h3")
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 99.0, "offer": 99.2, "marketStatus": "TRADEABLE"}}
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis3")
+    closed = force_close_all_open_trades(
+        db_path, client,
+        envelope_managers={("GOLD", "hypothesis3"): envelope_manager},
+        envelope_ids={("GOLD", "hypothesis3"): envelope_id},
+        source_filter=lambda s: _is_stationx_source(s, _TELEGRAM_CHANNEL),
+    )
+
+    assert closed == 0
+    client.close_position.assert_not_called()
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (h3_trade_id,)).fetchone()
         assert trade["statut"] == "ouvert"
     finally:
         conn.close()

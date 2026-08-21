@@ -12,6 +12,86 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-21 — Incident critique, réponse — Étape 1 : H3 mis en pause
+
+Priorité absolue demandée par Ismaël. `/pause` écarté : il ne bloque que
+les NOUVELLES entrées (`is_asset_blocked`, appelé uniquement dans
+`open_signal`), pas la gestion des positions déjà ouvertes — n'aurait
+donc pas arrêté la course entre `executor_loop` et
+`hypothesis3_executor` sur les trades déjà ouverts.
+
+`hypothesis3_executor` arrêté directement (tmux) : le premier `Ctrl-C`
+a tué le process mais la session tmux est morte avec (comportement déjà
+documenté le 20/08/2026), laissant un orphelin quelques secondes de
+plus — confirmé stoppé (`pgrep` vide) avant de poursuivre.
+`executor_loop` laissé tourner (Station X non concerné par ce bug une
+fois l'étape 2 déployée) : arrêter ce trade continuerait de gérer
+(incorrectement) les trades H3 restants pendant la préparation du
+correctif — accepté comme fenêtre de risque résiduelle, minimisée en
+enchaînant l'étape 2 immédiatement, sans faire autre chose entre les
+deux.
+
+## 2026-08-21 — Incident critique, réponse — Étape 2 : `exclude_sources` remplacé par une reconnaissance positive de Station X
+
+**Rejeté d'emblée** : élargir la liste figée
+(`exclude_sources=[HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, ...]`) —
+règle exactement le même mode d'échec pour la prochaine hypothèse
+oubliée.
+
+**Première version tentée, rejetée en cours d'écriture** :
+`_is_stationx_source(source) = (_envelope_source_key(source) ==
+"stationx")`. Problème trouvé en écrivant le test de non-régression
+lui-même (`hypothesis4` doit être exclue) : `_envelope_source_key`
+retombe elle-même sur `"stationx"` pour toute source NON reconnue
+(comportement voulu à l'origine pour le routage d'enveloppe, où
+Station X est la source imprévisible — id de canal Telegram brut).
+Une hypothèse future jamais ajoutée à `_KNOWN_HYPOTHESIS_SOURCES`
+aurait donc été INCLUSE dans Station X par cette version — exactement
+le bug qu'on corrige, sous une autre forme.
+
+**Corrigé** : `_is_stationx_source(source, telegram_channel)` compare
+`source` à la valeur EXACTE que `telegram_listener.run_listener` écrit
+dans `signals.source`/`trades.source` pour Station X
+(`config.telegram_channel`, vérifié dans le code : `process_message(...,
+channel=config.telegram_channel, ...)`), plus la valeur conventionnelle
+littérale `"stationx"` (utilisée par les tests, jamais écrite en
+production). Reconnaissance positive et explicite — toute source qui
+n'est ni l'une ni l'autre est exclue par défaut, y compris une
+hypothèse jamais enregistrée nulle part (fail-safe, invariant #7).
+
+`run_executor_loop` construit une fermeture `_stationx_filter(source)`
+liée à `config.telegram_channel` une seule fois au démarrage, réutilisée
+pour les 4 points où une fuite existait :
+- `force_close_all_open_trades` (/stop_urgence) : `exclude_sources=
+  [HYPOTHESIS_SOURCE]` → `source_filter=_stationx_filter`
+- `manage_open_trades` : idem
+- La requête des signaux en attente : filtrait `source != HYPOTHESIS_
+  SOURCE` en SQL → filtre Python `_stationx_filter` après une requête
+  non filtrée (le filtre positif ne peut pas s'exprimer proprement en
+  SQL, dépend d'une valeur de config)
+- `check_pending_fills` : **appelée sans AUCUN filtre** (`sources=None`)
+  — bug distinct, trouvé en corrigeant celui-ci : `run_executor_loop`
+  détectait aussi les remplissages d'ordres d'autres sources. Corrigé
+  par le nouveau paramètre `source_filter` (Python, complémentaire au
+  paramètre `sources` existant qui reste une liste SQL positive).
+
+`manage_open_trades`/`force_close_all_open_trades`/`check_pending_
+fills` gagnent toutes trois un paramètre `source_filter: Optional[
+Callable[[str], bool]]`, appliqué après la requête SQL, combinable avec
+`include_sources`/`exclude_sources` existants (non retirés — toujours
+utilisés tels quels par `hypothesis3_executor`/`hypothesis2_executor`
+via `include_sources=[source]`, une inclusion positive et précise, déjà
+correcte).
+
+**Tests** : `test_is_stationx_source_*` (4 tests, y compris le cas
+`hypothesis4`/canal inconnu qui a fait échouer la première version),
+`test_manage_open_trades_source_filter_only_stationx_ignores_
+hypothesis3`, `test_force_close_all_open_trades_source_filter_only_
+stationx`, `test_check_pending_fills_source_filter_only_stationx`. 556
+tests au total, 100% toujours vérifié sur les modules critiques.
+
+---
+
 ## 2026-08-21 — INCIDENT CRITIQUE trouvé en redémarrant executor_loop : gestion croisée H1/H3/H2, trades fantômes, positions orphelines non suivies — RIEN CORRIGÉ, rapport factuel uniquement
 
 Trouvé par accident en redémarrant `executor_loop` pour déployer le

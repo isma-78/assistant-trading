@@ -50,7 +50,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import requests
 
@@ -135,6 +135,39 @@ _TREND_CANDLE_RESOLUTION = {
 
 def _envelope_source_key(source: str) -> str:
     return source if source in _KNOWN_HYPOTHESIS_SOURCES else "stationx"
+
+
+def _is_stationx_source(source: str, telegram_channel: str) -> bool:
+    """Vrai uniquement pour Station X. Utilisée par run_executor_loop
+    pour filtrer les trades/signaux qu'il gère — jamais une liste figée
+    de sources hypothèse à exclure une par une.
+
+    Incident réel du 21/08/2026 (voir docs/DECISIONS.md) : run_executor_
+    loop excluait `exclude_sources=[HYPOTHESIS_SOURCE]` — littéralement
+    "hypothesis" (H1) seule. Au déploiement de l'Hypothèse #3, ni
+    "hypothesis3" ni une future "hypothesis2" n'étaient exclues :
+    executor_loop gérait EN DOUBLE, avec la mauvaise enveloppe (celle de
+    Station X), les trades de hypothesis3_executor — confirmé en
+    production par des échecs 404 répétés des deux process sur les mêmes
+    positions, et des positions réelles orphelines côté broker.
+
+    Une première version de ce correctif se basait sur
+    `_envelope_source_key(source) == "stationx"` — mais cette fonction
+    retombe elle-même sur "stationx" pour toute source NON reconnue
+    (conçue pour le routage d'enveloppe, où c'était le bon choix à
+    l'origine) : une hypothèse future jamais enregistrée dans
+    `_KNOWN_HYPOTHESIS_SOURCES` aurait donc été incluse par erreur dans
+    Station X, exactement le mode d'échec qu'on cherche à éliminer.
+    Corrigé en comparant `source` à `config.telegram_channel` — la
+    valeur EXACTE que `telegram_listener.run_listener` écrit dans
+    `signals.source`/`trades.source` pour Station X (voir son appel à
+    `process_message(..., channel=config.telegram_channel, ...)`).
+    Reconnaissance positive et explicite, jamais "tout ce qui n'est pas
+    une hypothèse connue" — toute source qui n'est ni ce canal ni la
+    valeur conventionnelle "stationx" (utilisée par les tests, jamais
+    écrite en production) est exclue par défaut, fail-safe (invariant
+    #7), jamais l'inverse."""
+    return source == telegram_channel or source == "stationx"
 
 
 def _now() -> str:
@@ -666,16 +699,20 @@ def _load_open_trade_state(conn, trade_row) -> OpenTradeState:
 
 def check_pending_fills(
     db_path: str, client: CapitalClient, sources: Optional[list] = None,
+    source_filter: Optional[Callable[[str], bool]] = None,
     bot_token: Optional[str] = None, chat_id: Optional[str] = None,
 ) -> int:
     """Détecte les ordres limite (statut='en_attente') qui ont été
     exécutés depuis le dernier passage.
 
     `sources` : si fourni, ne traite que les trades dont `source` est
-    dans cette liste — évite tout recoupement entre les deux boucles
-    indépendantes (Station X, Flux B) qui tournent en parallèle sur la
-    même base (voir manage_open_trades, docs/DECISIONS.md). Sans filtre
-    par défaut, comportement historique.
+    dans cette liste — évite tout recoupement entre boucles indépendantes
+    qui tournent en parallèle sur la même base (voir manage_open_trades,
+    docs/DECISIONS.md). `source_filter` : filtre Python alternatif, voir
+    `_is_stationx_source` (docs/DECISIONS.md, 21/08/2026 — comportement
+    historique de `run_executor_loop` : appelée SANS aucun filtre,
+    traitait donc aussi les remplissages d'ordres d'autres sources).
+    Sans filtre par défaut.
 
     `bot_token`/`chat_id` : notifie l'ouverture effective du trade (§7.2 —
     absent avant le 20/08/2026, voir docs/DECISIONS.md : un signal placé
@@ -712,6 +749,8 @@ def check_pending_fills(
     filled = 0
     with connection_scope(db_path) as conn:
         pending = conn.execute(query, params).fetchall()
+        if source_filter is not None:
+            pending = [row for row in pending if source_filter(row["source"])]
         for trade_row in pending:
             order_deal_id = trade_row["deal_id"]
             if order_deal_id in working_order_ids:
@@ -751,6 +790,7 @@ def manage_open_trades(
     db_path: str, client: CapitalClient, risk_engine: RiskEngine,
     envelope_managers: dict, envelope_ids: dict,
     include_sources: Optional[list] = None, exclude_sources: Optional[list] = None,
+    source_filter: Optional[Callable[[str], bool]] = None,
     anthropic_client=None, bot_token: Optional[str] = None, chat_id: Optional[str] = None,
 ) -> None:
     """Parcourt les trades ouverts, applique evaluate_position_management
@@ -764,12 +804,20 @@ def manage_open_trades(
     deux sources sur le même actif (§2.11, Flux B — voir docs/DECISIONS.md).
 
     `include_sources`/`exclude_sources` : filtrent les trades gérés par
-    cet appel — indispensable depuis que deux boucles indépendantes
-    (`run_executor_loop` pour Station X, `trend_executor.run_trend_loop`
-    pour le Flux B) tournent en parallèle sur la même base : chacune ne
-    doit gérer que ses propres trades, jamais ceux de l'autre boucle.
-    Aucun filtre par défaut (comportement historique, utilisé par les
-    tests qui ne se soucient pas du multi-source).
+    cet appel (listes SQL IN/NOT IN) — indispensable depuis que plusieurs
+    boucles indépendantes tournent en parallèle sur la même base :
+    chacune ne doit gérer que ses propres trades, jamais ceux d'une
+    autre boucle. Utilisé par les boucles "hypothèse" (une seule source
+    précise à inclure, ex `include_sources=[HYPOTHESIS3_SOURCE]`).
+
+    `source_filter` : filtre Python appliqué APRÈS la requête SQL,
+    alternative à `exclude_sources` pour Station X — voir
+    `_is_stationx_source` et docs/DECISIONS.md (21/08/2026, incident où
+    `exclude_sources=[HYPOTHESIS_SOURCE]` avait oublié "hypothesis3").
+    Combinable avec `include_sources`/`exclude_sources` mais pensé pour
+    s'y substituer côté Station X. Aucun filtre par défaut (comportement
+    historique, utilisé par les tests qui ne se soucient pas du
+    multi-source).
 
     Le total de réserve (§2.3) n'est plus tenu en mémoire d'un trade à
     l'autre : chaque clôture complète relit `load_reserve_total(db_path)`
@@ -794,6 +842,9 @@ def manage_open_trades(
 
     with connection_scope(db_path) as conn:
         open_trades = conn.execute(query, params).fetchall()
+
+    if source_filter is not None:
+        open_trades = [row for row in open_trades if source_filter(row["source"])]
 
     for trade_row in open_trades:
         try:
@@ -997,12 +1048,16 @@ def force_close_all_open_trades(
     db_path: str, client: CapitalClient,
     envelope_managers: dict, envelope_ids: dict,
     include_sources: Optional[list] = None, exclude_sources: Optional[list] = None,
+    source_filter: Optional[Callable[[str], bool]] = None,
     anthropic_client=None, bot_token: Optional[str] = None, chat_id: Optional[str] = None,
     reason: str = "Arrêt d'urgence (/stop_urgence)",
 ) -> int:
     """Ferme immédiatement TOUTES les positions ouvertes du périmètre
     donné (source), au prix courant, et annule tous les ordres limite en
     attente du même périmètre. Retourne le nombre de positions fermées.
+
+    `source_filter` : voir manage_open_trades — même rôle, mêmes
+    raisons (docs/DECISIONS.md, 21/08/2026).
 
     Seule dérogation assumée à "ordres limite uniquement, jamais au
     marché" (§2.8) : /stop_urgence est une action de sécurité manuelle
@@ -1021,6 +1076,9 @@ def force_close_all_open_trades(
         params.extend(exclude_sources)
     with connection_scope(db_path) as conn:
         open_trades = conn.execute(query, params).fetchall()
+
+    if source_filter is not None:
+        open_trades = [row for row in open_trades if source_filter(row["source"])]
 
     closed = 0
     for trade_row in open_trades:
@@ -1054,6 +1112,8 @@ def force_close_all_open_trades(
         pending_params.extend(exclude_sources)
     with connection_scope(db_path) as conn:
         pending = conn.execute(pending_query, pending_params).fetchall()
+    if source_filter is not None:
+        pending = [row for row in pending if source_filter(row["source"])]
     for trade_row in pending:
         try:
             client.cancel_working_order(trade_row["deal_id"])
@@ -1142,6 +1202,9 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
     logger.info("Démarrage de la boucle d'exécution démo Station X (intervalle=%ds, %d actifs)", interval_seconds, len(whitelist))
     process_name = "executor"
 
+    def _stationx_filter(source: str) -> bool:
+        return _is_stationx_source(source, config.telegram_channel)
+
     while True:
         try:
             now = datetime.now(timezone.utc)
@@ -1184,7 +1247,7 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
             if stop_event_id is not None:
                 closed = force_close_all_open_trades(
                     db_path, client, envelope_managers, envelope_ids,
-                    exclude_sources=[HYPOTHESIS_SOURCE],
+                    source_filter=_stationx_filter,
                     anthropic_client=anthropic_client, bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,
                 )
                 circuit_breaker_store.mark_stop_urgence_handled(db_path, process_name, stop_event_id)
@@ -1192,16 +1255,22 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
                 time.sleep(interval_seconds)
                 continue
 
-            check_pending_fills(db_path, client, bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id)
+            check_pending_fills(
+                db_path, client, source_filter=_stationx_filter,
+                bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,
+            )
             cancel_stale_working_orders(db_path, client)
 
-            # Exclut le Flux B (source="hypothesis", géré par
-            # trend_executor.run_trend_loop, process séparé) — chaque
-            # boucle ne traite que ses propres signaux/trades.
+            # Ne garde que Station X (docs/DECISIONS.md, 21/08/2026) :
+            # _is_stationx_source exclut par défaut toute source
+            # hypothèse, existante ou future, jamais une liste figée à
+            # tenir à jour (incident réel — "hypothesis3" avait été
+            # oubliée d'une liste d'exclusion analogue).
             with connection_scope(db_path) as conn:
-                pending_signals = conn.execute(
-                    "SELECT * FROM signals WHERE statut = 'a_valider' AND source != ?", (HYPOTHESIS_SOURCE,)
+                all_pending_signals = conn.execute(
+                    "SELECT * FROM signals WHERE statut = 'a_valider'"
                 ).fetchall()
+            pending_signals = [row for row in all_pending_signals if _stationx_filter(row["source"])]
             for signal_row in pending_signals:
                 key = (signal_row["actif"], "stationx")
                 if key not in envelope_managers:
@@ -1215,7 +1284,7 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
 
             manage_open_trades(
                 db_path, client, risk_engine, envelope_managers, envelope_ids,
-                exclude_sources=[HYPOTHESIS_SOURCE],
+                source_filter=_stationx_filter,
                 anthropic_client=anthropic_client, bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,
             )
         except Exception:
