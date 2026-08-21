@@ -12,6 +12,71 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-21 — Péremption calculée sur le stop d'origine au lieu du stop élargi — corrigé
+
+Trouvé en investiguant, à la demande d'Ismaël, pourquoi les 10 signaux
+GOLD reçus depuis le déblocage du stop garanti (20/08/2026) avaient tous
+été rejetés avant même d'atteindre cette logique.
+
+**Cause confirmée dans le code** : `open_signal()` appelait `decide_entry()`
+(donc `validator.validate_signal()`, donc le calcul de tolérance de
+péremption `stop_distance * STALENESS_FRACTION_OF_STOP_DISTANCE`) avec
+`signal_row["stop_loss"]` — le stop BRUT du signal Station X (2-3 points
+sur GOLD) — alors que `_compute_guaranteed_stop_adjustment()`, qui
+détermine le stop RÉELLEMENT utilisé pour la décision (~1% du prix sur
+GOLD, ~45 points), n'était appelée qu'après, une fois `decide_entry`
+déjà approuvé.
+
+**Vérifié numériquement sur les 5 rejets réels** (les 5 autres avaient
+échoué dès l'extraction, sans rapport avec ce point) : la tolérance
+utilisée (50% de 2-3 points ≈ 1-1,5 point) était 15 à 20 fois plus
+serrée que la tolérance qu'aurait donnée le stop réellement utilisé
+(50% de ~45 points ≈ 22-23 points). Les 5 écarts observés (2,05 à 7,15
+points) sont tous largement sous ce seuil élargi — les 5 auraient été
+approuvés côté péremption avec le stop réel.
+
+**Corrigé** : `_compute_guaranteed_stop_adjustment()` est désormais
+appelée AVANT `decide_entry()` dans `open_signal()` (au lieu d'après),
+et son résultat (`adjustment.stop_price`, le stop effectif) est transmis
+à `decide_entry()` à la place du stop brut du signal — péremption ET
+sizing sont donc calculés sur le stop réellement utilisé, dès le
+premier passage. Conséquence directe : la logique de "second passage"
+(reconstruction d'un `TradeSignal` élargi, second appel à
+`risk_engine.evaluate_new_entry`, second `risk_decisions`) devient
+inutile et est supprimée — le sizing est correct dès le premier appel à
+`decide_entry`, un seul `risk_decisions` par signal désormais (au lieu
+de deux dans le cas élargi).
+
+**Comportement inchangé pour les signaux qui n'ont jamais besoin
+d'élargissement** (majorité des cas, y compris tous les actifs sans
+exigence de stop garanti du broker) : `_compute_guaranteed_stop_
+adjustment` retourne alors `stop_price` identique au stop d'origine —
+`decide_entry` reçoit exactement la même valeur qu'avant ce correctif.
+Épinglé par un test dédié (`test_open_signal_no_widening_needed_sizing_
+unchanged_from_original_stop`) qui vérifie taille, risque en euros, et
+paramètres d'ordre exacts.
+
+**Coût accepté** : `_compute_guaranteed_stop_adjustment` (un appel
+`get_market_snapshot`) est désormais appelée pour TOUT signal atteignant
+ce point, même ceux qui seront ensuite rejetés par `decide_entry` pour
+d'autres raisons (liste blanche, confiance, etc.) — auparavant, cet
+appel n'avait lieu qu'après approbation. Coût réseau marginal, du même
+ordre que `get_price_snapshot` déjà appelé inconditionnellement.
+
+**Tests** : `tests/test_executor.py` — le test couvrant l'ancien
+"second passage" (`test_open_signal_rejected_when_resize_after_
+widening_below_minimum_size`) adapté au nouveau comportement en un seul
+passage (`test_open_signal_rejected_when_widened_stop_gives_size_
+below_minimum`) ; nouveau test de non-régression explicite sur le cas
+sans élargissement. 64 tests sur `test_executor.py`, 550 au total,
+aucune régression, 100% toujours vérifié sur les modules critiques.
+
+**Vérification en conditions réelles** : voir résultat daté ci-dessous
+(rejeu d'un signal structuré comme les 5 rejets réels, contre des
+données de marché GOLD en direct, à travers le code corrigé).
+
+---
+
 ## 2026-08-21 — Construction des Hypothèses #3 et #2 (feu vert explicite d'Ismaël)
 
 Feu vert reçu : « toutes les questions préalables étant résolues ». Ce

@@ -443,7 +443,18 @@ def open_signal(
        de sizing pour un signal qui sera de toute façon rejeté.
     2. Plafond d'exposition simultanée (§2.3, 10% de l'enveloppe) :
        vérifié APRÈS decide_entry, seul moment où le risque incrémental
-       (risk_amount_eur) de CE signal est connu."""
+       (risk_amount_eur) de CE signal est connu.
+
+    `_compute_guaranteed_stop_adjustment` est appelée AVANT decide_entry
+    (corrigé le 21/08/2026, voir docs/DECISIONS.md) : le stop réellement
+    utilisé pour la décision (péremption ET sizing) est désormais le
+    stop EFFECTIF (élargi si le broker l'exige), jamais le stop brut du
+    signal — incohérence trouvée en investiguant pourquoi aucun signal
+    GOLD n'avait jamais atteint la logique de stop garanti (la tolérance
+    de péremption, calculée sur un stop de 2-3 points, rejetait presque
+    tout avant même d'atteindre l'élargissement à ~45 points). Ceci
+    supprime aussi le besoin d'un second passage risk_engine après coup :
+    le sizing est correct dès le premier appel à decide_entry."""
     asset = signal_row["actif"]
     epic = asset
     now = _now()
@@ -464,9 +475,13 @@ def open_signal(
 
     snapshot = get_price_snapshot(client, epic)
 
+    adjustment = _compute_guaranteed_stop_adjustment(
+        client, epic, signal_row["sens"], signal_row["entree_min"], signal_row["stop_loss"],
+    )
+
     decision = decide_entry(
         asset=asset, direction=signal_row["sens"], entry_price=signal_row["entree_min"],
-        stop_price=signal_row["stop_loss"], confidence=signal_row["confiance"] or 0.0,
+        stop_price=adjustment.stop_price, confidence=signal_row["confiance"] or 0.0,
         current_price=snapshot.mid, market_status=snapshot.market_status,
         risk_engine=risk_engine, whitelist=whitelist, envelope_balance=envelope_manager.balance,
         confidence_threshold=confidence_threshold, go_nogo_ok=go_nogo_status.allowed,
@@ -502,10 +517,6 @@ def open_signal(
         logger.info("Signal %s rejeté : %s", signal_row["id"], decision.detail)
         return None
 
-    adjustment = _compute_guaranteed_stop_adjustment(
-        client, epic, signal_row["sens"], signal_row["entree_min"], signal_row["stop_loss"],
-    )
-
     units, risk_amount_eur = decision.risk_decision.units, decision.risk_decision.risk_amount_eur
     if adjustment.widened:
         # Le stop budgété par le signal ne satisfait pas le minimum garanti
@@ -513,40 +524,12 @@ def open_signal(
         # d'Ismaël, 20/08/2026, remplace le rejet du 16/08/2026 : compte
         # démo, priorité à l'observation du signal exécuté plutôt qu'à la
         # fidélité parfaite au stop d'origine — voir docs/DECISIONS.md).
-        # risk_engine redimensionne SUR CE NOUVEAU STOP pour garder le
-        # risque en euros plafonné à 2%/4% de l'enveloppe (invariant #2 :
-        # jamais le même nombre d'unités qu'au stop d'origine, ce qui
-        # augmenterait silencieusement le risque réel).
-        widened_signal = TradeSignal(
-            asset=asset, direction=signal_row["sens"], entry_price=signal_row["entree_min"],
-            stop_price=adjustment.stop_price, confidence=signal_row["confiance"] or 0.0,
-        )
-        resized = risk_engine.evaluate_new_entry(
-            widened_signal, envelope_manager.balance, confidence_threshold, go_nogo_status.allowed,
-        )
-        with connection_scope(db_path) as conn:
-            conn.execute(
-                "INSERT INTO risk_decisions (signal_id, decided_at, approved, reason, detail, units, risk_amount_eur) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    signal_row["id"], _now(), int(resized.approved),
-                    resized.reason.value if resized.reason else None,
-                    f"Redimensionnement après élargissement du stop garanti ({signal_row['stop_loss']} -> {adjustment.stop_price})",
-                    resized.units, resized.risk_amount_eur,
-                ),
-            )
-        if not resized.approved:
-            logger.warning(
-                "Signal %s : rejeté après élargissement du stop garanti — redimensionnement refusé (%s)",
-                signal_row["id"], resized.reason,
-            )
-            with connection_scope(db_path) as conn:
-                conn.execute("UPDATE signals SET statut = 'rejete' WHERE id = ?", (signal_row["id"],))
-            return None
-        units, risk_amount_eur = resized.units, resized.risk_amount_eur
+        # Le sizing (units/risk_amount_eur) ci-dessus est déjà celui du
+        # stop élargi (decide_entry l'a reçu dès le départ, 21/08/2026) —
+        # invariant #2 respecté sans second passage.
         logger.info(
-            "Signal %s : stop garanti élargi %s -> %s, taille redimensionnée %s -> %s",
-            signal_row["id"], signal_row["stop_loss"], adjustment.stop_price, decision.risk_decision.units, units,
+            "Signal %s : stop garanti élargi %s -> %s, taille calculée directement dessus (%s unités)",
+            signal_row["id"], signal_row["stop_loss"], adjustment.stop_price, units,
         )
 
     direction_api = DIRECTION_TO_API[signal_row["sens"]]

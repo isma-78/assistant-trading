@@ -451,6 +451,57 @@ def test_open_signal_approved_places_limit_order_and_records_trade(tmp_path):
         conn.close()
 
 
+def test_open_signal_no_widening_needed_sizing_unchanged_from_original_stop(tmp_path):
+    # Épingle le comportement de sizing quand aucun élargissement n'est
+    # nécessaire (dealingRules absent -> guaranteed_required=False,
+    # adjustment.stop_price == stop d'origine) — corrigé le 21/08/2026
+    # (voir docs/DECISIONS.md) : _compute_guaranteed_stop_adjustment est
+    # désormais appelée AVANT decide_entry, ce test vérifie explicitement
+    # que ce déplacement ne change RIEN au sizing pour ce cas majoritaire.
+    # entree=100, stop=101 -> distance=1 ; enveloppe=500€, risk 2% = 10€ ;
+    # units = 10/(1*0.86) = 11.627... -> floor au pas de 0.01 = 11.62.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-xyz", "level": 100.0}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result == "deal-xyz"
+    client.place_limit_order.assert_called_once()
+    _, kwargs = client.place_limit_order.call_args
+    assert kwargs["size"] == pytest.approx(11.62)
+    assert kwargs["guaranteed_stop"] is False
+    assert kwargs["stop_distance"] is None
+
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT * FROM trades").fetchone()
+        assert trade["taille_initiale"] == pytest.approx(11.62)
+        assert trade["stop_loss_initial"] == pytest.approx(101.0)  # inchangé, pas élargi
+        assert trade["stop_elargi"] == 0
+        assert trade["stop_origine_signal"] is None
+        assert trade["risque_eur"] == pytest.approx(9.99)  # round(11.62 * 1 * 0.86, 2)
+        decision = conn.execute(
+            "SELECT approved, units, risk_amount_eur FROM risk_decisions WHERE signal_id = ?", (signal_row["id"],)
+        ).fetchone()
+        assert decision["approved"] == 1
+        assert decision["units"] == pytest.approx(11.62)
+        # Une seule ligne risk_decisions (pas de second passage) pour un
+        # signal qui n'a jamais eu besoin d'élargissement.
+        count = conn.execute("SELECT COUNT(*) AS n FROM risk_decisions WHERE signal_id = ?", (signal_row["id"],)).fetchone()["n"]
+        assert count == 1
+    finally:
+        conn.close()
+
+
 def test_open_signal_records_market_session_on_open(tmp_path):
     # Collecte uniquement (§7.2, 20/08/2026, voir docs/DECISIONS.md et
     # session_marker.py) — vérifie que la session est bien persistée,
@@ -560,11 +611,14 @@ def test_open_signal_widens_stop_and_resizes_when_too_tight_for_guaranteed_stop(
         conn.close()
 
 
-def test_open_signal_rejected_when_resize_after_widening_below_minimum_size(tmp_path):
+def test_open_signal_rejected_when_widened_stop_gives_size_below_minimum(tmp_path):
     # Cas limite : le stop élargi est tellement large que la taille
-    # redimensionnée tombe sous min_units — l'entrée doit être rejetée à
-    # ce stade (jamais placée avec l'ancienne taille calculée sur le
-    # stop d'origine, ce qui dépasserait le risque budgété).
+    # calculée dessus tombe sous min_units — l'entrée doit être rejetée
+    # (jamais placée avec une taille calculée sur le stop d'origine, ce
+    # qui dépasserait le risque budgété). Corrigé le 21/08/2026 (voir
+    # docs/DECISIONS.md) : le stop élargi est désormais connu AVANT
+    # decide_entry, donc ce rejet arrive en un seul passage, pas un
+    # second appel risk_engine après coup.
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
     signal_row = _insert_signal(db_path, confiance=1.0)  # entree=100, stop=101
@@ -572,7 +626,7 @@ def test_open_signal_rejected_when_resize_after_widening_below_minimum_size(tmp_
     client = MagicMock()
     client.get_market_snapshot.return_value = {
         "snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"},
-        # min = 10000 points -> unités redimensionnées bien sous min_units (0.01)
+        # min = 10000 points -> unités calculées bien sous min_units (0.01)
         "dealingRules": {"minGuaranteedStopDistance": {"unit": "POINTS", "value": 10000.0}},
     }
 
@@ -589,10 +643,14 @@ def test_open_signal_rejected_when_resize_after_widening_below_minimum_size(tmp_
         signal = conn.execute("SELECT statut FROM signals WHERE id = ?", (signal_row["id"],)).fetchone()
         assert signal["statut"] == "rejete"
         assert conn.execute("SELECT COUNT(*) AS n FROM trades").fetchone()["n"] == 0
-        # Deux lignes risk_decisions : la décision initiale (stop d'origine)
-        # puis le rejet du redimensionnement (stop élargi) — les deux
-        # journalisées, jamais silencieux.
-        assert conn.execute("SELECT COUNT(*) AS n FROM risk_decisions WHERE signal_id = ?", (signal_row["id"],)).fetchone()["n"] == 2
+        # Une seule ligne risk_decisions désormais (un seul passage) —
+        # toujours journalisée, jamais silencieuse.
+        decisions = conn.execute(
+            "SELECT approved, reason FROM risk_decisions WHERE signal_id = ?", (signal_row["id"],)
+        ).fetchall()
+        assert len(decisions) == 1
+        assert decisions[0]["approved"] == 0
+        assert decisions[0]["reason"] == "position_size_below_minimum"
     finally:
         conn.close()
 
