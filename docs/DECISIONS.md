@@ -158,8 +158,28 @@ Tests : `tests/test_ict_strategy.py` (34 tests, 100% de couverture),
 
 ### Vérification en conditions réelles (H3, contrôlée)
 
-[Section complétée après le déploiement et le test encadré — voir plus
-bas dans ce document pour le résultat daté.]
+Déployé sur le VPS (`git pull`, 549 tests verts, 100% sur tous les
+modules critiques y compris `ict_strategy`), `.env` complété
+(`CAPITAL_ACCOUNT_ID_HYPOTHESIS3`/`CAPITAL_ACCOUNT_ID_HYPOTHESIS2`).
+
+`trend_executor` (H1) redémarré en premier pour valider le refactor en
+conditions réelles avant de construire dessus : reconnecté proprement,
+log de démarrage conforme (`source=hypothesis, résolution=HOUR, 8
+actifs`), enveloppes existantes relues avec leurs soldes réels
+(EURUSD 500,35€, GBPUSD 499€, US30 507,14€ — pas remises à 500€ à plat,
+confirme qu'aucun état n'a été perdu par le refactor).
+
+`hypothesis3_executor` démarré pour la première fois (nouvelle session
+tmux) : connexion réussie avec les identifiants H3, `switch_account`
+vers le compte "hypothèse 3" confirmé, log de démarrage conforme
+(`source=hypothesis3, résolution=MINUTE_15, 8 actifs`), 8 enveloppes
+créées en base avec `source='hypothesis3'` (capital initial 500€
+chacune, distinctes des enveloppes `hypothesis`/Station X du même
+actif). Process resté vivant et sans erreur sur plusieurs cycles de 60s
+consécutifs (aucun signal généré pendant la fenêtre d'observation — pas
+anormal, une rupture M15 confirmée reste un événement rare). Laissé en
+autonomie sur le VPS (tmux `hypothesis3_executor`), à ajouter au
+`process_watchdog.py` (déjà fait ci-dessus).
 
 ---
 
