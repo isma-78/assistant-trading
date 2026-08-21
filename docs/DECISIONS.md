@@ -90,7 +90,35 @@ sécurité mis à jour avec les nouvelles valeurs exactes (5,0 → 5,05 sur
 GOLD, 250 → 252,5 sur BTCUSD). 562 tests au total, 100% toujours vérifié
 sur les modules critiques.
 
-**Vérification en conditions réelles** : voir résultat daté ci-dessous.
+**Vérification en conditions réelles** (21/08/2026, après déploiement) :
+
+- **EURUSD-24 (correctif 2)** : dès le premier cycle après redémarrage,
+  le trailing a réellement avancé — log observé : `Trailing plafonné au
+  minimum garanti broker pour le trade 24 : 1.170985 -> 1.17090409
+  (candidat brut 1.169965)`. Le stop garanti a bien été mis à jour côté
+  broker (plus de blocage indéfini). **Un résidu attendu, pas un échec
+  du correctif** : le cycle suivant a de nouveau été rejeté
+  (`error.invalid.stoploss.minvalue: 1.17091`, un écart de ~0,000006 —
+  la contrainte a continué de dériver entre-temps, exactement le
+  phénomène diagnostiqué). Sans gravité : contrairement à l'ancien
+  comportement, ce n'est plus un blocage permanent — un seul cycle sur
+  plusieurs échoue désormais au lieu de 67/67, et le dernier stop
+  accepté reste actif entre deux tentatives (position toujours
+  protégée). La marge de 1% réduit la fréquence des rejets sans les
+  éliminer totalement, cohérent avec une contrainte qui continue de
+  bouger en direct.
+- **GOLD, ordre réel (correctifs 1+2 combinés)** : un 4e signal de test
+  a été soumis après déploiement — **accepté de bout en bout par le
+  broker** (trade id=30, deal_id réel `00000000-5d7b-b311-...`, statut
+  `en_attente`, stop garanti élargi à 4722,679234 avec la marge
+  appliquée). Confirme la résolution complète des deux erreurs
+  rencontrées lors des tentatives précédentes (`error.validation.
+  limit.price`, `error.invalid.stoploss.minvalue`). **Annulé
+  immédiatement après confirmation** (broker + base) pour ne pas
+  laisser un ordre de test synthétique se transformer en position
+  réelle dans les statistiques Station X — vérifié après coup : 0 ordre
+  en attente, 1 seule position GOLD réelle (le trade H1 déjà suivi),
+  aucun état résiduel.
 
 ---
 
