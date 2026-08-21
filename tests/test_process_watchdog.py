@@ -96,5 +96,6 @@ def test_run_watchdog_check_covers_every_known_process(tmp_path):
         "trend_executor": "down",
         "control_bot": "down",
         "hypothesis3_executor": "down",
+        "hypothesis2_executor": "down",
     }
     assert set(PROCESSES.keys()) == set(results.keys())
