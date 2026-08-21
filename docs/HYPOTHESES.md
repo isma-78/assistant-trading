@@ -650,5 +650,117 @@ séparé, aucun risque de collision). À confirmer ou modifier.
 
 ---
 
+## 2026-08-21 — Budget de variables : correction du modèle (H1/H3/H2)
+
+**Objection reçue d'Ismaël** (posée sur H3, à appliquer à H2 si elle
+tient) : le §3.8 encadre des variables testées par corrélation sur une
+même population de trades (`adaptive_rules`, les 5 variables listées
+plus haut) — alors que H1, H3 et H2 sont chacune une "stratégie
+technique complémentaire" au sens du §2.11, avec son propre budget de
+paramètres, jamais mélangé au budget des 5 variables de sélection de
+signal. Reconsidéré sous cet angle, pas simplement assumé.
+
+**Vérifié par citation exacte, pas supposé** — deux passages de
+`docs/CDC_v4.md`, jamais relus sous cet angle avant aujourd'hui,
+tranchent la question :
+
+> §2.11 : « **2-3 paramètres maximum, choisis a priori**. [...]
+> **Métriques calculées séparément par source** — si l'une a un edge et
+> l'autre non, les mélanger masquerait ce fait. »
+
+> §3.9, Promotion : « Une hypothèse validée sur ≥10 trades prospectifs
+> devient candidate à **une 6e variable officielle**, avec sa
+> justification versée au dossier. »
+
+Le second passage est décisif : une hypothèse *devient candidate* à une
+6e variable **après** sa validation prospective — cette formulation
+n'a de sens que si ses paramètres ne sont **pas déjà comptés** parmi
+les 5 initiales avant leur promotion (on ne peut pas déjà faire partie
+des 5 et "devenir" la 6e). Le CDC distingue donc explicitement deux
+budgets, que mon calcul initial avait fusionnés à tort :
+
+- **§3.8 (`adaptive_rules`, 5 variables)** : recherche de corrélation
+  post-hoc sur l'historique de trades déjà accumulé, correction
+  multiple-comparaisons + 10 trades/variable. **0/5 consommé à ce
+  jour** — `adaptive_rules` n'existe pas encore, aucune hypothèse n'y a
+  jamais touché. Seule une hypothèse **promue** (§3.9, ≥10 trades
+  prospectifs validés) y entrerait, comme 6e variable et suivantes.
+- **§2.11 (stratégie technique complémentaire), 2-3 paramètres maximum
+  PAR INSTANCE** : chaque hypothèse (H1, H3, H2, une future) a son
+  propre budget indépendant, jamais partagé avec les autres.
+
+**Bilan corrigé de chaque hypothèse** (les sections "Budget de
+variables" d'origine, plus haut dans ce fichier, restent inchangées —
+convention de ce fichier, une entrée n'est jamais réécrite — mais sont
+remplacées en pratique par ce qui suit) :
+
+| Hypothèse | Paramètre propre (§2.11, cap 2-3) | Budget §3.8 touché |
+|---|---|---|
+| H1 | N=20 (Donchian) — 1/3 | 0 (aucune promotion) |
+| H3 | Résolution M15 — 1/3 (MA200 et N=20 réutilisés à l'identique de H1, jamais "dépensés" une seconde fois) | 0 |
+| H2 (Option B) | K=2 (fractale) — 1/3 (régime, canal, ratios Fibonacci réutilisés/fixés par le CDC §3.3) | 0 |
+
+**Aucune des trois hypothèses n'est donc "la dernière place disponible"
+pour une autre** — la tension affichée dans les entrées d'origine
+("H3 consomme le seul slot restant", "H2 atteindrait 5/5, le plafond
+exact") était une conséquence du modèle de budget erroné, pas une
+contrainte réelle du CDC.
+
+**Contrainte réelle mise en lumière par cette correction, jusque-là
+sous-pondérée** : §3.9 plafonne à **3 hypothèses par cycle maximum**
+(« au-delà, la correction pour comparaisons multiples rend la barre
+inatteignable ») — c'est CE plafond, pas un compte de variables, qui
+encadre combien d'hypothèses peuvent tourner en parallèle. H1 + H3 + H2
+= exactement 3, pile au plafond une fois H2 validée. Une éventuelle 4e
+hypothèse **prédictive** proposée pendant que ces trois sont encore en
+observation buterait sur ce plafond — à traiter explicitement le jour
+venu, pas une décision à prendre seul. Voir `docs/DECISIONS.md`
+(21/08/2026) sur le 4e compte "synthèse" évoqué par Ismaël : il ne
+s'agit PAS d'une 4e hypothèse prédictive et il ne consomme donc pas ce
+plafond — la distinction précise est faite là-bas.
+
+**Ce que cette correction NE change PAS** : le principe, la résolution
+M15 et les réserves théoriques de H3 restent solides et non retouchés
+(demande explicite d'Ismaël) ; le principe, les définitions
+FVG/Fibonacci/K et les angles morts assumés de H2 restent inchangés.
+Seule la comptabilité du budget était fausse.
+
+---
+
+## 2026-08-21 — Hypothèse #2 : décision finale d'Ismaël
+
+Sur la base de la correction de modèle de budget ci-dessus (condition
+qu'Ismaël avait posée explicitement avant de trancher) :
+
+1. **Option B retenue** (détection de swings par fractale, Bill
+   Williams, K=2) — devient le paramètre propre de H2 (1/3 de son
+   budget §2.11, voir tableau ci-dessus), ne consomme aucun budget
+   partagé avec H1/H3. Conséquence directe : la cassure de structure
+   (BOS/CHoCH, point 3 de l'entrée du 20/08/2026) devient définissable
+   proprement à partir des swings fractals, plus un simple proxy
+   MA(200) comme sous l'Option A.
+2. **Actifs** : les mêmes 8 que H1/H3 (GOLD, US100, US30, EURUSD,
+   GBPUSD, USDJPY, BTCUSD, ETHUSD) — confirmé, pas de sous-ensemble.
+3. **Absence de confirmation avant entrée** (pas de bougie de réaction
+   attendue dans la zone de confluence avant d'entrer, point 4 de
+   l'entrée du 20/08/2026) — acceptée telle quelle pour cette première
+   version. Reste documentée comme **limitation explicite**, pas
+   compensée par de la complexité supplémentaire à ce stade : si les
+   résultats prospectifs montrent que cette absence de confirmation
+   dégrade la sélectivité, ce sera le constat d'une future entrée
+   datée, jamais un ajustement silencieux en cours de route.
+
+**Statut réel à partir de cette date : validée par Ismaël dans son
+principe** — l'entrée d'origine du 20/08/2026 ci-dessus garde sa
+mention « proposée, en attente de validation » intacte (convention de
+ce fichier, une entrée n'est jamais réécrite) ; c'est cette entrée-ci
+qui fait foi sur le statut réel. **Aucun code d'exécution n'existe
+encore** : construction (module de détection, process exécuteur dédié,
+câblage des identifiants du compte "hypothèse 2" déjà créé) en attente
+d'un feu vert explicite d'Ismaël, distinct de cette validation de
+principe.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2 ou #3 — jamais une modification de ce qui précède.*

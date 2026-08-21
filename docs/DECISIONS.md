@@ -12,6 +12,51 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-21 — 4e compte démo "synthèse" proposé par Ismaël = `allocator.py` (§2.5) — intention future, rien construit
+
+Ismaël a évoqué un 4e compte démo destiné à tester une logique
+combinant les flux existants (Station X, H1, et H3/H2 une fois
+validées). Question posée explicitement : est-ce une idée nouvelle, ou
+déjà prévue par l'architecture ?
+
+**Correspondance confirmée, avec une précision technique importante**
+(pas un simple "oui ça correspond") : `docs/CDC_v4.md` §2.5 ("Allocation
+automatique du capital réel") alloue le capital réel vers les **actifs**
+les mieux classés par score de confiance (§2.4), sous plafonds durs
+(max 2 actifs en réel en phase B, max 60% du capital réel par actif),
+avec retrait automatique si le score repasse sous le seuil éliminatoire.
+
+Ce que ce mécanisme fait concrètement, une fois `confidence_scorer.py`
+étendu par **(actif, source)** comme c'est déjà le cas depuis le palier
+P2.8 : une **sélection de capital entre les flux les plus performants
+sur un même actif** — ex. allouer le réel sur GOLD via l'Hypothèse #1
+plutôt que via Station X si son score de confiance est meilleur.
+
+**Ce que ce mécanisme NE fait PAS** : il ne fusionne jamais les
+**signaux d'entrée** de plusieurs flux (pas de logique du type "n'ouvrir
+un trade que si 2 flux sur 3 sont d'accord simultanément"). Si
+l'intention d'Ismaël pour ce 4e compte est une fusion de signaux plutôt
+qu'une sélection de capital entre stratégies déjà indépendantes, ce
+serait un mécanisme distinct, non prévu littéralement par le CDC — à
+clarifier explicitement le jour où cette idée est reprise, pas quelque
+chose que je déciderais seul entre les deux lectures.
+
+**Rien construit** : `allocator.py` n'a de sens qu'une fois
+`confidence_scorer.py` produit des scores réels sur un volume de trades
+significatif (constat d'Ismaël lui-même) — vérifié le 20/08/2026 :
+**0 actif/source éligible aujourd'hui**, tous bloqués sur le seuil de
+20 trades minimum et/ou l'absence de données de spread (voir entrée du
+20/08/2026 ci-dessous). Toute logique de combinaison serait fabriquée
+sur du vide. Aucun compte créé, aucun identifiant demandé, aucun code
+écrit sur ce point.
+
+Voir aussi `docs/HYPOTHESES.md` (21/08/2026) : ce 4e compte "synthèse"
+n'est pas une 4e hypothèse **prédictive** au sens du §3.9 — il ne
+consomme donc pas le plafond de 3 hypothèses par cycle (H1 + H3 + H2 y
+sont déjà, une fois H3 validée).
+
+---
+
 ## 2026-08-20 — `confidence_scorer.py` (§2.4), mode observation uniquement — deux écarts documentés, un gap de données identifié
 
 Demande explicite d'Ismaël : construire le score de confiance du §2.4
