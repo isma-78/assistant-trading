@@ -12,7 +12,38 @@ la plus récente en tête.
 
 ---
 
-## 2026-08-21 — Incident critique, réponse — Étapes 3-4 : réconciliation + vraie cause racine trouvée (deux causes distinctes, aucune des deux n'était l'hypothèse initiale)
+## 2026-08-21 — Incident critique, réponse — Étape 5 : redémarrage propre, vérification finale, clôture de l'incident
+
+`executor_loop` redémarré une seconde fois (pour charger le correctif
+des trades fantômes, après le premier redémarrage pour l'étape 2) —
+propre, aucune erreur au démarrage, zéro référence à un deal_id H3 dans
+son log depuis (vérifié par grep sur tout le log post-redémarrage, pas
+juste visuellement). `hypothesis3_executor` redémarré (nouvelle session
+tmux, l'ancienne étant morte à l'arrêt du 20/08). **Vérification finale
+demandée par Ismaël, faite programmatiquement, pas visuellement** :
+`GET /positions` (compte "hypothèse 3") comparé aux trades
+`statut='ouvert'` en base — **correspondance exacte (7/7), aucun
+écart**, avant ET après le redémarrage complet des deux process.
+
+**Nouveau point relevé en redémarrant `hypothesis3_executor`, PAS
+investigué** (hors périmètre de cet incident, à traiter séparément) :
+`update_position_stop` échoue à répétition sur le trade EURUSD-24
+(`error.invalid.stoploss.minvalue`) — 67 occurrences déjà dans le log
+avant même ce redémarrage, donc préexistant, pas causé par les
+correctifs du jour. Le trailing semble bloqué sur ce trade précis
+depuis un moment. À investiguer séparément, signalé mais pas creusé
+dans l'urgence de cet incident.
+
+**Correctif péremption (tâche interrompue par l'incident) : re-vérifié
+après coup**, même méthode qu'avant l'incident (signal structuré comme
+les rejets réels, prix GOLD en direct, à travers `open_signal`) —
+`decide_entry` approuve toujours (stop élargi 3 → 46,3 points, 0,25
+unité, 9,90€ de risque). **Toujours aucun ordre réel soumis** : la
+réserve exprimée avant l'incident (éviter de mélanger un trade de
+vérification synthétique aux statistiques réelles de Station X) reste
+valable indépendamment de l'incident désormais résolu — décision
+explicite d'Ismaël nécessaire pour aller plus loin, pas prise
+unilatéralement ici. : réconciliation + vraie cause racine trouvée (deux causes distinctes, aucune des deux n'était l'hypothèse initiale)
 
 **Hypothèse initiale (workingOrderId collision dans `check_pending_fills`) FORMELLEMENT ÉCARTÉE** : vérifiée puis infirmée avec les données réelles du broker (`GET /positions` détaillé) — les 4 positions ETHUSD orphelines ont chacune un `workingOrderId` DIFFÉRENT (`...c669`, `...c9e4`, `...ceab`, `...bdd0`). Le dict de `check_pending_fills` ne pouvait donc pas les avoir collisionnées. Ne pas réutiliser cette explication ailleurs.
 
