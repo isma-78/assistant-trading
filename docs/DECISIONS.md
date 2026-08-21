@@ -12,6 +12,88 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-21 — Deux correctifs de précision sur le stop garanti (marge de sécurité + plafond de trailing)
+
+Trouvés en tentant de soumettre un ordre GOLD réel pour vérifier le
+correctif de péremption (3 tentatives, 2 erreurs broker distinctes) et
+en investiguant EURUSD-24 (67 échecs de trailing).
+
+### Correctif 1 — marge de sécurité sur `_compute_guaranteed_stop_adjustment`
+
+**Cause confirmée en conditions réelles** : `minGuaranteedStopDistance`
+est réévalué par le broker EN DIRECT au moment où l'ordre est
+effectivement traité — pas seulement lu une fois par notre appel à
+`get_market_snapshot()`. Constaté le jour même : GOLD passé de 1% à 2%
+entre deux lectures successives (vraisemblablement lié à la volatilité).
+Un stop calculé exactement à la limite lue par nous est donc rejeté
+(`error.invalid.stoploss.minvalue`), de quelques dixièmes de point sous
+le seuil réel au moment de la soumission — **pas un artefact de
+précision flottante binaire** (déjà traité ailleurs, voir
+`market_data._mid_of`, `round(...,8)`, 20/08/2026) mais une dérive
+réelle du seuil lui-même entre lecture et exécution.
+
+**Corrigé** : `GUARANTEED_STOP_SAFETY_MARGIN = 1.01` (+1% de marge
+relative) appliqué à la distance minimale calculée, `round(...,8)`
+appliqué en plus pour le bruit binaire. La fonction est aussi
+généralisée : `entry_price` renommé `reference_price` — le prix contre
+lequel la distance minimale est mesurée n'est plus toujours le prix
+d'entrée (voir correctif 2 ci-dessous, qui l'utilise avec le prix
+courant). Le sizing reste correct par construction (invariant #2) :
+`risk_engine.evaluate_new_entry()` est toujours rappelé sur le
+`stop_price` réellement retourné par cette fonction, jamais sur une
+estimation séparée.
+
+### Correctif 2 — plafond de trailing au minimum garanti broker
+
+**Cause confirmée en conditions réelles** (EURUSD-24, 67 occurrences
+de `error.invalid.stoploss.minvalue`) : notre canal Donchian(20) ne
+connaît jamais la contrainte `minGuaranteedStopDistance` du broker après
+l'ouverture — seule `_compute_guaranteed_stop_adjustment`, appelée à
+l'ouverture (`open_signal`), la consultait. Une fois le prix suffisamment
+favorable, le canal propose un stop plus serré que ce minimum ; la mise
+à jour échoue en boucle, indéfiniment, sans jamais dégrader
+gracieusement — **vérifié que la position reste protégée** dans
+l'intervalle (le broker refuse la mise à jour, pas la position : le
+dernier stop accepté reste actif), mais le trailing n'avance plus.
+
+**Corrigé** : `_apply_management_action` plafonne désormais tout
+candidat de trailing (`UPDATE_TRAILING_STOP`, uniquement si
+`state.guaranteed_stop`) via `_compute_guaranteed_stop_adjustment`,
+avec le prix de marché COURANT comme `reference_price` (pas le prix
+d'entrée d'origine — c'est contre le marché courant que le broker
+applique cette contrainte à un trade déjà ouvert). `risk_engine` et
+`current_price` (le `snapshot.mid` déjà récupéré par
+`manage_open_trades`, aucun appel réseau supplémentaire) sont désormais
+transmis à `_apply_management_action`. Si le plafond calculé
+n'améliore plus le stop déjà en place (le candidat plafonné serait un
+élargissement par rapport à l'existant), **aucune mise à jour n'est
+tentée** — revalidé via `risk_engine.evaluate_stop_update`
+(invariant #5), jamais le plafond appliqué aveuglément.
+
+**Bug latent trouvé en modifiant la signature** : les deux appels
+existants à `_apply_management_action` (dans `manage_open_trades` et
+`force_close_all_open_trades`) passaient `anthropic_client`/
+`bot_token`/`chat_id` en positionnel — l'ajout des deux nouveaux
+paramètres avant eux les aurait silencieusement décalés sur les mauvais
+arguments. Corrigé en passant tous les arguments par mot-clé aux deux
+appels (jamais repéré en production : aurait cassé les notifications de
+clôture sans lever d'exception, trouvé en écrivant ce correctif, pas en
+production).
+
+**Tests** : `test_guaranteed_stop_safety_margin_widens_at_exact_raw_
+boundary`, `test_guaranteed_stop_safety_margin_applied_to_absolute_
+unit_too` (correctif 1) ; `test_manage_open_trades_trailing_capped_at_
+broker_minimum`, `test_manage_open_trades_trailing_skipped_when_
+capped_value_not_tighter` (correctif 2, y compris le contre-test :
+jamais un élargissement). Tests existants affectés par la marge de
+sécurité mis à jour avec les nouvelles valeurs exactes (5,0 → 5,05 sur
+GOLD, 250 → 252,5 sur BTCUSD). 562 tests au total, 100% toujours vérifié
+sur les modules critiques.
+
+**Vérification en conditions réelles** : voir résultat daté ci-dessous.
+
+---
+
 ## 2026-08-21 — Incident critique, réponse — Étape 5 : redémarrage propre, vérification finale, clôture de l'incident
 
 `executor_loop` redémarré une seconde fois (pour charger le correctif

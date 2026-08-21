@@ -353,7 +353,7 @@ def test_management_flux_b_stop_hit_takes_priority_over_trailing():
 def test_guaranteed_stop_not_required():
     client = MagicMock()
     client.get_market_snapshot.return_value = {"dealingRules": {}}
-    result = _compute_guaranteed_stop_adjustment(client, "EURUSD", "short", entry_price=1.15, stop_price=1.14)
+    result = _compute_guaranteed_stop_adjustment(client, "EURUSD", "short", reference_price=1.15, stop_price=1.14)
     assert result.guaranteed_required is False
     assert result.widened is False
     assert result.stop_distance == 0.0
@@ -366,7 +366,7 @@ def test_guaranteed_stop_percentage_sufficient_distance_unchanged():
         "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 0.25}}
     }
     # entry=100000, min = 100000*0.0025 = 250 ; stop réel à 500 -> déjà suffisant
-    result = _compute_guaranteed_stop_adjustment(client, "BTCUSD", "short", entry_price=100000.0, stop_price=99500.0)
+    result = _compute_guaranteed_stop_adjustment(client, "BTCUSD", "short", reference_price=100000.0, stop_price=99500.0)
     assert result.widened is False
     assert result.stop_price == 99500.0
     assert result.stop_distance == 500.0
@@ -377,12 +377,14 @@ def test_guaranteed_stop_percentage_insufficient_widens_short():
     client.get_market_snapshot.return_value = {
         "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 0.25}}
     }
-    # entry=100000, min requis=250 ; stop réel à seulement 50 -> élargi au
-    # minimum : short, stop au-dessus de l'entrée -> entry + min_distance.
-    result = _compute_guaranteed_stop_adjustment(client, "BTCUSD", "short", entry_price=100000.0, stop_price=99950.0)
+    # entry=100000, min requis=250, + marge de sécurité 1%
+    # (GUARANTEED_STOP_SAFETY_MARGIN, 21/08/2026, voir docs/DECISIONS.md)
+    # = 252,5 ; stop réel à seulement 50 -> élargi au minimum : short,
+    # stop au-dessus de l'entrée -> entry + min_distance.
+    result = _compute_guaranteed_stop_adjustment(client, "BTCUSD", "short", reference_price=100000.0, stop_price=99950.0)
     assert result.widened is True
-    assert result.stop_price == 100250.0
-    assert result.stop_distance == 250.0
+    assert result.stop_price == pytest.approx(100252.5)
+    assert result.stop_distance == pytest.approx(252.5)
 
 
 def test_guaranteed_stop_insufficient_widens_long():
@@ -390,11 +392,12 @@ def test_guaranteed_stop_insufficient_widens_long():
     client.get_market_snapshot.return_value = {
         "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 0.25}}
     }
-    # long : stop en-dessous de l'entrée -> entry - min_distance.
-    result = _compute_guaranteed_stop_adjustment(client, "BTCUSD", "long", entry_price=100000.0, stop_price=99950.0)
+    # long : stop en-dessous de l'entrée -> entry - min_distance (avec la
+    # même marge de sécurité 1% que le cas short ci-dessus).
+    result = _compute_guaranteed_stop_adjustment(client, "BTCUSD", "long", reference_price=100000.0, stop_price=99950.0)
     assert result.widened is True
-    assert result.stop_price == 99750.0
-    assert result.stop_distance == 250.0
+    assert result.stop_price == pytest.approx(99747.5)
+    assert result.stop_distance == pytest.approx(252.5)
 
 
 def test_guaranteed_stop_absolute_unit_sufficient():
@@ -402,9 +405,39 @@ def test_guaranteed_stop_absolute_unit_sufficient():
     client.get_market_snapshot.return_value = {
         "dealingRules": {"minGuaranteedStopDistance": {"unit": "POINTS", "value": 10.0}}
     }
-    result = _compute_guaranteed_stop_adjustment(client, "GOLD", "short", entry_price=2000.0, stop_price=2015.0)
+    result = _compute_guaranteed_stop_adjustment(client, "GOLD", "short", reference_price=2000.0, stop_price=2015.0)
     assert result.widened is False
     assert result.stop_distance == 15.0
+
+
+def test_guaranteed_stop_safety_margin_widens_at_exact_raw_boundary():
+    # Incident réel du 21/08/2026 (voir docs/DECISIONS.md) : un ordre
+    # calculé exactement au minimum brut lu par nous a été rejeté par le
+    # broker (minGuaranteedStopDistance dérive en direct). Cas limite
+    # précis : distance actuelle == minimum BRUT (aurait été jugée
+    # suffisante avant ce correctif) mais < minimum avec la marge de 1%
+    # (GUARANTEED_STOP_SAFETY_MARGIN) -> doit désormais élargir.
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 1.0}}
+    }
+    # entry=1000, min brut = 1000*1% = 10 ; stop à distance exactement 10.
+    result = _compute_guaranteed_stop_adjustment(client, "GOLD", "short", reference_price=1000.0, stop_price=1010.0)
+    assert result.widened is True
+    assert result.stop_distance == pytest.approx(10.1)  # 10 * GUARANTEED_STOP_SAFETY_MARGIN
+    assert result.stop_price == pytest.approx(1010.1)
+
+
+def test_guaranteed_stop_safety_margin_applied_to_absolute_unit_too():
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "dealingRules": {"minGuaranteedStopDistance": {"unit": "POINTS", "value": 10.0}}
+    }
+    # distance actuelle = 10 (== minimum brut, insuffisant avec la marge de 1%).
+    result = _compute_guaranteed_stop_adjustment(client, "GOLD", "long", reference_price=2000.0, stop_price=1990.0)
+    assert result.widened is True
+    assert result.stop_distance == pytest.approx(10.1)
+    assert result.stop_price == pytest.approx(1989.9)
 
 
 def test_guaranteed_stop_adjustment_unknown_direction_raises():
@@ -413,7 +446,7 @@ def test_guaranteed_stop_adjustment_unknown_direction_raises():
         "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 5.0}}
     }
     with pytest.raises(ValueError):
-        _compute_guaranteed_stop_adjustment(client, "GOLD", "sideways", entry_price=100.0, stop_price=101.0)
+        _compute_guaranteed_stop_adjustment(client, "GOLD", "sideways", reference_price=100.0, stop_price=101.0)
 
 
 # --- orchestration (DB réelle temporaire + CapitalClient simulé) ---------
@@ -605,10 +638,12 @@ def test_open_signal_records_align_matinale_on_open(tmp_path):
 
 def test_open_signal_widens_stop_and_resizes_when_too_tight_for_guaranteed_stop(tmp_path):
     # Décision du 20/08/2026 (Ismaël, assumée — voir docs/DECISIONS.md) :
-    # entree=100, stop=101 -> stop_distance=1, broker exige 5% * 100 = 5 ->
-    # insuffisant, ÉLARGI à 105 (short : stop au-dessus, entry+min_distance),
-    # risk_engine redimensionne SUR ce nouveau stop pour garder le risque
-    # à 2% de l'enveloppe (10€) : units = 10/(5*0.86) = 2.3256 -> 2.32.
+    # entree=100, stop=101 -> stop_distance=1, broker exige 5% * 100 = 5,
+    # + marge de sécurité 1% (GUARANTEED_STOP_SAFETY_MARGIN, 21/08/2026,
+    # voir docs/DECISIONS.md) = 5,05 -> insuffisant, ÉLARGI à 105,05
+    # (short : stop au-dessus, entry+min_distance), risk_engine
+    # redimensionne SUR ce nouveau stop pour garder le risque à 2% de
+    # l'enveloppe (10€) : units = 10/(5,05*0.86) = 2,3026 -> 2,30.
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
     signal_row = _insert_signal(db_path, confiance=1.0)
@@ -629,16 +664,16 @@ def test_open_signal_widens_stop_and_resizes_when_too_tight_for_guaranteed_stop(
     assert result == "deal-xyz"
     call_kwargs = client.place_limit_order.call_args.kwargs
     assert call_kwargs["guaranteed_stop"] is True
-    assert call_kwargs["stop_distance"] == 5.0
-    assert call_kwargs["size"] == pytest.approx(2.32)
+    assert call_kwargs["stop_distance"] == pytest.approx(5.05)
+    assert call_kwargs["size"] == pytest.approx(2.30)
 
     conn = get_connection(db_path)
     try:
         trade = conn.execute("SELECT * FROM trades WHERE signal_id = ?", (signal_row["id"],)).fetchone()
-        assert trade["stop_loss_initial"] == 105.0
+        assert trade["stop_loss_initial"] == pytest.approx(105.05)
         assert trade["stop_elargi"] == 1
         assert trade["stop_origine_signal"] == 101.0
-        assert trade["taille_initiale"] == pytest.approx(2.32)
+        assert trade["taille_initiale"] == pytest.approx(2.30)
     finally:
         conn.close()
 
@@ -1221,6 +1256,127 @@ def test_manage_open_trades_flux_b_trailing_forwards_guaranteed_stop(tmp_path):
     try:
         trade = conn.execute("SELECT stop_loss_courant FROM trades WHERE id = ?", (trade_id,)).fetchone()
         assert trade["stop_loss_courant"] == 102.0
+    finally:
+        conn.close()
+
+
+def test_manage_open_trades_trailing_capped_at_broker_minimum(tmp_path):
+    # Incident réel du 21/08/2026 (voir docs/DECISIONS.md) : le canal
+    # Donchian voulait resserrer bien plus que le minimum garanti du
+    # broker (mesuré contre le prix COURANT, pas l'entrée) — avant ce
+    # correctif, la mise à jour était tentée telle quelle et rejetée en
+    # boucle (error.invalid.stoploss.minvalue), le stop restant bloqué
+    # indéfiniment au dernier niveau accepté. Le candidat doit désormais
+    # être plafonné au minimum garanti plutôt que rejeté silencieusement.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, actif="EURUSD", sens="short", tp1=None, tp2=None)
+
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, guaranteed_stop, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-eur', 'hypothesis3', 'EURUSD', 'demo', 'short', 3700.0, "
+            "100.0, 1, 105.0, 105.0, 10.0, 2.0, '2026-08-21T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    # Canal Donchian très serré (candidat brut = 99.5, largement sous le
+    # minimum garanti calculé sur le prix courant, ~99.0).
+    window = [{"high": 99.5, "low": 97.0, "open": 99.0, "close": 99.0} for _ in range(DONCHIAN_PERIOD)]
+    window.append({"high": 99.2, "low": 98.8, "open": 99.0, "close": 99.0})
+    prices = [
+        {
+            "snapshotTimeUTC": "t",
+            "openPrice": {"bid": c["open"], "ask": c["open"]},
+            "highPrice": {"bid": c["high"], "ask": c["high"]},
+            "lowPrice": {"bid": c["low"], "ask": c["low"]},
+            "closePrice": {"bid": c["close"], "ask": c["close"]},
+        }
+        for c in window
+    ]
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "snapshot": {"bid": 98.9, "offer": 99.1, "marketStatus": "TRADEABLE"},
+        "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 5.0}},
+    }
+    client.get_prices.return_value = {"prices": prices}
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "EURUSD", "demo", 500.0, source="hypothesis3")
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("EURUSD", "hypothesis3"): envelope_manager}, envelope_ids={("EURUSD", "hypothesis3"): envelope_id},
+    )
+
+    # Plafonné au minimum garanti (prix courant 99.0 + 5%*1.01 = 4,9995)
+    # -> 103,9995, PAS le candidat brut du canal (99.5).
+    client.update_position_stop.assert_called_once()
+    call_args = client.update_position_stop.call_args
+    assert call_args.args[0] == "deal-eur"
+    assert call_args.args[1] == pytest.approx(103.9995)
+    assert call_args.kwargs["guaranteed_stop"] is True
+
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT stop_loss_courant FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["stop_loss_courant"] == pytest.approx(103.9995)
+    finally:
+        conn.close()
+
+
+def test_manage_open_trades_trailing_skipped_when_capped_value_not_tighter(tmp_path):
+    # Contre-test : si même le plafond (minimum garanti) n'améliore pas le
+    # stop déjà en place, aucune mise à jour n'est tentée — jamais un
+    # élargissement, invariant #5, revalidé via risk_engine.evaluate_stop_update.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, actif="EURUSD", sens="short", tp1=None, tp2=None)
+
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, guaranteed_stop, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-eur2', 'hypothesis3', 'EURUSD', 'demo', 'short', 3700.0, "
+            "100.0, 1, 99.2, 99.2, 10.0, 2.0, '2026-08-21T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    window = [{"high": 99.1, "low": 97.0, "open": 99.0, "close": 99.0} for _ in range(DONCHIAN_PERIOD)]
+    window.append({"high": 99.0, "low": 98.8, "open": 99.0, "close": 99.0})
+    prices = [
+        {
+            "snapshotTimeUTC": "t",
+            "openPrice": {"bid": c["open"], "ask": c["open"]},
+            "highPrice": {"bid": c["high"], "ask": c["high"]},
+            "lowPrice": {"bid": c["low"], "ask": c["low"]},
+            "closePrice": {"bid": c["close"], "ask": c["close"]},
+        }
+        for c in window
+    ]
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "snapshot": {"bid": 98.9, "offer": 99.1, "marketStatus": "TRADEABLE"},
+        "dealingRules": {"minGuaranteedStopDistance": {"unit": "PERCENTAGE", "value": 5.0}},
+    }
+    client.get_prices.return_value = {"prices": prices}
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "EURUSD", "demo", 500.0, source="hypothesis3")
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("EURUSD", "hypothesis3"): envelope_manager}, envelope_ids={("EURUSD", "hypothesis3"): envelope_id},
+    )
+
+    # Le plafond (~103,9995) serait plus large que le stop déjà en place
+    # (99.2) -> aucune mise à jour tentée côté broker, stop inchangé.
+    client.update_position_stop.assert_not_called()
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT stop_loss_courant FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["stop_loss_courant"] == pytest.approx(99.2)
     finally:
         conn.close()
 

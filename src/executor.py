@@ -416,8 +416,26 @@ class GuaranteedStopAdjustment:
     widened: bool                # True si stop_price diffère du stop d'origine du signal
 
 
+# Marge de sécurité relative appliquée à la distance minimale de stop
+# garanti (voir docs/DECISIONS.md, 21/08/2026). Trouvé en conditions
+# réelles : `minGuaranteedStopDistance` est réévalué par le broker EN
+# DIRECT au moment où l'ordre est réellement traité, pas seulement lu une
+# fois par notre appel à get_market_snapshot() — la valeur peut avoir
+# dérivé entre-temps (constaté : GOLD passé de 1% à 2% le même jour,
+# vraisemblablement lié à la volatilité). Un stop calculé exactement à la
+# limite lue par nous est donc régulièrement rejeté (error.invalid.
+# stoploss.minvalue), quelques dixièmes de point sous le seuil réel —
+# pas un artefact de précision flottante binaire (déjà traité ailleurs,
+# voir market_data._mid_of, round(...,8)), une dérive réelle du seuil
+# lui-même. +1% de marge relative absorbe cet écart sans fausser le
+# sizing de façon significative (invariant #2 : la taille est toujours
+# recalculée par risk_engine sur le stop_price réellement retourné ici,
+# jamais sur une estimation séparée).
+GUARANTEED_STOP_SAFETY_MARGIN = 1.01
+
+
 def _compute_guaranteed_stop_adjustment(
-    client: CapitalClient, epic: str, direction: str, entry_price: float, stop_price: float,
+    client: CapitalClient, epic: str, direction: str, reference_price: float, stop_price: float,
 ) -> GuaranteedStopAdjustment:
     """Ce compte démo exige un stop garanti sur certains instruments —
     observé sur BTCUSD/ETHUSD dès le palier P0, confirmé aussi sur
@@ -431,7 +449,15 @@ def _compute_guaranteed_stop_adjustment(
     de rejeter l'entrée. L'appelant DOIT redimensionner la position via
     risk_engine.evaluate_new_entry() avec ce nouveau stop_price — cette
     fonction ne fait que déterminer le stop, jamais la taille (invariant
-    #2 : elle ne calcule aucun risque en euros elle-même)."""
+    #2 : elle ne calcule aucun risque en euros elle-même).
+
+    `reference_price` : le prix contre lequel la distance minimale est
+    mesurée ET depuis lequel le stop élargi est ancré — le prix d'entrée
+    du signal à l'ouverture (`open_signal`), le prix de marché COURANT
+    pour un plafonnement de trailing (`_apply_management_action`, voir
+    docs/DECISIONS.md 21/08/2026) : le broker applique cette contrainte
+    au marché courant, pas seulement au prix d'entrée d'origine d'un
+    trade déjà ouvert depuis un moment."""
     market = client.get_market_snapshot(epic)
     dealing_rules = market.get("dealingRules", {})
     min_gs = dealing_rules.get("minGuaranteedStopDistance", {})
@@ -439,18 +465,19 @@ def _compute_guaranteed_stop_adjustment(
         return GuaranteedStopAdjustment(stop_price=stop_price, stop_distance=0.0, guaranteed_required=False, widened=False)
 
     if min_gs.get("unit") == "PERCENTAGE":
-        min_distance = entry_price * (min_gs["value"] / 100.0)
+        raw_min_distance = reference_price * (min_gs["value"] / 100.0)
     else:
-        min_distance = min_gs["value"]
+        raw_min_distance = min_gs["value"]
+    min_distance = round(raw_min_distance * GUARANTEED_STOP_SAFETY_MARGIN, 8)
 
-    current_distance = abs(entry_price - stop_price)
+    current_distance = abs(reference_price - stop_price)
     if current_distance >= min_distance:
         return GuaranteedStopAdjustment(stop_price=stop_price, stop_distance=current_distance, guaranteed_required=True, widened=False)
 
     if direction == "long":
-        widened_stop_price = entry_price - min_distance
+        widened_stop_price = round(reference_price - min_distance, 8)
     elif direction == "short":
-        widened_stop_price = entry_price + min_distance
+        widened_stop_price = round(reference_price + min_distance, 8)
     else:
         raise ValueError(f"direction inconnue : {direction!r}")
 
@@ -867,7 +894,8 @@ def manage_open_trades(
 
             _apply_management_action(
                 db_path, client, state, action, envelope_managers, envelope_ids,
-                anthropic_client, bot_token, chat_id,
+                risk_engine=risk_engine, current_price=snapshot.mid,
+                anthropic_client=anthropic_client, bot_token=bot_token, chat_id=chat_id,
             )
         except Exception:
             logger.exception("Erreur non gérée en gérant le trade %s — passage au suivant", trade_row["id"])
@@ -929,12 +957,49 @@ def _weighted_r_multiple_for_trade(db_path: str, trade_id: int) -> float:
 
 def _apply_management_action(
     db_path, client, state, action, envelope_managers, envelope_ids,
+    risk_engine=None, current_price=None,
     anthropic_client=None, bot_token=None, chat_id=None,
 ) -> None:
     if action.action == ManagementActionType.UPDATE_TRAILING_STOP:
-        client.update_position_stop(state.deal_id, action.new_stop_price, guaranteed_stop=state.guaranteed_stop)
+        new_stop_price = action.new_stop_price
+        if state.guaranteed_stop and risk_engine is not None and current_price is not None:
+            # Plafonne le candidat de trailing au minimum garanti du broker
+            # AVANT toute tentative — corrigé le 21/08/2026 (voir
+            # docs/DECISIONS.md) : avant ce correctif, un candidat Donchian
+            # plus serré que ce minimum était tenté tel quel, rejeté en
+            # boucle indéfiniment (error.invalid.stoploss.minvalue) sans
+            # jamais dégrader gracieusement — le trailing restait bloqué au
+            # dernier niveau accepté, jamais réévalué. Réutilise
+            # _compute_guaranteed_stop_adjustment (déjà utilisée à
+            # l'ouverture), avec le prix COURANT comme référence — c'est
+            # contre le marché courant, pas le prix d'entrée d'origine, que
+            # le broker applique cette contrainte à un trade déjà ouvert.
+            adjustment = _compute_guaranteed_stop_adjustment(
+                client, state.asset, state.direction, current_price, new_stop_price,
+            )
+            if adjustment.widened:
+                # Le plafond est un ÉLARGISSEMENT par rapport au candidat
+                # Donchian brut — mais reste-t-il un RESSERREMENT par
+                # rapport au stop actuellement en place ? Revalidé via
+                # risk_engine.evaluate_stop_update (invariant #5, jamais
+                # cette fonction seule) : si même le plafond n'améliore pas
+                # le stop existant, aucune mise à jour n'est tentée plutôt
+                # que d'échouer au broker pour rien.
+                stop_decision = risk_engine.evaluate_stop_update(state.stop_price, adjustment.stop_price, state.direction)
+                if not stop_decision.approved:
+                    logger.info(
+                        "Trailing plafonné au minimum garanti pour le trade %s (%s), mais n'améliore plus le stop actuel (%s) — inchangé",
+                        state.trade_id, adjustment.stop_price, state.stop_price,
+                    )
+                    return
+                logger.info(
+                    "Trailing plafonné au minimum garanti broker pour le trade %s : %s -> %s (candidat brut %s)",
+                    state.trade_id, state.stop_price, adjustment.stop_price, new_stop_price,
+                )
+                new_stop_price = adjustment.stop_price
+        client.update_position_stop(state.deal_id, new_stop_price, guaranteed_stop=state.guaranteed_stop)
         with connection_scope(db_path) as conn:
-            conn.execute("UPDATE trades SET stop_loss_courant = ? WHERE id = ?", (action.new_stop_price, state.trade_id))
+            conn.execute("UPDATE trades SET stop_loss_courant = ? WHERE id = ?", (new_stop_price, state.trade_id))
         return
 
     # Clôtures (partielles ou totales)
@@ -1127,7 +1192,7 @@ def force_close_all_open_trades(
             )
             _apply_management_action(
                 db_path, client, state, action, envelope_managers, envelope_ids,
-                anthropic_client, bot_token, chat_id,
+                anthropic_client=anthropic_client, bot_token=bot_token, chat_id=chat_id,
             )
             closed += 1
         except Exception:
