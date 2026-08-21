@@ -514,6 +514,44 @@ dans `docs/DECISIONS.md`.
   toujours vérifié sur `risk_engine`/`capital_manager`/`go_nogo`/
   `validator`/`trend_strategy`/`circuit_breaker`.
 
+## Palier P2.9 — Hypothèses #3 et #2 (21/08/2026)
+
+Feu vert explicite d'Ismaël après reconsidération et correction du
+modèle de budget de variables (§2.11 vs §3.8, voir `docs/HYPOTHESES.md`
+et `docs/DECISIONS.md` du 21/08/2026 — chaque hypothèse a son propre
+budget de 2-3 paramètres, jamais partagé).
+
+- **Bug bloquant corrigé avant tout code d'hypothèse** :
+  `_normalize_source`/`_envelope_source_key` (dupliquée dans 4 modules)
+  ne reconnaissait QUE `"hypothesis"` (H1) — toute autre source serait
+  retombée silencieusement sur `"stationx"`. Généralisée à un ensemble
+  de sources connues + garde-fou de cohérence entre les 4 copies
+  (`tests/test_source_normalization_consistency.py`). Second bug trouvé
+  et corrigé dans la foulée : le trailing (`executor.manage_open_
+  trades`) récupérait toujours des bougies horaires quelle que soit la
+  résolution de l'hypothèse — `executor._TREND_CANDLE_RESOLUTION` ajouté.
+- `src/technical_strategy_executor.py` (nouveau) : moteur générique de
+  boucle extrait de `trend_executor.py` — H1, H3 et H2 partagent
+  désormais la même orchestration (ordres, coupe-circuits,
+  /stop_urgence, enveloppes), ne diffèrent que par leurs paramètres.
+  Comportement de l'Hypothèse #1 vérifié strictement inchangé par
+  régression.
+- **Hypothèse #3** (`src/hypothesis3_executor.py`) — déployée : identique
+  à H1 (`trend_strategy.py` réutilisé tel quel), résolution M15,
+  8 actifs, compte Capital.com dédié (`CAPITAL_ACCOUNT_ID_HYPOTHESIS3`
+  retrouvé via `GET /accounts`, ajouté à `.env`).
+- **Hypothèse #2** (`src/ict_strategy.py`, module critique 100% couvert,
+  34 tests + `src/hypothesis2_executor.py`) — Option B (swings fractals
+  K=2, confluence Fibonacci, FVG) : code construit et testé, **PAS
+  déployée** — identifiants Capital.com dédiés au compte "hypothèse 2"
+  manquants (voir `docs/DECISIONS.md` pour les options).
+- 549 tests passent au total, 100% toujours vérifié sur
+  `risk_engine`/`capital_manager`/`go_nogo`/`validator`/`trend_strategy`/
+  `circuit_breaker`/`ict_strategy`.
+- `scripts/process_watchdog.py` étendu à `hypothesis3_executor` (pas
+  `hypothesis2_executor`, pas encore démarré — l'ajouter aurait
+  déclenché une fausse alerte).
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou

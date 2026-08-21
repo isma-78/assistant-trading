@@ -64,3 +64,28 @@ def test_load_config_account_id_fields_loaded_when_present(monkeypatch, tmp_path
     config = load_config(dotenv_path=str(tmp_path / "nonexistent.env"))
     assert config.capital_account_id == "327614560537498782"
     assert config.capital_account_id_hypothesis3 == "327950877951612062"
+
+
+# --- Hypothèse #2 (21/08/2026, voir docs/DECISIONS.md) --------------------
+
+def test_load_config_hypothesis2_fields_absent_by_default(monkeypatch, tmp_path):
+    _set_required_env(monkeypatch)
+    config = load_config(dotenv_path=str(tmp_path / "nonexistent.env"))
+    assert config.capital_api_key_hypothesis2 is None
+    assert config.capital_api_password_hypothesis2 is None
+    assert config.capital_account_id_hypothesis2 is None
+    # Repli sur CAPITAL_IDENTIFIER quand CAPITAL_IDENTIFIER_HYPOTHESIS2 absent.
+    assert config.capital_identifier_hypothesis2 == "main@example.com"
+
+
+def test_load_config_hypothesis2_fields_loaded_when_present(monkeypatch, tmp_path):
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("CAPITAL_API_KEY_HYPOTHESIS2", "k2")
+    monkeypatch.setenv("CAPITAL_IDENTIFIER_HYPOTHESIS2", "h2@example.com")
+    monkeypatch.setenv("CAPITAL_API_PASSWORD_HYPOTHESIS2", "p2")
+    monkeypatch.setenv("CAPITAL_ACCOUNT_ID_HYPOTHESIS2", "327950654613312670")
+    config = load_config(dotenv_path=str(tmp_path / "nonexistent.env"))
+    assert config.capital_api_key_hypothesis2 == "k2"
+    assert config.capital_identifier_hypothesis2 == "h2@example.com"
+    assert config.capital_api_password_hypothesis2 == "p2"
+    assert config.capital_account_id_hypothesis2 == "327950654613312670"

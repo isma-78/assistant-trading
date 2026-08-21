@@ -83,7 +83,7 @@ def test_check_process_without_bot_credentials_never_raises(tmp_path):
     assert status == "down"
 
 
-def test_run_watchdog_check_covers_all_four_processes(tmp_path):
+def test_run_watchdog_check_covers_every_known_process(tmp_path):
     db_path = str(tmp_path / "t.db")
     init_db(db_path)
     config = MagicMock(telegram_bot_token="tok", telegram_chat_id="chat")
@@ -95,5 +95,6 @@ def test_run_watchdog_check_covers_all_four_processes(tmp_path):
         "executor_loop": "up",
         "trend_executor": "down",
         "control_bot": "down",
+        "hypothesis3_executor": "down",
     }
     assert set(PROCESSES.keys()) == set(results.keys())

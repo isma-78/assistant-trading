@@ -87,11 +87,19 @@ from src.risk_engine import AssetSpec
 # Même normalisation que metrics._normalize_source / circuit_breaker_store /
 # executor._envelope_source_key — dupliquée plutôt qu'importée (nom privé
 # ailleurs), même choix que metrics.py. Voir docs/DECISIONS.md.
-HYPOTHESIS_SOURCE = "hypothesis"
+#
+# Généralisée le 21/08/2026 (voir docs/DECISIONS.md) : ne reconnaissait
+# QUE "hypothesis" (H1) — toute nouvelle hypothèse DOIT être ajoutée à
+# _KNOWN_HYPOTHESIS_SOURCES ici, sinon son score de confiance serait
+# mélangé à celui de Station X.
+HYPOTHESIS_SOURCE = "hypothesis"    # Hypothèse #1
+HYPOTHESIS3_SOURCE = "hypothesis3"  # Hypothèse #3
+HYPOTHESIS2_SOURCE = "hypothesis2"  # Hypothèse #2
+_KNOWN_HYPOTHESIS_SOURCES = {HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE}
 
 
 def _normalize_source(source: str) -> str:
-    return HYPOTHESIS_SOURCE if source == HYPOTHESIS_SOURCE else "stationx"
+    return source if source in _KNOWN_HYPOTHESIS_SOURCES else "stationx"
 
 
 PHASE_A_MIN_TRADES = 20

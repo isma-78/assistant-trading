@@ -41,11 +41,20 @@ logger = logging.getLogger(__name__)
 # chaîne littérale "stationx"), voir docs/DECISIONS.md. Dupliquée plutôt
 # qu'importée depuis executor.py pour éviter un import circulaire
 # (executor.py importe ce module, pas l'inverse).
-HYPOTHESIS_SOURCE = "hypothesis"
+#
+# Généralisée le 21/08/2026 (voir docs/DECISIONS.md) : ne reconnaissait
+# QUE "hypothesis" (H1) — toute autre source retombait silencieusement
+# sur "stationx", ce qui aurait mélangé les coupe-circuits R de Station X
+# et d'une nouvelle hypothèse. Toute nouvelle hypothèse DOIT être ajoutée
+# à _KNOWN_HYPOTHESIS_SOURCES ici.
+HYPOTHESIS_SOURCE = "hypothesis"    # Hypothèse #1
+HYPOTHESIS3_SOURCE = "hypothesis3"  # Hypothèse #3
+HYPOTHESIS2_SOURCE = "hypothesis2"  # Hypothèse #2
+_KNOWN_HYPOTHESIS_SOURCES = {HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE}
 
 
 def _normalize_source(source: str) -> str:
-    return HYPOTHESIS_SOURCE if source == HYPOTHESIS_SOURCE else "stationx"
+    return source if source in _KNOWN_HYPOTHESIS_SOURCES else "stationx"
 
 
 def _now_iso() -> str:

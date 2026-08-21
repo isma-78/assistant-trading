@@ -40,14 +40,23 @@ from typing import List, Optional, Tuple
 from src.db import connection_scope
 
 # Même normalisation que circuit_breaker_store._normalize_source /
-# executor._envelope_source_key — dupliquée plutôt qu'importée (nom privé
-# ailleurs), cohérent avec le choix déjà fait dans ces deux modules. Voir
-# docs/DECISIONS.md.
-HYPOTHESIS_SOURCE = "hypothesis"
+# executor._envelope_source_key / confidence_scorer._normalize_source —
+# dupliquée plutôt qu'importée (nom privé ailleurs), cohérent avec le
+# choix déjà fait dans ces modules. Voir docs/DECISIONS.md.
+#
+# Généralisée le 21/08/2026 (voir docs/DECISIONS.md) : ne reconnaissait
+# QUE "hypothesis" (H1) — toute autre source retombait silencieusement
+# sur "stationx", mélangeant ses métriques à celles de Station X. Toute
+# nouvelle hypothèse DOIT être ajoutée à _KNOWN_HYPOTHESIS_SOURCES ici,
+# sinon ses trades seront comptés dans les métriques de Station X.
+HYPOTHESIS_SOURCE = "hypothesis"    # Hypothèse #1
+HYPOTHESIS3_SOURCE = "hypothesis3"  # Hypothèse #3
+HYPOTHESIS2_SOURCE = "hypothesis2"  # Hypothèse #2
+_KNOWN_HYPOTHESIS_SOURCES = {HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE}
 
 
 def _normalize_source(source: str) -> str:
-    return HYPOTHESIS_SOURCE if source == HYPOTHESIS_SOURCE else "stationx"
+    return source if source in _KNOWN_HYPOTHESIS_SOURCES else "stationx"
 
 
 # ---------------------------------------------------------------------------

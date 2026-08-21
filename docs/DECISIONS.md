@@ -12,6 +12,157 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-21 — Construction des Hypothèses #3 et #2 (feu vert explicite d'Ismaël)
+
+Feu vert reçu : « toutes les questions préalables étant résolues ». Ce
+qui suit couvre les deux hypothèses, dans l'ordre construit (fondations
+communes d'abord, puis H3, puis H2).
+
+### Bug bloquant trouvé AVANT tout code d'hypothèse : normalisation de source binaire
+
+En préparant H3, découverte d'un bug réel touchant potentiellement les
+statistiques : `_normalize_source`/`_envelope_source_key`, dupliquée dans
+`executor.py`, `metrics.py`, `circuit_breaker_store.py`,
+`confidence_scorer.py`, ne reconnaissait QUE la source littérale
+`"hypothesis"` (Hypothèse #1) — toute autre valeur (y compris une
+nouvelle hypothèse légitime comme `"hypothesis3"`) retombait
+silencieusement sur `"stationx"`. Sans correction, les trades de H3/H2
+auraient été comptés dans les statistiques de Station X (enveloppes,
+coupe-circuits R, métriques, score de confiance), une violation directe
+du principe "métriques calculées séparément par source" (§2.11) —
+jamais observé en production (aucune hypothèse au-delà de H1 n'existait
+avant aujourd'hui), corrigé avant tout déploiement.
+
+**Corrigé** : les 4 copies généralisées à un ENSEMBLE de sources
+hypothèse connues (`{"hypothesis", "hypothesis3", "hypothesis2"}`) —
+toute source hors de cet ensemble retombe sur `"stationx"` (comportement
+inchangé pour Station X, dont `source` reste l'id de canal Telegram
+brut). **Risque de divergence assumé** : ces 4 copies doivent désormais
+rester synchronisées manuellement à chaque nouvelle hypothèse — garde-fou
+ajouté (`tests/test_source_normalization_consistency.py`) qui compare
+les 4 fonctions sur un jeu de sources fixe et échoue si l'une diverge
+des trois autres, plutôt que de centraliser dans un module partagé
+(aurait rompu la convention du projet "dupliqué plutôt qu'importé, nom
+privé" pour un gain marginal — le test de cohérence couvre le risque
+réel sans ce coût).
+
+**Second bug trouvé dans la foulée** : `executor.manage_open_trades`
+récupérait TOUJOURS des bougies horaires (`resolution="HOUR"` codé en
+dur) pour recalculer le canal de Donchian du trailing (§2.11), quelle
+que soit la source du trade. Sans correction, le trailing de
+l'Hypothèse #3 (bougies M15) aurait utilisé un canal calculé sur des
+bougies horaires — silencieusement incohérent avec sa propre logique
+d'entrée. Corrigé par `executor._TREND_CANDLE_RESOLUTION`, un dict
+{source: résolution} consulté au moment du calcul (Station X non
+concernée : `state.tp1 is None` ne s'applique jamais à elle, donc le
+repli par défaut "HOUR" reste inchangé pour elle).
+
+### Refactor : `technical_strategy_executor.py`, moteur générique
+
+`trend_executor.py` codait en dur la boucle complète de l'Hypothèse #1
+(~150 lignes : gestion des ordres, coupe-circuits, /stop_urgence,
+enveloppes). Construire H3 et H2 en copiant ce fichier deux fois de plus
+aurait triplé la maintenance du moindre correctif de boucle (ex: le bug
+ATR trouvé plus tôt, ou celui ci-dessus). Extrait en
+`src/technical_strategy_executor.py` (`run_technical_strategy_loop`,
+paramétrée par source/actifs/résolution/fonction de détection/
+identifiants) ; `trend_executor.py` ne contient plus que les paramètres
+propres à l'Hypothèse #1. **Comportement de l'Hypothèse #1 vérifié
+strictement inchangé** : les 9 tests existants de
+`tests/test_trend_executor.py` passent sans modification après le
+refactor (même texte d'audit, même câblage, testé par régression avant
+tout déploiement).
+
+### Hypothèse #3 — déployée
+
+- `src/hypothesis3_executor.py` : source `"hypothesis3"`, résolution
+  `MINUTE_15`, `trend_strategy.evaluate_entry`/
+  `compute_trailing_stop_channel` réutilisés tels quels (identiques à
+  H1, seule la résolution change — conforme à la proposition validée du
+  20/08/2026), 8 actifs.
+- **`CAPITAL_ACCOUNT_ID_HYPOTHESIS3` retrouvé** : absent de `.env` malgré
+  des identifiants API H3 déjà en place (`CAPITAL_API_KEY_HYPOTHESIS3`
+  et consorts, préparés le 20/08/2026) — sans lui, `run_hypothesis3_loop`
+  aurait échoué net dès le démarrage (`ConfigError`, comportement voulu,
+  pas un bug). Retrouvé par `GET /accounts` avec la clé H3 (lecture
+  seule) : `327950877951612062` — confirmé identique à la valeur déjà
+  utilisée comme donnée de test réaliste dans `tests/test_config.py`
+  depuis une session précédente (jamais reportée dans `.env` à l'époque).
+  Ajouté à `.env` (local + VPS) avec `CAPITAL_ACCOUNT_ID_HYPOTHESIS2`
+  (`327950654613312670`, découvert au passage, voir section H2
+  ci-dessous — valeur non secrète, sans risque à stocker avant que les
+  identifiants H2 eux-mêmes existent).
+- **Observation en clair au passage** : le compte marqué "préféré" pour
+  la clé H3 est actuellement "hypothèse 2", pas "premier test" — confirme
+  que l'instabilité du flag "préféré" documentée le 20/08/2026 reste
+  d'actualité (aucune régression : les deux boucles de production
+  ciblent déjà explicitement leur compte par `accountId`, jamais le
+  compte préféré).
+- Tests : `tests/test_hypothesis3_executor.py` (paramètres transmis
+  correctement), `tests/test_config.py` étendu. Déployé et vérifié en
+  conditions réelles — voir entrée séparée ci-dessous pour le résultat
+  du test encadré.
+
+### Hypothèse #2 — Option B, code construit, PAS déployée (identifiants manquants)
+
+`src/ict_strategy.py` (module critique, 100% couvert) : régime MA(200) +
+trailing Donchian(20) réutilisés tels quels de `trend_strategy.py`,
+détection ICT propre à cette hypothèse (swings fractals K=2, zone de
+confluence Fibonacci 61,8%-78,6%, FVG chevauchant la zone) — Option B de
+la proposition validée le 21/08/2026 (voir `docs/HYPOTHESES.md`).
+
+**Trois choix de conception concrets, nécessaires pour écrire du code
+exécutable, PAS entièrement détaillés dans la proposition d'origine du
+20/08/2026** (qui ne détaillait la règle d'entrée complète — point 4 —
+que pour l'Option A) — documentés en détail dans la docstring du module
+et dans `docs/HYPOTHESES.md`, à vérifier par Ismaël avant toute
+observation de résultat (aucune donnée regardée avant ces choix) :
+1. Sélection de la jambe d'impulsion (dernier swing bas confirmé, puis
+   premier swing haut confirmé plus récent que lui) — un choix parmi
+   plusieurs défendables, pas une règle ICT canonique.
+2. Fenêtre de recherche des swings/FVG : réutilise `DONCHIAN_PERIOD=20`
+   (pas un nouveau paramètre), avec une marge de `2×FRACTAL_K` bougies
+   pour la confirmation en bord de fenêtre.
+3. `classify_structure_break` (BOS/CHoCH, point 3 de la proposition)
+   implémentée et testée à 100%, mais **PAS câblée comme condition
+   d'entrée** dans cette première version — l'ajouter aurait été une
+   complexité non validée par Ismaël, pas une simple traduction de ce
+   qui a été approuvé.
+
+**Identifiants Capital.com dédiés à l'Hypothèse #2 : absents à ce jour.**
+Contrairement à H3, aucune clé API/mot de passe distincts n'ont été
+générés pour le compte "hypothèse 2" (accountId `327950654613312670`,
+retrouvé et vérifié en lecture seule — voir section H3 ci-dessus).
+**Fait vérifié empiriquement (lecture seule, aucun ordre)** : la clé API
+H3, déjà en place, PEUT techniquement cibler et lire le compte
+"hypothèse 2" via `switch_account` (les clés API Capital.com sont
+scopées à l'identifiant de connexion, pas à un compte précis — les 3
+comptes du même identifiant sont visibles et accessibles depuis
+n'importe laquelle de ses clés). **Décision explicitement NON prise ici**
+: réutiliser la clé H3 (ou la clé principale) pour faire tourner H2
+fonctionnerait techniquement, mais casserait la séparation
+d'identifiants déjà établie pour H3 (une clé, un usage) sans
+autorisation explicite d'Ismaël — jamais décidé silencieusement pour un
+identifiant/mot de passe, même quand la solution technique est triviale
+(même principe que le refus systématique de coller des secrets ailleurs
+que dans cette session, établi au palier P2). `hypothesis2_executor.py`
+est câblé pour exiger `CAPITAL_API_KEY_HYPOTHESIS2`/
+`CAPITAL_IDENTIFIER_HYPOTHESIS2`/`CAPITAL_API_PASSWORD_HYPOTHESIS2` —
+absents, `run_hypothesis2_loop` échoue net (`ConfigError`) au démarrage,
+jamais un repli silencieux. Code déployé sur le VPS, PAS démarré. Pas
+ajouté à `process_watchdog.py` (aurait déclenché une fausse alerte
+"process manquant" pour un process pas encore censé tourner).
+
+Tests : `tests/test_ict_strategy.py` (34 tests, 100% de couverture),
+`tests/test_hypothesis2_executor.py`, `tests/test_config.py` étendu.
+
+### Vérification en conditions réelles (H3, contrôlée)
+
+[Section complétée après le déploiement et le test encadré — voir plus
+bas dans ce document pour le résultat daté.]
+
+---
+
 ## 2026-08-21 — 4e compte démo "synthèse" proposé par Ismaël = `allocator.py` (§2.5) — intention future, rien construit
 
 Ismaël a évoqué un 4e compte démo destiné à tester une logique

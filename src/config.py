@@ -73,6 +73,18 @@ class AppConfig:
     capital_account_id: Optional[str] = None
     capital_account_id_hypothesis3: Optional[str] = None
 
+    # Compte démo dédié à l'Hypothèse #2 (ICT/Smart Money, Option B,
+    # validée par Ismaël le 21/08/2026 — voir docs/HYPOTHESES.md).
+    # **Aucun identifiant dédié fourni à ce jour** (contrairement à H3) —
+    # voir docs/DECISIONS.md du 21/08/2026 pour le détail et les options
+    # possibles. `hypothesis2_executor.run_hypothesis2_loop` échoue net
+    # (ConfigError) tant qu'ils restent absents — jamais un repli
+    # silencieux vers un autre jeu d'identifiants.
+    capital_api_key_hypothesis2: Optional[str] = None
+    capital_identifier_hypothesis2: Optional[str] = None
+    capital_api_password_hypothesis2: Optional[str] = None
+    capital_account_id_hypothesis2: Optional[str] = None
+
 
 def _require(name: str) -> str:
     value = os.environ.get(name)
@@ -139,4 +151,8 @@ def load_config(dotenv_path: str = ".env") -> AppConfig:
         capital_api_password_hypothesis3=os.environ.get("CAPITAL_API_PASSWORD_HYPOTHESIS3") or None,
         capital_account_id=os.environ.get("CAPITAL_ACCOUNT_ID") or None,
         capital_account_id_hypothesis3=os.environ.get("CAPITAL_ACCOUNT_ID_HYPOTHESIS3") or None,
+        capital_api_key_hypothesis2=os.environ.get("CAPITAL_API_KEY_HYPOTHESIS2") or None,
+        capital_identifier_hypothesis2=os.environ.get("CAPITAL_IDENTIFIER_HYPOTHESIS2") or os.environ.get("CAPITAL_IDENTIFIER") or None,
+        capital_api_password_hypothesis2=os.environ.get("CAPITAL_API_PASSWORD_HYPOTHESIS2") or None,
+        capital_account_id_hypothesis2=os.environ.get("CAPITAL_ACCOUNT_ID_HYPOTHESIS2") or None,
     )

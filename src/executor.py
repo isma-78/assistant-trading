@@ -95,18 +95,46 @@ LIMIT_ORDER_EXPIRY_SECONDS = 15 * 60
 
 DIRECTION_TO_API = {"long": "BUY", "short": "SELL"}
 
-# Regroupe toute source non "hypothesis" sous l'étiquette "stationx" pour
-# le routage des enveloppes (§2.11 : "Métriques calculées séparément par
-# source"). signals.source/trades.source stockent la valeur brute du
-# canal Telegram (id numérique, voir CLAUDE.md) pour Station X, jamais la
-# chaîne littérale "stationx" — cette fonction normalise pour le seul
-# besoin du routage d'enveloppe, sans réécrire la donnée d'origine. Voir
-# docs/DECISIONS.md (Flux B, palier P2.5).
-HYPOTHESIS_SOURCE = "hypothesis"
+# Regroupe toute source non reconnue comme une hypothèse sous l'étiquette
+# "stationx" pour le routage des enveloppes (§2.11 : "Métriques calculées
+# séparément par source"). signals.source/trades.source stockent la
+# valeur brute du canal Telegram (id numérique, voir CLAUDE.md) pour
+# Station X, jamais la chaîne littérale "stationx" — cette fonction
+# normalise pour le seul besoin du routage d'enveloppe, sans réécrire la
+# donnée d'origine. Voir docs/DECISIONS.md (Flux B, palier P2.5).
+#
+# Bug réel trouvé le 21/08/2026 (voir docs/DECISIONS.md) en préparant H3/H2 :
+# cette fonction ne reconnaissait QUE "hypothesis" (H1) — toute autre
+# source (y compris une future hypothèse légitime) retombait
+# silencieusement sur "stationx", mélangeant ses statistiques avec celles
+# de Station X. Corrigé en généralisant à un ENSEMBLE de sources
+# hypothèse connues plutôt qu'une seule valeur — toute nouvelle hypothèse
+# DOIT être ajoutée à _KNOWN_HYPOTHESIS_SOURCES ici, sinon ses trades
+# seront mélangés à ceux de Station X sans erreur ni avertissement.
+HYPOTHESIS_SOURCE = "hypothesis"    # Hypothèse #1 (docs/HYPOTHESES.md, 20/08/2026)
+HYPOTHESIS3_SOURCE = "hypothesis3"  # Hypothèse #3 (docs/HYPOTHESES.md, 21/08/2026)
+HYPOTHESIS2_SOURCE = "hypothesis2"  # Hypothèse #2 (docs/HYPOTHESES.md, 21/08/2026)
+_KNOWN_HYPOTHESIS_SOURCES = {HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE}
+
+# Résolution de bougie utilisée pour recalculer le canal de Donchian du
+# trailing (§2.11) de chaque hypothèse — Station X n'y figure jamais
+# (state.tp1 is None ne s'applique qu'aux trades sans TP, voir
+# _evaluate_position_management). Ajoutée le 21/08/2026 : avant cette
+# date, manage_open_trades récupérait TOUJOURS des bougies horaires pour
+# ce calcul, ce qui aurait silencieusement appliqué un canal de Donchian
+# horaire au trailing de l'Hypothèse #3 (résolution M15) — jamais observé
+# en production (H3 non encore déployée à cette date), corrigé avant tout
+# déploiement. Toute nouvelle hypothèse ajoutée à _KNOWN_HYPOTHESIS_SOURCES
+# doit aussi apparaître ici (repli sur "HOUR" sinon, jamais une exception).
+_TREND_CANDLE_RESOLUTION = {
+    HYPOTHESIS_SOURCE: "HOUR",
+    HYPOTHESIS3_SOURCE: "MINUTE_15",
+    HYPOTHESIS2_SOURCE: "HOUR",
+}
 
 
 def _envelope_source_key(source: str) -> str:
-    return HYPOTHESIS_SOURCE if source == HYPOTHESIS_SOURCE else "stationx"
+    return source if source in _KNOWN_HYPOTHESIS_SOURCES else "stationx"
 
 
 def _now() -> str:
@@ -792,7 +820,11 @@ def manage_open_trades(
             # count : au moins DONCHIAN_PERIOD+1 (trailing Flux B) ET
             # 14+1 (ATR Station X) bougies — la même récupération sert
             # aux deux calculs, quelle que soit la source du trade.
-            candles = get_candles(client, state.asset, resolution="HOUR", count=DONCHIAN_PERIOD + 1)
+            # resolution : par hypothèse (_TREND_CANDLE_RESOLUTION), jamais
+            # "HOUR" en dur — voir son commentaire (bug du 21/08/2026,
+            # corrigé avant le déploiement de l'Hypothèse #3 en M15).
+            trend_resolution = _TREND_CANDLE_RESOLUTION.get(_envelope_source_key(state.source), "HOUR")
+            candles = get_candles(client, state.asset, resolution=trend_resolution, count=DONCHIAN_PERIOD + 1)
             atr = compute_atr(candles, period=14)
 
             action = evaluate_position_management(state, snapshot.mid, atr, risk_engine, candles=candles)

@@ -1,0 +1,165 @@
+"""
+Tests de technical_strategy_executor — moteur générique extrait le
+21/08/2026 (voir docs/DECISIONS.md). La logique de décision d'entrée
+elle-même (trend_strategy.evaluate_entry, ict_strategy.evaluate_entry)
+est testée séparément à 100% dans son propre fichier ; ceux-ci couvrent
+le câblage générique (signal généré -> enregistré, garde-fous de
+configuration), pas une exigence de couverture totale sur
+run_technical_strategy_loop lui-même — même régime que
+test_trend_executor.py (dont l'existence, avant le refactor du
+21/08/2026, ne couvrait déjà pas run_trend_loop en totalité).
+"""
+
+from dataclasses import dataclass
+from unittest.mock import MagicMock
+
+import pytest
+
+from src.config import ConfigError
+from src.db import connection_scope, get_connection, init_db
+from src.market_data import Candle
+from src.technical_strategy_executor import (
+    _default_describe_signal,
+    _generate_and_queue_signal,
+    _has_active_signal_or_trade,
+    run_technical_strategy_loop,
+)
+
+
+@dataclass(frozen=True)
+class _FakeSignal:
+    direction: str
+    entry_price: float
+    stop_price: float
+    confidence: float = 1.0
+
+
+def _fake_entry_fn(asset, candles):
+    return _FakeSignal(direction="long", entry_price=1.2, stop_price=1.1)
+
+
+def _no_entry_fn(asset, candles):
+    return None
+
+
+def test_default_describe_signal_mentions_asset_and_prices():
+    text = _default_describe_signal("Hypothèse #3", "GOLD", _FakeSignal("long", 2400.0, 2380.0))
+    assert "GOLD" in text
+    assert "long" in text
+    assert "2400" in text
+    assert "2380" in text
+
+
+def test_has_active_signal_or_trade_scoped_by_source(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO trades (deal_id, source, actif, mode, direction, taille_initiale, "
+            "stop_loss_initial, stop_loss_courant, risque_eur, pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES ('deal-1', 'hypothesis3', 'EURUSD', 'demo', 'long', 100, 1.09, 1.09, 10.0, 2.0, "
+            "'2026-08-21T00:00:00Z', 'ouvert')"
+        )
+    assert _has_active_signal_or_trade(db_path, "EURUSD", "hypothesis3") is True
+    # Une autre source sur le même actif ne doit jamais bloquer celle-ci
+    assert _has_active_signal_or_trade(db_path, "EURUSD", "hypothesis2") is False
+    assert _has_active_signal_or_trade(db_path, "EURUSD", "hypothesis") is False
+
+
+def test_generate_and_queue_signal_no_signal(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.return_value = {"prices": []}
+    _generate_and_queue_signal(
+        db_path, client, "EURUSD",
+        source="hypothesis3", resolution="MINUTE_15", entry_fn=_no_entry_fn,
+        channel="test_channel", hypothesis_label="Hypothèse #3",
+    )
+    conn = get_connection(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) AS n FROM signals").fetchone()["n"] == 0
+    finally:
+        conn.close()
+
+
+def test_generate_and_queue_signal_inserts_with_correct_source_and_channel(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.return_value = {
+        "prices": [{
+            "snapshotTimeUTC": "2026-08-21T00:00:00Z",
+            "openPrice": {"bid": 1.2, "ask": 1.2}, "highPrice": {"bid": 1.2, "ask": 1.2},
+            "lowPrice": {"bid": 1.2, "ask": 1.2}, "closePrice": {"bid": 1.2, "ask": 1.2},
+        }]
+    }
+    _generate_and_queue_signal(
+        db_path, client, "EURUSD",
+        source="hypothesis3", resolution="MINUTE_15", entry_fn=_fake_entry_fn,
+        channel="hypothesis3_channel", hypothesis_label="Hypothèse #3",
+    )
+    conn = get_connection(db_path)
+    try:
+        signal = conn.execute("SELECT * FROM signals").fetchone()
+        assert signal is not None
+        assert signal["source"] == "hypothesis3"
+        assert signal["actif"] == "EURUSD"
+        raw = conn.execute("SELECT * FROM raw_messages WHERE id = ?", (signal["raw_message_id"],)).fetchone()
+        assert raw["channel"] == "hypothesis3_channel"
+        assert "Hypothèse #3" in raw["raw_text"]
+    finally:
+        conn.close()
+    client.get_prices.assert_called_once_with("EURUSD", resolution="MINUTE_15", max_bars=220)
+
+
+def test_generate_and_queue_signal_uses_custom_describe_signal(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.return_value = {
+        "prices": [{
+            "snapshotTimeUTC": "2026-08-21T00:00:00Z",
+            "openPrice": {"bid": 1.2, "ask": 1.2}, "highPrice": {"bid": 1.2, "ask": 1.2},
+            "lowPrice": {"bid": 1.2, "ask": 1.2}, "closePrice": {"bid": 1.2, "ask": 1.2},
+        }]
+    }
+    _generate_and_queue_signal(
+        db_path, client, "EURUSD",
+        source="hypothesis2", resolution="HOUR", entry_fn=_fake_entry_fn,
+        channel="hypothesis2_channel", hypothesis_label="Hypothèse #2",
+        describe_signal=lambda label, asset, signal: f"CUSTOM {label} {asset}",
+    )
+    conn = get_connection(db_path)
+    try:
+        signal = conn.execute("SELECT * FROM signals").fetchone()
+        raw = conn.execute("SELECT * FROM raw_messages WHERE id = ?", (signal["raw_message_id"],)).fetchone()
+        assert raw["raw_text"] == "CUSTOM Hypothèse #2 EURUSD"
+    finally:
+        conn.close()
+
+
+def test_run_technical_strategy_loop_raises_configerror_missing_credentials(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    config = MagicMock()
+    with pytest.raises(ConfigError, match="identifiants"):
+        run_technical_strategy_loop(
+            config, db_path,
+            source="hypothesis2", assets=["EURUSD"], resolution="HOUR", entry_fn=_no_entry_fn,
+            api_key=None, identifier=None, password=None, account_id="some-account",
+            channel="c", process_name="p", hypothesis_label="Hypothèse #2",
+        )
+
+
+def test_run_technical_strategy_loop_raises_configerror_missing_account_id(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    config = MagicMock()
+    with pytest.raises(ConfigError, match="compte"):
+        run_technical_strategy_loop(
+            config, db_path,
+            source="hypothesis2", assets=["EURUSD"], resolution="HOUR", entry_fn=_no_entry_fn,
+            api_key="key", identifier="id", password="pwd", account_id=None,
+            channel="c", process_name="p", hypothesis_label="Hypothèse #2",
+        )

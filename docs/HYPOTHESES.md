@@ -762,5 +762,57 @@ principe.
 
 ---
 
+## 2026-08-21 — Hypothèse #3 : validée et déployée
+
+Feu vert explicite d'Ismaël reçu (« toutes les questions préalables
+étant résolues »), après validation du modèle de budget corrigé
+ci-dessus. **Statut réel à partir de cette date : validée et déployée**
+(l'entrée d'origine du 20/08/2026 garde sa mention "proposée, en attente
+de validation" intacte, convention de ce fichier). Code, tests (100% sur
+la logique de décision, réutilisée telle quelle de l'Hypothèse #1) et
+déploiement détaillés dans `docs/DECISIONS.md` (21/08/2026).
+
+## 2026-08-21 — Hypothèse #2 : règles écrites nécessaires à l'implémentation de l'Option B
+
+La décision du 21/08/2026 ci-dessus retient l'Option B, mais la
+proposition du 20/08/2026 ne détaillait la règle d'entrée complète
+(point 4) que pour l'Option A. Écrire du code exécutable a exigé trois
+choix concrets, **pré-enregistrés ici avant toute observation de
+résultat** (aucune donnée regardée avant ces choix), pas dérivés d'une
+règle ICT canonique (aucune n'existe pour ces points précis) :
+
+1. **Sélection de la jambe d'impulsion** : parmi les swings fractals
+   CONFIRMÉS de la fenêtre récente, on prend le dernier swing bas
+   confirmé, puis le PREMIER swing haut confirmé plus récent que lui
+   (régime haussier — symétrique en régime baissier : dernier swing
+   haut, puis premier swing bas plus récent). Aucune paire valide → pas
+   de signal.
+2. **Fenêtre de recherche** des swings et des FVG : les 20 dernières
+   bougies (`DONCHIAN_PERIOD`, réutilisé — PAS un nouveau paramètre,
+   même raisonnement que le point 1 de la proposition d'origine pour les
+   FVG), plus une marge de `2×FRACTAL_K` (4) bougies pour permettre la
+   confirmation des swings en bord de fenêtre.
+3. **BOS/CHoCH (point 3 de la proposition) implémenté et testé, mais
+   PAS câblé comme condition d'entrée** dans cette première version —
+   la proposition validée ne l'exigeait pas explicitement (elle
+   définissait seulement la capacité comme "devenant disponible" sous
+   l'Option B). L'ajouter comme filtre supplémentaire serait une
+   complexité non validée par Ismaël.
+
+Stop initial : le swing opposé à la direction (bas pour un long, haut
+pour un short) — traduction directe de "stop = borne opposée du canal"
+une fois le canal remplacé par la jambe de swings. Sortie : trailing sur
+`compute_trailing_stop_channel`, inchangé (décision inconditionnelle de
+la proposition d'origine, valable pour les deux options).
+
+**Décision finale confirmée par Ismaël le 21/08/2026** (voir entrée
+ci-dessus) : Option B, 8 actifs, absence de confirmation avant entrée
+acceptée. Code construit et testé à 100% (`src/ict_strategy.py`,
+34 tests) — **PAS déployé en production** : identifiants Capital.com
+dédiés à ce compte manquants, voir `docs/DECISIONS.md` (21/08/2026) pour
+le détail complet et les options pour Ismaël.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2 ou #3 — jamais une modification de ce qui précède.*
