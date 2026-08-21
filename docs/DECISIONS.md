@@ -12,6 +12,71 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-21 — Incident critique, réponse — Étapes 3-4 : réconciliation + vraie cause racine trouvée (deux causes distinctes, aucune des deux n'était l'hypothèse initiale)
+
+**Hypothèse initiale (workingOrderId collision dans `check_pending_fills`) FORMELLEMENT ÉCARTÉE** : vérifiée puis infirmée avec les données réelles du broker (`GET /positions` détaillé) — les 4 positions ETHUSD orphelines ont chacune un `workingOrderId` DIFFÉRENT (`...c669`, `...c9e4`, `...ceab`, `...bdd0`). Le dict de `check_pending_fills` ne pouvait donc pas les avoir collisionnées. Ne pas réutiliser cette explication ailleurs.
+
+### Cause réelle n°1 (les 5 trades fantômes) — CONFIRMÉE via `GET /history/activity` + `/history/transactions`
+
+Les 5 trades marqués "ouvert" en base (BTCUSD-14, USDJPY-15, ETHUSD-16, GBPUSD-19, US100-23) ont TOUS un événement `"source": "SL"` dans l'historique du compte — un **stop garanti authentique, exécuté côté broker**, entre 11h34 et 13h46 UTC ce jour-là. Le mécanisme : un stop garanti Capital.com s'exécute INSTANTANÉMENT dès que le prix le touche, sans attendre notre prochain cycle de polling. Quand notre boucle (`manage_open_trades`) détecte ensuite le même stop touché de son côté et appelle `client.close_position()`, le broker répond 404 "position introuvable" (déjà fermée) — cette exception, non gérée spécifiquement, remontait telle quelle jusqu'au `except Exception` générique de `manage_open_trades`, qui journalise et passe au trade suivant **sans jamais mettre à jour `trades.statut`**. Le trade reste fantôme indéfiniment, retenté à chaque cycle (source du bruit 404 constaté dans les deux process). Rien à voir avec le bug d'exclusion de sources (étape 2) — un bug distinct, préexistant, simplement rendu plus visible/fréquent par le doublon de process.
+
+**Corrigé** : `_apply_management_action` capture désormais `CapitalApiError` autour de `client.close_position()`. Sur échec, vérifie la réalité via un appel FRAIS à `get_open_positions()` (jamais une lecture du message d'erreur, dont le format pourrait changer) : si la position n'existe VRAIMENT plus, la clôture est quand même journalisée en base (au meilleur prix connu, `action.exit_price`) au lieu de laisser un fantôme — fail-safe réinterprété : ici, "ne rien faire" est le vrai danger, pas l'action. Si la position existe toujours, l'exception est relevée telle quelle (comportement inchangé, aucune régression sur les vraies erreurs).
+
+### Cause probable n°2 (les 4 positions ETHUSD orphelines) — bien étayée, PAS certaine à 100%
+
+Confirmé via `/history/activity` : 4 ordres RÉELLEMENT placés et exécutés côté broker entre 07:17 et 07:21 UTC (`"source": "USER", "type": "POSITION", "status": "ACCEPTED"`), correspondant chacun à un signal distinct en base (id 83, 84, 85, 86 — 4 signaux ETHUSD approuvés en l'espace de 4 minutes, stop identique 2336,485, entrées légèrement différentes). **Aucun des 4 n'a de ligne `trades`** alors que le placement a réussi côté broker — signifie que `client.place_limit_order()` a réussi (le broker confirme), mais l'`INSERT INTO trades` qui suit immédiatement dans `open_signal()` n'a jamais abouti. Hypothèse la plus plausible, non confirmée avec certitude (aucune trace disponible a posteriori pour trancher définitivement) : une exception silencieuse entre les deux (ex. contention SQLite si une exécution concurrente du process a eu lieu) a interrompu `open_signal()` après l'appel broker mais avant l'écriture — `_has_active_signal_or_trade` ne voyait alors plus aucune ligne bloquante et laissait le prochain cycle regénérer un signal sur la même rupture de canal. **Pas corrigé aujourd'hui** — nécessiterait d'instrumenter `open_signal()` pour capturer ce cas précis (ex. réconciliation automatique après un succès de `place_limit_order()` suivi d'un échec d'écriture), proposé mais pas implémenté, à valider avec Ismaël séparément.
+
+### Réconciliation effectuée (compte "hypothèse 3")
+
+Sauvegarde DB prise avant toute écriture
+(`data/assistant_trading.db.backup-before-reconcile-21-08`).
+
+**5 trades fantômes fermés** avec les vraies données du broker (stop
+garanti, prix de sortie = `stop_loss_courant` déjà suivi par notre
+système — les stops garantis s'exécutent exactement à leur niveau
+configuré, sans slippage) :
+
+| Trade | R | PnL estimé (système, R×risque_eur) | PnL réel broker (TRADE+frais GSL) | Écart |
+|---|---|---|---|---|
+| USDJPY-15 | −0,496 | −4,95€ | −5,32€ | +0,37€ |
+| BTCUSD-14 | +0,476 | +4,75€ | +3,47€ | +1,28€ |
+| US100-23 | −0,664 | −6,62€ | −7,01€ | +0,39€ |
+| GBPUSD-19 | −0,955 | −9,45€ | −9,98€ | +0,53€ |
+| ETHUSD-16 | −0,674 | −6,73€ | −7,64€ | +0,91€ |
+
+Écart systématiquement positif et modeste (< 1,3€) : cohérent avec les
+frais de stop garanti ("GSL fee") que notre modèle R×risque_eur
+n'intègre pas — écart attendu, pas une anomalie de calibration à
+creuser dans l'urgence (le modèle R×risque_eur est la même
+méthodologie que pour TOUT autre trade du système, gardée pour rester
+cohérente avec les statistiques existantes plutôt que d'introduire une
+seconde méthode de calcul juste pour ces 5 trades).
+
+**4 trades ETHUSD créés** pour les positions réelles orphelines,
+rattachés aux signaux d'origine identifiés par corrélation des horodatages
+(`WORKING_ORDER CREATED` de l'historique broker ↔ `signals.created_at`) :
+trades id 26-29, ~10€ de risque chacun (cohérent avec 2% de
+l'enveloppe). **Toutes les 4 avaient déjà un stop garanti broker actif**
+(`guaranteedStop: true`, `stopLevel: 2336.485`) — contrairement à la
+crainte initiale, ces positions n'étaient jamais totalement dépourvues
+de protection ; seul le SUIVI (trailing, clôture pilotée par le
+système) leur manquait. Aucun nouveau stop appliqué : celui déjà en
+place chez le broker est repris tel quel comme `stop_loss_initial`/
+`stop_loss_courant`.
+
+**Vérification finale** : `GET /positions` (7 réelles) comparé aux
+trades `statut='ouvert'` en base pour `source='hypothesis3'` (7) —
+**correspondance exacte, aucun écart résiduel** (confirmé
+programmatiquement, pas visuellement).
+
+**Tests** : `test_manage_open_trades_reconciles_when_broker_already_
+closed_position` (le cas confirmé), `test_manage_open_trades_reraises_
+when_position_genuinely_still_open` (contre-test : une vraie erreur
+reste une vraie erreur, jamais masquée). 558 tests au total, 100%
+toujours vérifié sur les modules critiques.
+
+---
+
 ## 2026-08-21 — Incident critique, réponse — Étape 1 : H3 mis en pause
 
 Priorité absolue demandée par Ismaël. `/pause` écarté : il ne bloque que

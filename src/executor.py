@@ -940,7 +940,38 @@ def _apply_management_action(
     # Clôtures (partielles ou totales)
     is_full_close = action.action == ManagementActionType.CLOSE_FULL_STOP
     close_size = None if is_full_close else round(action.fraction_to_close * _initial_size(db_path, state.trade_id), 10)
-    client.close_position(state.deal_id, size=close_size)
+    try:
+        client.close_position(state.deal_id, size=close_size)
+    except CapitalApiError:
+        # Incident réel du 21/08/2026 (voir docs/DECISIONS.md) : un stop
+        # garanti s'exécute INSTANTANÉMENT côté broker dès que le prix le
+        # touche, sans attendre notre prochain cycle de polling. Si notre
+        # boucle détecte le même stop touché ensuite (course normale, pas
+        # une anomalie), cet appel échoue en 404 "position introuvable" —
+        # avant ce correctif, l'exception remontait telle quelle jusqu'au
+        # `except Exception` générique de manage_open_trades, qui journalise
+        # et passe au trade suivant SANS jamais mettre à jour `trades.statut`
+        # : le trade restait "ouvert" indéfiniment (5 trades fantômes
+        # trouvés et réconciliés manuellement ce jour-là, voir
+        # docs/DECISIONS.md). Vérifié ici via un appel frais à
+        # get_open_positions() (jamais une simple lecture du message
+        # d'erreur, qui pourrait changer de format) : si la position
+        # n'existe VRAIMENT plus, on procède quand même à la clôture en
+        # base (au meilleur prix connu, action.exit_price) plutôt que de
+        # rester bloqué — invariant #7, fail-safe, mais ici "ne rien faire"
+        # laisserait un trade fantôme, pas une position protégée. Si la
+        # position existe encore, l'erreur est réelle : ne jamais la
+        # masquer, la relever telle quelle (comportement inchangé).
+        still_open = any(
+            p.get("position", {}).get("dealId") == state.deal_id for p in client.get_open_positions()
+        )
+        if still_open:
+            raise
+        logger.warning(
+            "Position %s déjà fermée côté broker (stop garanti probable) — "
+            "réconciliation de la base sur le dernier prix connu (%s)",
+            state.deal_id, action.exit_price,
+        )
 
     now = _now()
     palier = {

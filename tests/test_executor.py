@@ -987,6 +987,87 @@ def test_manage_open_trades_closes_full_stop_and_updates_envelope(tmp_path):
     assert envelope_manager.balance == 490.0  # perte imputée en totalité (§2.3)
 
 
+def test_manage_open_trades_reconciles_when_broker_already_closed_position(tmp_path):
+    # Incident réel du 21/08/2026 (voir docs/DECISIONS.md) : un stop
+    # garanti s'exécute instantanément côté broker ; si notre boucle
+    # détecte le même stop touché ensuite, close_position() échoue en 404
+    # "position introuvable" — la base doit quand même être réconciliée
+    # (5 trades fantômes trouvés en production avant ce correctif), pas
+    # rester bloquée indéfiniment.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-ghost', 'hypothesis3', 'GOLD', 'demo', 'short', 0.01, 100.0, 101.0, 101.0, 10.0, 2.0, "
+            "'2026-08-21T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 101.0, "offer": 101.2, "marketStatus": "TRADEABLE"}}
+    client.get_prices.return_value = {"prices": []}
+    client.close_position.side_effect = CapitalApiError("404 not-found.dealId")
+    client.get_open_positions.return_value = []  # broker : la position n'existe vraiment plus
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis3")
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("GOLD", "hypothesis3"): envelope_manager}, envelope_ids={("GOLD", "hypothesis3"): envelope_id},
+    )
+
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT statut, r_multiple_total FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["statut"] == "ferme"  # réconcilié, jamais resté fantôme
+        assert trade["r_multiple_total"] == pytest.approx(-1.0)
+    finally:
+        conn.close()
+    assert envelope_manager.balance == 490.0  # perte bien imputée malgré le 404
+
+
+def test_manage_open_trades_reraises_when_position_genuinely_still_open(tmp_path):
+    # Contre-test : si close_position() échoue mais que la position existe
+    # TOUJOURS côté broker (une vraie erreur, pas une clôture manquée),
+    # ne jamais la traiter comme fermée — l'exception doit remonter et le
+    # trade rester "ouvert" (comportement fail-safe inchangé).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-real-error', 'hypothesis3', 'GOLD', 'demo', 'short', 0.01, 100.0, 101.0, 101.0, 10.0, 2.0, "
+            "'2026-08-21T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 101.0, "offer": 101.2, "marketStatus": "TRADEABLE"}}
+    client.get_prices.return_value = {"prices": []}
+    client.close_position.side_effect = CapitalApiError("500 server error")
+    client.get_open_positions.return_value = [{"position": {"dealId": "deal-real-error"}}]  # existe toujours
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis3")
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("GOLD", "hypothesis3"): envelope_manager}, envelope_ids={("GOLD", "hypothesis3"): envelope_id},
+    )
+
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["statut"] == "ouvert"  # jamais réconcilié sur une erreur réelle
+    finally:
+        conn.close()
+    assert envelope_manager.balance == 500.0  # enveloppe jamais touchée
+
+
 def test_infer_close_reason_all_branches():
     from src.executor import ManagementAction, _infer_close_reason
 
