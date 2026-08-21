@@ -223,11 +223,20 @@ def test_update_position_stop_includes_guaranteed_stop_flag_when_true():
     assert session.put.call_args.kwargs["json"] == {"stopLevel": 92000.0, "guaranteedStop": True}
 
 
+_NOT_YET_ACTIVE_ACCOUNTS = _fake_response(json_body={
+    "accounts": [
+        {"accountId": "some-other-account", "preferred": True},
+        {"accountId": "327614560537498782", "preferred": False},
+    ]
+})
+
+
 def test_switch_account_targets_explicit_account_id():
     # Incident réel du 20/08/2026 (voir docs/DECISIONS.md) : le compte
     # "préféré" est un état partagé entre toutes les clés API d'un même
     # identifiant, peut basculer silencieusement — ne jamais en dépendre.
     client, session = _logged_in_client()
+    session.get.return_value = _NOT_YET_ACTIVE_ACCOUNTS
     session.put.return_value = _fake_response(json_body={"status": "SUCCESS"}, headers={})
 
     result = client.switch_account("327614560537498782")
@@ -242,6 +251,7 @@ def test_switch_account_targets_explicit_account_id():
 
 def test_switch_account_updates_tokens_when_response_includes_new_ones():
     client, session = _logged_in_client()
+    session.get.return_value = _NOT_YET_ACTIVE_ACCOUNTS
     session.put.return_value = _fake_response(
         json_body={"status": "SUCCESS"}, headers={"CST": "new-cst", "X-SECURITY-TOKEN": "new-sec"},
     )
@@ -257,6 +267,7 @@ def test_switch_account_updates_tokens_when_response_includes_new_ones():
 
 def test_switch_account_keeps_existing_tokens_when_response_has_none():
     client, session = _logged_in_client()
+    session.get.return_value = _NOT_YET_ACTIVE_ACCOUNTS
     session.put.return_value = _fake_response(json_body={"status": "SUCCESS"}, headers={})
 
     client.switch_account("327614560537498782")
@@ -268,6 +279,56 @@ def test_switch_account_keeps_existing_tokens_when_response_has_none():
     assert headers_used["X-SECURITY-TOKEN"] == "s"
 
 
+def test_switch_account_skips_put_when_already_active():
+    # Incident réel du 21/08/2026 (voir docs/DECISIONS.md) : si le compte
+    # "préféré" partagé coïncide déjà avec la cible au moment de login(),
+    # PUT /session échoue avec error.not-different.accountId — vérifié
+    # ici via GET /accounts AVANT toute tentative, aucun appel PUT ne
+    # doit être fait dans ce cas.
+    client, session = _logged_in_client()
+    session.get.return_value = _fake_response(json_body={
+        "accounts": [
+            {"accountId": "other-account", "preferred": False},
+            {"accountId": "327614560537498782", "preferred": True},
+        ]
+    })
+
+    result = client.switch_account("327614560537498782")
+
+    assert result == {"accountId": "327614560537498782", "alreadyActive": True}
+    session.put.assert_not_called()
+
+
+def test_switch_account_puts_when_target_not_yet_preferred():
+    client, session = _logged_in_client()
+    session.get.return_value = _fake_response(json_body={
+        "accounts": [
+            {"accountId": "327614560537498782", "preferred": True},
+            {"accountId": "target-account", "preferred": False},
+        ]
+    })
+    session.put.return_value = _fake_response(json_body={"status": "SUCCESS"}, headers={})
+
+    result = client.switch_account("target-account")
+
+    assert result == {"status": "SUCCESS"}
+    session.put.assert_called_once()
+    assert session.put.call_args.kwargs["json"] == {"accountId": "target-account"}
+
+
+def test_switch_account_puts_when_accounts_list_empty():
+    # Défense en profondeur : si /accounts ne renvoie rien d'exploitable,
+    # ne jamais présumer "déjà actif" silencieusement — tente le PUT
+    # normalement plutôt que de sauter une étape sur une base incertaine.
+    client, session = _logged_in_client()
+    session.get.return_value = _fake_response(json_body={"accounts": []})
+    session.put.return_value = _fake_response(json_body={"status": "SUCCESS"}, headers={})
+
+    client.switch_account("327614560537498782")
+
+    session.put.assert_called_once()
+
+
 def test_switch_account_before_login_raises():
     client, _ = _client_with_session()
     with pytest.raises(CapitalApiError):
@@ -276,6 +337,7 @@ def test_switch_account_before_login_raises():
 
 def test_switch_account_http_error_wrapped():
     client, session = _logged_in_client()
+    session.get.return_value = _NOT_YET_ACTIVE_ACCOUNTS
     session.put.return_value = _fake_response(status_ok=False)
     with pytest.raises(CapitalApiError):
         client.switch_account("327614560537498782")

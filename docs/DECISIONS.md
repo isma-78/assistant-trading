@@ -12,6 +12,55 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-21 — Lancement de l'Hypothèse #2 — bug générique trouvé et corrigé au premier démarrage
+
+Ismaël a fourni les identifiants Capital.com dédiés à l'Hypothèse #2
+(`CAPITAL_API_KEY_HYPOTHESIS2`/`CAPITAL_IDENTIFIER_HYPOTHESIS2`/
+`CAPITAL_API_PASSWORD_HYPOTHESIS2`, ajoutés directement dans `.env` local
+par lui — jamais collés dans la conversation, transférés vers le VPS via
+un fichier temporaire jamais affiché dans aucune sortie d'outil, même
+principe que pour H3 le 20/08/2026). `CAPITAL_ACCOUNT_ID_HYPOTHESIS2`
+(327950654613312670) était déjà en place depuis la découverte du compte
+lors de la préparation de H3. Test de connexion en lecture seule réussi
+en local avant tout déploiement : identifiants valides, compte
+"hypothèse 2" confirmé, 0 position/ordre existant.
+
+**`hypothesis2_executor` a planté au tout premier démarrage** :
+`error.not-different.accountId`. Cause générique, pas spécifique à H2 —
+le compte "hypothèse 2" se trouvait être le compte "préféré" partagé au
+moment du login (voir l'incident du 20/08/2026 sur ce même flag). Notre
+`CapitalClient.switch_account()` traitait ce cas comme une erreur fatale
+alors que la post-condition voulue (session ciblant bien `account_id`)
+était déjà remplie — le process plantait au lieu de simplement continuer.
+**Ce bug était latent depuis le correctif du 20/08/2026 et aurait pu
+frapper H1 ou H3 à n'importe quel redémarrage** où leur compte cible
+serait devenu le compte "préféré" du moment — juste jamais arrivé avant
+aujourd'hui par pur hasard de timing.
+
+**Corrigé** : `switch_account()` vérifie désormais via `GET /accounts`
+(lecture fraîche, jamais un texte d'erreur à interpréter) si
+`account_id` est déjà le compte actif avant de tenter le `PUT /session`
+— si oui, retourne directement sans appel superflu ni erreur.
+
+**Tests** : `test_switch_account_skips_put_when_already_active`,
+`test_switch_account_puts_when_target_not_yet_preferred`,
+`test_switch_account_puts_when_accounts_list_empty` (défense en
+profondeur : jamais présumer "déjà actif" sur une liste de comptes
+vide/inexploitable). Les 4 tests `switch_account` existants adaptés
+pour configurer explicitement `GET /accounts` plutôt que de dépendre
+implicitement du comportement par défaut d'un `MagicMock` non configuré
+(fragile, corrigé en même temps). 565 tests au total, 100% toujours
+vérifié sur les modules critiques, `capital_client.py` à 100% également.
+
+**`hypothesis2_executor` relancé après correctif** — voir résultat daté
+ci-dessous.
+
+`hypothesis2_executor` ajouté à `process_watchdog.py` (retiré de la
+liste d'exclusion documentée le 21/08/2026 : "à ajouter le jour où il
+tourne réellement" — c'est ce jour).
+
+---
+
 ## 2026-08-21 — Deux correctifs de précision sur le stop garanti (marge de sécurité + plafond de trailing)
 
 Trouvés en tentant de soumettre un ordre GOLD réel pour vérifier le

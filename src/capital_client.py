@@ -64,7 +64,32 @@ class CapitalClient:
         Capture les nouveaux tokens CST/X-SECURITY-TOKEN si la réponse en
         renvoie (comportement non garanti par la documentation publique) ;
         sinon conserve ceux déjà obtenus par `login()`, qui restent
-        valides pour le compte nouvellement actif dans ce cas."""
+        valides pour le compte nouvellement actif dans ce cas.
+
+        Incident réel du 21/08/2026 (voir docs/DECISIONS.md) : si le
+        compte "préféré" (partagé, voir ci-dessus) coïncide DÉJÀ avec
+        `account_id` au moment de `login()` — plausible pour n'importe
+        laquelle des hypothèses, puisque ce flag change silencieusement
+        selon quelle clé API a été utilisée en dernier sur la plateforme
+        — Capital.com rejette le `PUT /session` avec
+        `error.not-different.accountId`, un 400 traité comme une erreur
+        fatale par le code appelant (process planté au démarrage,
+        `hypothesis2_executor` le premier jour de son lancement). Ce
+        n'est pourtant pas une erreur : la post-condition voulue (la
+        session cible bien `account_id`) est déjà remplie. Vérifié via
+        `GET /accounts` AVANT de tenter le `PUT` plutôt que d'intercepter
+        le message d'erreur (même principe que la réconciliation de
+        `executor._apply_management_action`, 21/08/2026 : une lecture
+        fraîche de l'état réel, jamais un texte d'erreur qui pourrait
+        changer de format) — si `account_id` est déjà le compte actif
+        (`preferred: true`), aucun appel PUT n'est tenté."""
+        accounts = self.get("/accounts").get("accounts", [])
+        already_active = any(
+            acc.get("accountId") == account_id and acc.get("preferred") for acc in accounts
+        )
+        if already_active:
+            return {"accountId": account_id, "alreadyActive": True}
+
         resp = self._session.put(
             f"{self.base_url}/session",
             headers={**self._headers(), "Content-Type": "application/json"},
