@@ -131,10 +131,15 @@ _KNOWN_HYPOTHESIS_SOURCES = {HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_
 _TREND_CANDLE_RESOLUTION = {
     HYPOTHESIS_SOURCE: "HOUR",
     HYPOTHESIS3_SOURCE: "MINUTE_15",
-    HYPOTHESIS2_SOURCE: "HOUR",
-    HYPOTHESIS4_SOURCE: "HOUR",  # sans effet pratique : l'Hypothèse #4 n'a pas de trailing (voir take_profit ci-dessous)
-    HYPOTHESIS5_SOURCE: "HOUR",  # résolution des bougies utilisées pour l'ATR du trailing TP3 (§2.10, state.tp1 is
-                                 # not None pour ce flux) — H5 n'entre JAMAIS dans la branche Donchian ci-dessous.
+    HYPOTHESIS2_SOURCE: "MINUTE_15",  # bascule 23/08/2026, couche session/multi-timeframe (voir docs/DECISIONS.md) :
+                                       # l'entrée passe de HOUR à M15, la résolution du trailing ATR post-TP2 (§2.10)
+                                       # est alignée en conséquence pour ne pas mélanger deux échelles de temps
+                                       # différentes entre décision d'entrée et gestion de la même position.
+    HYPOTHESIS4_SOURCE: "MINUTE_15",  # bascule 23/08/2026 — sans effet pratique : l'Hypothèse #4 n'a pas de
+                                       # trailing (voir take_profit ci-dessous), alignée pour la cohérence seule.
+    HYPOTHESIS5_SOURCE: "MINUTE_15",  # bascule 23/08/2026, même raisonnement que H2 — résolution des bougies
+                                       # utilisées pour l'ATR du trailing TP3 (§2.10, state.tp1 is not None pour ce
+                                       # flux) — H5 n'entre JAMAIS dans la branche Donchian ci-dessous.
 }
 
 # Régime de fond utilisé par chaque source hypothèse au moment de
@@ -175,6 +180,28 @@ _EXIT_TYPE_BY_SOURCE = {
     HYPOTHESIS2_SOURCE: "tp_partiel",    # bascule du 23/08/2026
     HYPOTHESIS4_SOURCE: "tp_fixe",       # cible unique, aucun trailing — mécanisme distinct du §2.10
     HYPOTHESIS5_SOURCE: "tp_partiel",    # tp_partiel depuis son origine, inchangé
+}
+
+# Couche session/multi-timeframe utilisée par chaque source au moment de
+# l'OUVERTURE du trade (ajout 23/08/2026, voir docs/DECISIONS.md,
+# docs/HYPOTHESES.md) — décision explicite d'Ismaël, maintenue après
+# mise en garde sur la perte de comparaison isolée H1/H3 : fenêtre de
+# session (0h/8h/13h UTC) + exécution M15 pour H2/H3/H4/H5, PLUS
+# confirmation de régime croisée (indices US30/US100) pour H3/H4
+# uniquement (H2/H5 déjà couvertes par leur régime structurel BOS/CHoCH,
+# option C). Dimension INDÉPENDANTE de `_REGIME_TYPE_BY_SOURCE` et
+# `_EXIT_TYPE_BY_SOURCE` (porte sur QUAND/COMMENT le signal est généré,
+# pas sur son régime d'entrée ni son mécanisme de sortie — jamais
+# fusionnées). `.get(source)` : None pour H1 et Station X (aucune notion
+# de couche timing pour elles, jamais concernées) — les trades H2/H3/
+# H4/H5 déjà en base avant ce déploiement nécessitent un rétro-
+# remplissage séparé (voir db._backfill_timing_layer), ils ne passent
+# jamais par ce mapping.
+_TIMING_LAYER_BY_SOURCE = {
+    HYPOTHESIS2_SOURCE: "session_multi_tf",
+    HYPOTHESIS3_SOURCE: "session_multi_tf",
+    HYPOTHESIS4_SOURCE: "session_multi_tf",
+    HYPOTHESIS5_SOURCE: "session_multi_tf",
 }
 
 
@@ -687,21 +714,22 @@ def open_signal(
 
     regime_type = _REGIME_TYPE_BY_SOURCE.get(signal_row["source"])
     exit_type = _EXIT_TYPE_BY_SOURCE.get(signal_row["source"], "tp_partiel")
+    timing_layer = _TIMING_LAYER_BY_SOURCE.get(signal_row["source"])
 
     with connection_scope(db_path) as conn:
         cursor = conn.execute(
             "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
             "prix_entree_prevu, guaranteed_stop, stop_loss_initial, stop_loss_courant, risque_eur, "
             "pourcentage_risque_applique, ouvert_at, statut, stop_elargi, stop_origine_signal, session_marche, "
-            "regime_type, exit_type) "
-            "VALUES (?, ?, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?, ?)",
+            "regime_type, exit_type, timing_layer) "
+            "VALUES (?, ?, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?, ?, ?)",
             (
                 signal_row["id"], result["deal_id"], signal_row["source"], asset, signal_row["sens"],
                 units, signal_row["entree_min"], int(adjustment.stop_distance > 0),
                 adjustment.stop_price, adjustment.stop_price, risk_amount_eur,
                 (risk_amount_eur / envelope_manager.balance * 100) if envelope_manager.balance else 0.0,
                 now, int(adjustment.widened), signal_row["stop_loss"] if adjustment.widened else None,
-                session_marche, regime_type, exit_type,
+                session_marche, regime_type, exit_type, timing_layer,
             ),
         )
         trade_id = cursor.lastrowid

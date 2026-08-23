@@ -29,6 +29,18 @@ récupère désormais des bougies M15 pour cette source précise
 (executor._TREND_CANDLE_RESOLUTION), pas H1 — bug potentiel identifié et
 corrigé avant ce déploiement (voir docs/DECISIONS.md du 21/08/2026).
 
+**Couche session/multi-timeframe, 23/08/2026 après-midi** (décision
+explicite d'Ismaël, voir docs/DECISIONS.md/docs/HYPOTHESES.md) :
+génération de signaux restreinte aux heures d'ouverture de session
+(Asie 0h/Londres 8h/New York 13h UTC) — la résolution M15 était déjà
+en place, ce point n'a aucun effet sur elle. **Confirmation de régime
+croisée AJOUTÉE** (`regime_confirmation.confirm_regime`, indices US30/
+US100 pour Londres/NY, indicateur technique seul pour l'Asie) : la
+rupture de canal Donchian (déclencheur INCHANGÉ) ne se traduit en signal
+persisté que si ce régime confirmé "tendance" est établi — H3 est
+"tendance" par construction (rupture dans le sens du régime, voir
+docs/HYPOTHESES.md).
+
 8 actifs (les mêmes que l'Hypothèse #1) — voir docs/HYPOTHESES.md pour
 le raisonnement (compte totalement séparé, aucun risque de collision).
 """
@@ -72,6 +84,8 @@ def run_hypothesis3_loop(config, db_path: str, interval_seconds: int = 60) -> No
         hypothesis_label=_HYPOTHESIS_LABEL,
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
+        session_gated=True,
+        require_regime_confirmation=True,
     )
 
 

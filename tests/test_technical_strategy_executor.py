@@ -11,7 +11,7 @@ test_trend_executor.py (dont l'existence, avant le refactor du
 """
 
 from dataclasses import dataclass
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -19,9 +19,11 @@ from src.config import ConfigError
 from src.db import connection_scope, get_connection, init_db
 from src.market_data import Candle
 from src.technical_strategy_executor import (
+    SESSION_OPEN_HOURS_UTC,
     _default_describe_signal,
     _generate_and_queue_signal,
     _has_active_signal_or_trade,
+    _should_generate_signals,
     run_technical_strategy_loop,
 )
 
@@ -207,6 +209,114 @@ def test_generate_and_queue_signal_persists_tp1_tp2_never_take_profit(tmp_path):
         assert signal["take_profit"] is None
     finally:
         conn.close()
+
+
+def test_generate_and_queue_signal_regime_confirmed_persists(tmp_path):
+    # H3/H4 (require_regime_confirmation=True) : signal persisté si la
+    # confirmation croisée passe.
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.return_value = {
+        "prices": [{
+            "snapshotTimeUTC": "2026-08-23T08:00:00Z",
+            "openPrice": {"bid": 1.2, "ask": 1.2}, "highPrice": {"bid": 1.2, "ask": 1.2},
+            "lowPrice": {"bid": 1.2, "ask": 1.2}, "closePrice": {"bid": 1.2, "ask": 1.2},
+        }]
+    }
+    with patch("src.technical_strategy_executor.confirm_regime", return_value=True) as mock_confirm:
+        _generate_and_queue_signal(
+            db_path, client, "EURUSD",
+            source="hypothesis3", resolution="MINUTE_15", entry_fn=_fake_entry_fn,
+            channel="hypothesis3_channel", hypothesis_label="Hypothèse #3",
+            require_regime_confirmation=True,
+        )
+    mock_confirm.assert_called_once()
+    args = mock_confirm.call_args[0]
+    assert args[0] is client
+    assert args[1] == "EURUSD"
+    assert args[2] == "long"
+    assert args[3] == "MINUTE_15"
+    conn = get_connection(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) AS n FROM signals").fetchone()["n"] == 1
+    finally:
+        conn.close()
+
+
+def test_generate_and_queue_signal_regime_not_confirmed_rejected(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.return_value = {
+        "prices": [{
+            "snapshotTimeUTC": "2026-08-23T08:00:00Z",
+            "openPrice": {"bid": 1.2, "ask": 1.2}, "highPrice": {"bid": 1.2, "ask": 1.2},
+            "lowPrice": {"bid": 1.2, "ask": 1.2}, "closePrice": {"bid": 1.2, "ask": 1.2},
+        }]
+    }
+    with patch("src.technical_strategy_executor.confirm_regime", return_value=False):
+        _generate_and_queue_signal(
+            db_path, client, "EURUSD",
+            source="hypothesis4", resolution="MINUTE_15", entry_fn=_fake_entry_fn,
+            channel="hypothesis4_channel", hypothesis_label="Hypothèse #4",
+            require_regime_confirmation=True,
+        )
+    conn = get_connection(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) AS n FROM signals").fetchone()["n"] == 0
+    finally:
+        conn.close()
+
+
+def test_generate_and_queue_signal_no_confirmation_check_when_not_required(tmp_path):
+    # H2/H5 (require_regime_confirmation=False, défaut) : confirm_regime
+    # n'est jamais appelée — option C, voir docs/HYPOTHESES.md.
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.return_value = {
+        "prices": [{
+            "snapshotTimeUTC": "2026-08-23T08:00:00Z",
+            "openPrice": {"bid": 1.2, "ask": 1.2}, "highPrice": {"bid": 1.2, "ask": 1.2},
+            "lowPrice": {"bid": 1.2, "ask": 1.2}, "closePrice": {"bid": 1.2, "ask": 1.2},
+        }]
+    }
+    with patch("src.technical_strategy_executor.confirm_regime") as mock_confirm:
+        _generate_and_queue_signal(
+            db_path, client, "EURUSD",
+            source="hypothesis2", resolution="MINUTE_15", entry_fn=_fake_entry_fn,
+            channel="hypothesis2_channel", hypothesis_label="Hypothèse #2",
+        )
+    mock_confirm.assert_not_called()
+    conn = get_connection(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) AS n FROM signals").fetchone()["n"] == 1
+    finally:
+        conn.close()
+
+
+# --- _should_generate_signals (gate de session, 23/08/2026) -----------------
+
+def test_should_generate_signals_not_gated_always_true():
+    # H1 : jamais appelée avec session_gated=True, toujours True.
+    for hour in range(24):
+        assert _should_generate_signals(session_gated=False, hour_utc=hour) is True
+
+
+def test_should_generate_signals_gated_true_on_session_open_hours():
+    for hour in SESSION_OPEN_HOURS_UTC:
+        assert _should_generate_signals(session_gated=True, hour_utc=hour) is True
+
+
+def test_should_generate_signals_gated_false_outside_session_open_hours():
+    for hour in range(24):
+        if hour not in SESSION_OPEN_HOURS_UTC:
+            assert _should_generate_signals(session_gated=True, hour_utc=hour) is False
+
+
+def test_session_open_hours_are_asia_london_ny():
+    assert SESSION_OPEN_HOURS_UTC == (0, 8, 13)
 
 
 def test_generate_and_queue_signal_uses_custom_describe_signal(tmp_path):

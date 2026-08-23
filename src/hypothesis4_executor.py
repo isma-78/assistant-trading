@@ -7,8 +7,20 @@ toute future évaluation/validation de H1/H2/H3/H4 appliquera néanmoins la
 correction pour comparaisons multiples calibrée sur 4 hypothèses, jamais 3).
 
 Détection via mean_reversion_strategy.evaluate_entry (régime MA(200) +
-toucher de bande de Bollinger(20, 2σ) opposée au régime), résolution
-horaire (HOUR — identique à l'Hypothèse #1).
+toucher de bande de Bollinger(20, 2σ) opposée au régime), déclencheur
+INCHANGÉ par tout ce qui suit.
+
+**Couche session/multi-timeframe, 23/08/2026 après-midi** (décision
+explicite d'Ismaël, voir docs/DECISIONS.md/docs/HYPOTHESES.md) :
+résolution M15 (au lieu de HOUR) + génération de signaux restreinte aux
+heures d'ouverture de session (Asie 0h/Londres 8h/New York 13h UTC) +
+confirmation de régime croisée (`regime_confirmation.confirm_regime`,
+indices US30/US100 pour Londres/NY, indicateur technique seul pour
+l'Asie) : le toucher de bande Bollinger (déclencheur INCHANGÉ) ne se
+traduit en signal persisté que si ce régime confirmé "contre-tendance"
+est établi — H4 est "contre-tendance" par construction (fade d'une
+extension court terme À L'INTÉRIEUR d'un régime de fond confirmé,
+jamais contre lui, voir docs/HYPOTHESES.md).
 
 **3e mécanisme de sortie**, distinct de Station X (TP1/TP2/TP3 + trailing
 ATR) et du Flux B/H3/H2 (aucun TP, trailing Donchian perpétuel) : TP fixe
@@ -64,7 +76,7 @@ def run_hypothesis4_loop(config, db_path: str, interval_seconds: int = 60) -> No
         config, db_path,
         source=HYPOTHESIS4_SOURCE,
         assets=HYPOTHESIS4_ASSETS,
-        resolution="HOUR",
+        resolution="MINUTE_15",
         entry_fn=evaluate_entry,
         api_key=config.capital_api_key_hypothesis4,
         identifier=config.capital_identifier_hypothesis4,
@@ -75,6 +87,8 @@ def run_hypothesis4_loop(config, db_path: str, interval_seconds: int = 60) -> No
         hypothesis_label=_HYPOTHESIS_LABEL,
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
+        session_gated=True,
+        require_regime_confirmation=True,
     )
 
 

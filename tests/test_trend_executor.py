@@ -17,6 +17,7 @@ from src.trend_executor import (
     HYPOTHESIS_ASSETS,
     _generate_and_queue_signal,
     _has_active_hypothesis_signal_or_trade,
+    run_trend_loop,
 )
 from src.trend_strategy import DONCHIAN_PERIOD, MA_PERIOD
 
@@ -164,3 +165,22 @@ def test_hypothesis_assets_matches_asset_whitelist():
 
 def test_candle_count_covers_ma_period_with_margin():
     assert CANDLE_COUNT > MA_PERIOD
+
+
+def test_run_trend_loop_untouched_by_session_multi_timeframe_layer():
+    # Régression stricte demandée explicitement (23/08/2026, couche
+    # session/multi-timeframe H2-H5, voir docs/DECISIONS.md) : H1 doit
+    # rester identique bit pour bit. Vérifié ici au niveau le plus direct
+    # possible — run_trend_loop n'appelle jamais run_technical_strategy_
+    # loop avec session_gated ni require_regime_confirmation, donc H1
+    # reçoit strictement leurs valeurs par défaut (False), quoi qu'il
+    # advienne du reste de la couche.
+    config = MagicMock()
+    with patch("src.trend_executor.run_technical_strategy_loop") as mock_loop:
+        run_trend_loop(config, "db.sqlite", interval_seconds=42)
+
+    mock_loop.assert_called_once()
+    _, kwargs = mock_loop.call_args
+    assert kwargs["resolution"] == "HOUR"
+    assert "session_gated" not in kwargs
+    assert "require_regime_confirmation" not in kwargs

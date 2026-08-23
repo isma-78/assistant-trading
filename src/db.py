@@ -159,9 +159,14 @@ CREATE TABLE IF NOT EXISTS trades (
     regime_type TEXT,  -- ajout 23/08/2026 hors §4.5 : "ma200" | "structural_bos_choch", voir docs/DECISIONS.md
                        -- (bascule du régime de l'Hypothèse #2). NULL pour Station X (aucune notion de
                        -- régime de fond) et pour tout trade antérieur à cet ajout non rétro-rempli.
-    exit_type TEXT     -- ajout 23/08/2026 hors §4.5 : "trailing_pur" | "tp_partiel" | "tp_fixe", voir
+    exit_type TEXT,    -- ajout 23/08/2026 hors §4.5 : "trailing_pur" | "tp_partiel" | "tp_fixe", voir
                        -- docs/DECISIONS.md (sortie à prise de profit H2/H3) — dimension INDÉPENDANTE de
                        -- regime_type (l'une porte sur l'entrée, l'autre sur la sortie), jamais fusionnées.
+    timing_layer TEXT  -- ajout 23/08/2026 hors §4.5 : NULL | "aucune" | "session_multi_tf", voir
+                       -- docs/DECISIONS.md (couche session/multi-timeframe H2-H5) — dimension INDÉPENDANTE
+                       -- de regime_type/exit_type (porte sur QUAND/COMMENT le signal est généré). NULL pour
+                       -- H1/Station X (jamais concernées) ; "aucune" pour les trades H2-H5 antérieurs à
+                       -- cette couche (rétro-remplis) ; "session_multi_tf" pour les trades post-déploiement.
 );
 
 CREATE TABLE IF NOT EXISTS trade_partials (
@@ -433,6 +438,7 @@ _COLUMN_MIGRATIONS = [
     ("signals", "take_profit", "REAL"),
     ("trades", "regime_type", "TEXT"),
     ("trades", "exit_type", "TEXT"),
+    ("trades", "timing_layer", "TEXT"),
 ]
 
 
@@ -535,6 +541,29 @@ def _backfill_exit_type(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE trades SET exit_type = 'tp_partiel' WHERE exit_type IS NULL")
 
 
+def _backfill_timing_layer(conn: sqlite3.Connection) -> None:
+    """Rétro-remplit `trades.timing_layer` pour les trades H2/H3/H4/H5
+    déjà en base AVANT l'ajout de la couche session/multi-timeframe —
+    voir docs/DECISIONS.md, 23/08/2026. Contrairement à `regime_type`/
+    `exit_type` (une bascule d'un mécanisme vers un autre), cette couche
+    est entièrement NOUVELLE : les trades existants n'avaient RIEN de
+    cette couche, jamais une variante antérieure — rétro-remplis
+    `"aucune"`, jamais `"session_multi_tf"`. H1 et Station X restent
+    NULL indéfiniment (aucune notion de couche timing pour elles,
+    jamais concernées, ni maintenant ni rétroactivement).
+
+    Idempotent, même garde-fou (`source` absente) et même patron que
+    `_backfill_regime_type`/`_backfill_exit_type` — voir leurs
+    docstrings pour le raisonnement détaillé, non dupliqué ici."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(trades)")}
+    if "source" not in existing:
+        return
+    conn.execute(
+        "UPDATE trades SET timing_layer = 'aucune' WHERE timing_layer IS NULL "
+        "AND source IN ('hypothesis2', 'hypothesis3', 'hypothesis4', 'hypothesis5')"
+    )
+
+
 def _migrate_envelopes_source(conn: sqlite3.Connection) -> None:
     """`envelopes.source` (ajout P2.5, Flux B — voir docs/DECISIONS.md) ne
     peut pas être ajoutée par un simple ADD COLUMN : la contrainte
@@ -596,6 +625,7 @@ def init_db(db_path: str) -> None:
         _migrate_envelopes_source(conn)
         _backfill_regime_type(conn)
         _backfill_exit_type(conn)
+        _backfill_timing_layer(conn)
         conn.commit()
     finally:
         conn.close()

@@ -56,3 +56,5 @@ def test_run_hypothesis3_loop_forwards_h3_credentials_and_resolution():
     assert kwargs["account_id"] == "acc3"
     assert kwargs["interval_seconds"] == 42
     assert set(kwargs["assets"]) == set(HYPOTHESIS3_ASSETS)
+    assert kwargs["session_gated"] is True
+    assert kwargs["require_regime_confirmation"] is True

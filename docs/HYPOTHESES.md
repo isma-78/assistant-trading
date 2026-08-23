@@ -1649,5 +1649,87 @@ construction.
 
 ---
 
+## 2026-08-23 — Couche session/multi-timeframe : PRÉ-ENREGISTREMENT FINAL, décision d'Ismaël maintenue après mise en garde — CONSTRUITE
+
+Décision d'Ismaël, **maintenue après plusieurs mises en garde** de ma
+part sur la perte de la structure de comparaison isolée H1/H3
+construite le jour même — il l'assume pleinement. Ce pré-enregistrement
+fixe la conception AVANT toute donnée sous cette nouvelle couche
+(aucun trade H2/H3/H4/H5 n'a encore été généré sous elle au moment de
+cette entrée) ; l'implémentation qui a suivi est détaillée dans
+`docs/DECISIONS.md`.
+
+Résolution des deux derniers points laissés ouverts par l'entrée
+précédente :
+
+**Indicateur technique de confirmation** : réutilisation de
+`trend_strategy.compute_regime` (MA200), appliqué à l'indice de
+confirmation — confirmée, pas de nouvel indicateur. C'est une
+**confirmation d'alignement directionnel entre marchés** (le régime de
+l'indice concorde-t-il avec celui de l'actif ?), **PAS un
+classificateur de force de tendance** (un ADX ou équivalent
+mesurerait autre chose) — clarification explicite d'Ismaël, à ne
+jamais présenter comme équivalent dans une future analyse.
+
+**Budget H5** : le dépassement (3/3 → 4/3, causé par le seul ajout du
+timeframe M15) est **explicitement assumé par Ismaël**, maintenu après
+mise en garde — H5 reçoit la fenêtre de session ET le passage à M15
+(pas l'option "H5 exclue du timeframe" envisagée dans l'entrée
+précédente). Traité comme un écart assumé, même précédent que le
+dépassement déjà accepté du plafond §3.9 pour H4/H5.
+
+### Règle de combinaison US30/US100 — précisée
+
+US30 et US100 ne peuvent pas se confirmer eux-mêmes (un instrument ne
+confirme jamais son propre régime) : US30 confirmé par US100 seul, et
+inversement. Les 6 autres actifs de la liste blanche confirmés par les
+DEUX indices combinés, en ET strict (les deux doivent concorder avec le
+régime de l'actif) — extension directe du ET déjà retenu pour toute la
+couche, jamais une règle différente pour ce cas particulier.
+
+### Conception finale construite
+
+- **H1** : totalement inchangée, exclue de toute la couche.
+  `trend_executor.py` non modifié, testé en régression stricte
+  (`test_run_trend_loop_untouched_by_session_multi_timeframe_layer`).
+- **H2** : confluence ICT inchangée. Ajoute fenêtre de session (0h/8h/
+  13h UTC) + exécution M15 (au lieu de HOUR). Aucune confirmation de
+  régime (option C). Budget 2/3.
+- **H3** : rupture Donchian inchangée. Ajoute fenêtre de session +
+  confirmation de régime croisée (US30 ET US100 pour Londres/NY,
+  indicateur technique seul pour l'Asie) — H3 "tendance", ne se
+  déclenche que si le régime confirmé concorde. Résolution déjà M15,
+  aucun changement. Budget 2/3.
+- **H4** : Bollinger/contre-tendance inchangé. Ajoute fenêtre de
+  session + même confirmation de régime que H3 (partagée, mécanisme
+  identique) + exécution M15 (au lieu de HOUR) — H4 "contre-tendance",
+  fade une extension court terme À L'INTÉRIEUR du régime confirmé,
+  jamais contre lui. Budget 3/3, au plafond.
+- **H5** : ICT+RSI inchangé. Ajoute fenêtre de session + exécution M15
+  (au lieu de HOUR). Aucune confirmation de régime (option C). Budget
+  **4/3, dépassement explicitement assumé** (voir ci-dessus).
+
+### Ce que cette couche n'est PAS (rappel, demande explicite d'Ismaël)
+
+Pas une fusion des 4 hypothèses en une méga-stratégie générique. Chaque
+hypothèse garde intégralement son propre déclencheur (confluence ICT
+pour H2, rupture Donchian pour H3, Bollinger pour H4, ICT+RSI pour H5) —
+seule une couche de TIMING (fenêtre de session, résolution d'exécution)
+et, pour H3/H4 seulement, de CONFIRMATION CROISÉE est partagée. Aucune
+des quatre logiques d'entrée n'a été modifiée par cette couche.
+
+### Discipline confirmée
+
+Trades H2/H3/H4/H5 déjà en base avant cette couche gardent leurs
+`regime_type`/`exit_type` d'origine ; nouvelle colonne INDÉPENDANTE
+`trades.timing_layer` (`NULL` pour H1/Station X, jamais concernées ;
+`"aucune"` rétro-rempli pour les trades antérieurs ; `"session_multi_
+tf"` pour les nouveaux) rend cette séparation vérifiable en base, pas
+seulement documentée. Détail complet de l'implémentation, des tests, du
+déploiement et de la vérification en direct dans `docs/DECISIONS.md`
+(23/08/2026).
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4 ou #5 — jamais une modification de ce qui précède.*

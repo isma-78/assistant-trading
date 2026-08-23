@@ -1415,7 +1415,7 @@ def test_manage_open_trades_flux_b_trailing_forwards_guaranteed_stop(tmp_path):
         conn.close()
 
 
-def test_manage_open_trades_hypothesis5_routes_to_own_envelope_and_hour_resolution(tmp_path):
+def test_manage_open_trades_hypothesis5_routes_to_own_envelope_and_m15_resolution(tmp_path):
     # Hypothèse #5 (§2.11, docs/HYPOTHESES.md, 23/08/2026) : sortie
     # Station X (TP1/TP2 déjà touchés, reliquat 20% sous trailing ATR)
     # sur une source "hypothesis5" — vérifie que _KNOWN_HYPOTHESIS_SOURCES
@@ -1470,7 +1470,11 @@ def test_manage_open_trades_hypothesis5_routes_to_own_envelope_and_hour_resoluti
         include_sources=["hypothesis5"],
     )
 
-    client.get_prices.assert_called_once_with("EURUSD", resolution="HOUR", max_bars=DONCHIAN_PERIOD + 1)
+    # Résolution M15 depuis la couche session/multi-timeframe du
+    # 23/08/2026 après-midi (voir docs/DECISIONS.md) — alignée avec la
+    # résolution d'entrée pour ne pas mélanger deux échelles de temps
+    # entre décision d'entrée et gestion de la même position.
+    client.get_prices.assert_called_once_with("EURUSD", resolution="MINUTE_15", max_bars=DONCHIAN_PERIOD + 1)
     client.update_position_stop.assert_called_once()
     conn = get_connection(db_path)
     try:

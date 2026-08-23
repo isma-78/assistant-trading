@@ -21,7 +21,13 @@ corrigé pour les trois à la fois, jamais à re-corriger trois fois.
 
 Comportement de l'Hypothèse #1 volontairement inchangé par cette
 extraction (mêmes appels, mêmes paramètres, testé par régression via
-tests/test_trend_executor.py, toujours vert après refactor).
+tests/test_trend_executor.py, toujours vert après refactor) — TOUJOURS
+vrai après l'ajout de la couche session/multi-timeframe du 23/08/2026
+(`session_gated`/`require_regime_confirmation`, voir
+docs/DECISIONS.md) : H1 n'appelle jamais `run_technical_strategy_loop`
+avec ces deux paramètres, ils restent à leur valeur par défaut (False),
+son comportement est donc inchangé par construction, pas seulement par
+absence de régression constatée.
 
 Aucun LLM dans la décision d'entrée (invariant #1) — `entry_fn` est
 toujours une fonction déterministe pure (trend_strategy.evaluate_entry,
@@ -49,10 +55,31 @@ from src.executor import (
 )
 from src.go_nogo import GoNoGoStatus
 from src.market_data import Candle, get_candles
+from src.regime_confirmation import confirm_regime
 from src.risk_engine import RiskCaps, RiskEngine
 from src.trend_strategy import MA_PERIOD
 
+# Heures UTC d'ouverture de session (Asie/Londres/New York), couche
+# session/multi-timeframe du 23/08/2026 (voir docs/DECISIONS.md,
+# docs/HYPOTHESES.md) — H2/H3/H4/H5 UNIQUEMENT, jamais H1 (exclue de
+# toute cette couche, trend_executor.py n'appelle jamais
+# run_technical_strategy_loop avec session_gated=True). Bornes fixes,
+# faits calendaires au même titre que les fenêtres macro fixes du §2.9
+# — ne comptent pas dans le budget de paramètres §2.11 (décision
+# explicite d'Ismaël). Fenêtre = l'heure UTC pleine suivant chaque
+# ouverture (ex: 00h00-00h59 pour l'Asie), pas une largeur réglable
+# séparée — évite d'introduire un second paramètre non demandé.
+SESSION_OPEN_HOURS_UTC = (0, 8, 13)
+
 logger = logging.getLogger(__name__)
+
+
+def _should_generate_signals(session_gated: bool, hour_utc: int) -> bool:
+    """Fonction pure, extraite pour être testable indépendamment de la
+    boucle infinie de `run_technical_strategy_loop`. `session_gated=
+    False` (cas de H1, jamais appelée avec ce paramètre) : toujours
+    True, comportement strictement inchangé."""
+    return not session_gated or hour_utc in SESSION_OPEN_HOURS_UTC
 
 # Marge au-delà de MA_PERIOD pour garantir un historique suffisant même
 # si quelques bougies manquent côté broker — indépendant de la
@@ -109,6 +136,7 @@ def _generate_and_queue_signal(
     source: str, resolution: str, entry_fn: Callable[[str, List[Candle]], Optional[object]],
     channel: str, hypothesis_label: str,
     describe_signal: Optional[Callable[[str, str, object], str]] = None,
+    require_regime_confirmation: bool = False,
 ) -> None:
     """Évalue `entry_fn` sur `asset` et, si un signal se déclenche et
     qu'aucun signal/trade de cette source n'est déjà actif dessus,
@@ -134,7 +162,17 @@ def _generate_and_queue_signal(
     exclusifs dans `executor._evaluate_position_management`, voir
     docs/DECISIONS.md, 21/08/2026 puis 23/08/2026) — pour H1/H2/H3
     (TrendSignal/ICT, ni l'un ni l'autre champ), les trois colonnes
-    restent NULL, comme avant."""
+    restent NULL, comme avant.
+
+    `require_regime_confirmation` (H3/H4 UNIQUEMENT, couche session/
+    multi-timeframe du 23/08/2026, voir docs/DECISIONS.md) : si True,
+    le signal produit par `entry_fn` est REJETÉ (jamais persisté) si
+    `regime_confirmation.confirm_regime` ne confirme pas — le
+    déclencheur propre à l'hypothèse (Donchian, Bollinger...) reste
+    inchangé, cette confirmation s'ajoute PAR-DESSUS, elle ne le
+    remplace jamais. False par défaut : H1 (jamais appelée avec ce
+    paramètre) et H2/H5 (option C, voir docs/HYPOTHESES.md — déjà
+    couvertes par leur régime structurel) ne sont jamais affectées."""
     if _has_active_signal_or_trade(db_path, asset, source):
         return
 
@@ -142,6 +180,15 @@ def _generate_and_queue_signal(
     signal = entry_fn(asset, candles)
     if signal is None:
         return
+
+    if require_regime_confirmation:
+        confirmed = confirm_regime(client, asset, signal.direction, resolution, datetime.now(timezone.utc))
+        if not confirmed:
+            logger.info(
+                "%s : signal %s sur %s rejeté par la confirmation de régime croisée (indice non aligné)",
+                hypothesis_label, signal.direction, asset,
+            )
+            return
 
     now = datetime.now(timezone.utc).isoformat()
     describe = describe_signal or _default_describe_signal
@@ -186,6 +233,8 @@ def run_technical_strategy_loop(
     hypothesis_label: str,
     describe_signal: Optional[Callable[[str, str, object], str]] = None,
     interval_seconds: int = 60,
+    session_gated: bool = False,
+    require_regime_confirmation: bool = False,
 ) -> None:
     """Boucle continue générique d'une stratégie technique complémentaire
     (§2.11). Un seul point de variation par appelant : `source`,
@@ -197,7 +246,21 @@ def run_technical_strategy_loop(
     Mêmes garde-fous que executor.run_executor_loop (démo verrouillée
     structurellement via _DEMO_BASE_URL, go_nogo non applicable en démo
     §4.1, fail-safe par itération, invariant #7) — voir sa docstring pour
-    le raisonnement détaillé, non dupliqué ici."""
+    le raisonnement détaillé, non dupliqué ici.
+
+    `session_gated`/`require_regime_confirmation` (couche session/
+    multi-timeframe du 23/08/2026, voir docs/DECISIONS.md) : False par
+    défaut — `trend_executor.py` (Hypothèse #1) n'appelle jamais cette
+    fonction avec l'un ou l'autre, donc H1 est byte pour byte inchangée
+    par cet ajout (aucun test de régression H1 ne peut échouer à cause
+    de ces deux paramètres, ils n'existent tout simplement pas dans son
+    appel). `session_gated=True` restreint la GÉNÉRATION DE NOUVEAUX
+    SIGNAUX aux heures UTC pleines suivant chaque ouverture de session
+    (`SESSION_OPEN_HOURS_UTC`) — la gestion des positions déjà ouvertes
+    (remplissages, annulations, trailing, coupe-circuits) continue à
+    CHAQUE itération, jamais gatée : geler la gestion du risque en
+    dehors des heures de session serait dangereux, pas juste
+    conservateur."""
     import time
 
     import anthropic
@@ -280,13 +343,15 @@ def run_technical_strategy_loop(
                 time.sleep(interval_seconds)
                 continue
 
-            for asset in assets:
-                _generate_and_queue_signal(
-                    db_path, client, asset,
-                    source=source, resolution=resolution, entry_fn=entry_fn,
-                    channel=channel, hypothesis_label=hypothesis_label,
-                    describe_signal=describe_signal,
-                )
+            if _should_generate_signals(session_gated, now.hour):
+                for asset in assets:
+                    _generate_and_queue_signal(
+                        db_path, client, asset,
+                        source=source, resolution=resolution, entry_fn=entry_fn,
+                        channel=channel, hypothesis_label=hypothesis_label,
+                        describe_signal=describe_signal,
+                        require_regime_confirmation=require_regime_confirmation,
+                    )
 
             check_pending_fills(
                 db_path, client, sources=[source],

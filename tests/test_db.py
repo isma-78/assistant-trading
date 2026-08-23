@@ -384,6 +384,99 @@ def test_regime_type_and_exit_type_are_independent_dimensions(tmp_path):
     assert row["exit_type"] == "tp_partiel"
 
 
+def test_init_db_migrates_timing_layer_column(tmp_path):
+    # trades.timing_layer (couche session/multi-timeframe H2-H5,
+    # 23/08/2026 — voir docs/DECISIONS.md) : une base créée avant son
+    # ajout doit la recevoir au prochain init_db(), même patron que
+    # deal_id ci-dessus.
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    conn.execute(
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, actif TEXT, source TEXT, statut TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    conn = get_connection(db_path)
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)")}
+        assert "timing_layer" in columns
+    finally:
+        conn.close()
+
+
+def test_init_db_backfills_timing_layer_aucune_for_h2_h5_never_null_for_h1_stationx(tmp_path):
+    # Contrairement à regime_type/exit_type (bascule d'un mécanisme vers
+    # un autre), cette couche est entièrement NOUVELLE : les trades H2-H5
+    # existants sont rétro-remplis "aucune" (jamais "session_multi_tf") ;
+    # H1 et Station X restent NULL indéfiniment (jamais concernées).
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    conn.execute(
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, actif TEXT, source TEXT, statut TEXT)"
+    )
+    for source in ("hypothesis", "hypothesis2", "hypothesis3", "hypothesis4", "hypothesis5", "-1002481537588"):
+        conn.execute("INSERT INTO trades (actif, source, statut) VALUES ('EURUSD', ?, 'ferme')", (source,))
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    conn = get_connection(db_path)
+    try:
+        rows = {row["source"]: row["timing_layer"] for row in conn.execute("SELECT source, timing_layer FROM trades")}
+    finally:
+        conn.close()
+    assert rows["hypothesis"] is None  # H1 : jamais concernée
+    assert rows["hypothesis2"] == "aucune"
+    assert rows["hypothesis3"] == "aucune"
+    assert rows["hypothesis4"] == "aucune"
+    assert rows["hypothesis5"] == "aucune"
+    assert rows["-1002481537588"] is None  # Station X : jamais concernée
+
+
+def test_init_db_backfill_timing_layer_is_idempotent_and_never_touches_future_trades(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO trades (deal_id, source, actif, mode, direction, taille_initiale, stop_loss_initial, "
+            "stop_loss_courant, risque_eur, pourcentage_risque_applique, ouvert_at, statut, timing_layer) "
+            "VALUES ('d3', 'hypothesis3', 'EURUSD', 'demo', 'long', 100, 1.0, 1.0, 10.0, 2.0, "
+            "'2026-08-23T00:00:00Z', 'ouvert', 'session_multi_tf')"
+        )
+
+    init_db(db_path)  # second appel : idempotence
+
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute("SELECT timing_layer FROM trades WHERE deal_id = 'd3'").fetchone()
+    finally:
+        conn.close()
+    assert row["timing_layer"] == "session_multi_tf"
+
+
+def test_init_db_backfill_timing_layer_skips_table_without_source_column(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    conn.execute(
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, actif TEXT NOT NULL, statut TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)  # ne doit lever aucune exception
+
+    conn = get_connection(db_path)
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)")}
+        assert "timing_layer" in columns
+    finally:
+        conn.close()
+
+
 def test_init_db_is_idempotent(tmp_path):
     db_path = str(tmp_path / "test.db")
     init_db(db_path)

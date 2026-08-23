@@ -3,16 +3,22 @@ hypothesis2_executor.py — Boucle autonome de l'Hypothèse #2 (ICT / Smart
 Money Concepts, Option B), validée par Ismaël le 21/08/2026 (voir
 docs/HYPOTHESES.md). Détection via ict_strategy.evaluate_entry (régime
 structurel BOS/CHoCH depuis le 23/08/2026 — voir docs/DECISIONS.md,
-remplace MA200 — + confluence swings fractals/Fibonacci/FVG), résolution
-horaire (HOUR — cette hypothèse ne teste pas de changement de
-résolution, contrairement à l'Hypothèse #3, voir docs/HYPOTHESES.md,
-budget de variables).
+remplace MA200 — + confluence swings fractals/Fibonacci/FVG),
+déclencheur INCHANGÉ par tout ce qui suit.
 
 **Sortie basculée le 23/08/2026** (décision explicite d'Ismaël, voir
 docs/DECISIONS.md) : `hypothesis2_strategy.evaluate_entry` (pas
 `ict_strategy.evaluate_entry` directement) ajoute désormais TP1(1R)/
 TP2(2R) au signal, déclenchant le mécanisme §2.10 (TP1/TP2/trailing sur
 le reliquat) au lieu du trailing Donchian(20) pur d'origine.
+
+**Couche session/multi-timeframe, 23/08/2026 après-midi** (décision
+explicite d'Ismaël, voir docs/DECISIONS.md/docs/HYPOTHESES.md) :
+résolution M15 (au lieu de HOUR) + génération de signaux restreinte aux
+heures d'ouverture de session (Asie 0h/Londres 8h/New York 13h UTC).
+**Aucune confirmation de régime croisée** (option C — H2 déjà couverte
+par son propre régime structurel BOS/CHoCH, une confirmation
+supplémentaire serait redondante, voir docs/HYPOTHESES.md).
 
 Process indépendant, compte Capital.com démo dédié ("hypothèse 2"),
 **déployé et actif en production depuis le 21/08/2026** (identifiants
@@ -54,7 +60,7 @@ def run_hypothesis2_loop(config, db_path: str, interval_seconds: int = 60) -> No
         config, db_path,
         source=HYPOTHESIS2_SOURCE,
         assets=HYPOTHESIS2_ASSETS,
-        resolution="HOUR",
+        resolution="MINUTE_15",
         entry_fn=evaluate_entry,
         api_key=config.capital_api_key_hypothesis2,
         identifier=config.capital_identifier_hypothesis2,
@@ -65,6 +71,7 @@ def run_hypothesis2_loop(config, db_path: str, interval_seconds: int = 60) -> No
         hypothesis_label=_HYPOTHESIS_LABEL,
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
+        session_gated=True,
     )
 
 

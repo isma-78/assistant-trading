@@ -268,6 +268,152 @@ un motif qui capture la ligne entière.
 
 ---
 
+## 2026-08-23 — Couche session/multi-timeframe (H2-H5) — construction, tests, déploiement
+
+Décision d'Ismaël **maintenue après plusieurs mises en garde** de ma
+part sur la perte de la structure de comparaison isolée H1/H3
+construite le jour même — il l'assume pleinement, journalisé comme
+demandé, pas une objection qui subsiste. Détail théorique complet
+(justification, options, 4+2 points tranchés) dans `docs/HYPOTHESES.md`
+(trois entrées, 23/08/2026). Cette entrée couvre l'implémentation.
+
+### Ce que ce n'est PAS (clarification explicite demandée)
+
+**Pas une fusion des 4 hypothèses en une méga-stratégie générique.**
+H2 garde sa confluence ICT, H3 sa rupture Donchian, H4 ses bandes de
+Bollinger, H5 son ICT+RSI — aucun de ces quatre déclencheurs n'a été
+modifié par ce qui suit. Seule une couche de TIMING (fenêtre de
+session, résolution d'exécution) et, pour H3/H4 seulement, de
+CONFIRMATION CROISÉE inter-marchés est partagée. Vérifié explicitement :
+`hypothesis3_strategy.py`/`hypothesis2_strategy.py` (déclencheurs)
+n'ont subi AUCUNE modification ; `mean_reversion_strategy.py`/
+`ict_strategy.py`/`hypothesis5_strategy.py` non plus.
+
+### `src/regime_confirmation.py` (nouveau, module critique 100% couvert)
+
+Réutilise `trend_strategy.compute_regime` (MA200) tel quel, appliqué à
+un ou deux indices de confirmation — **confirmation d'alignement
+directionnel entre marchés, PAS un classificateur de force de tendance**
+(clarification explicite d'Ismaël, un ADX ou équivalent mesurerait
+autre chose — jamais présenter l'un pour l'autre dans la documentation
+ou les logs).
+
+- Session Asie (0h UTC) : pass-through (`True` inconditionnel),
+  indicateur technique seul (le régime déjà calculé par l'entrée elle-
+  même) suffit, aucun indice interrogé.
+- Sessions Londres (8h)/New York (13h) : ET strict.
+  **US30 et US100 confirmés l'un par l'autre, jamais par eux-mêmes**
+  (`confirmation_indices("US30") == ("US100",)`, et inversement) — un
+  instrument ne peut pas confirmer son propre régime. Les 6 autres
+  actifs de la liste blanche confirmés par US30 ET US100 **combinés**
+  (les deux doivent concorder avec le régime de l'actif) — extension
+  directe du ET déjà retenu pour toute la couche, jamais une règle
+  différente pour ce cas. "Moyenne des régimes" jamais envisagée comme
+  alternative sérieuse : un régime long/short/aucun est catégoriel, une
+  moyenne n'a pas de sens dessus (pas juste une préférence de style).
+- Fail-safe (invariant #7) : toute erreur interne (indice illisible,
+  historique insuffisant, heure hors session par un appel malformé)
+  devient un ÉCHEC de confirmation, jamais un signal laissé passer sur
+  un état indéterminé.
+- 14 tests, 100% de couverture.
+
+### `src/technical_strategy_executor.py` — deux nouveaux paramètres, H1 structurellement épargnée
+
+`run_technical_strategy_loop(..., session_gated: bool = False,
+require_regime_confirmation: bool = False)` — les deux `False` par
+défaut. **`trend_executor.py` (H1) n'appelle cette fonction avec AUCUN
+des deux** : son comportement est inchangé PAR CONSTRUCTION, pas
+seulement par absence de régression constatée — vérifié par un test
+dédié (`test_run_trend_loop_untouched_by_session_multi_timeframe_layer`,
+`tests/test_trend_executor.py`) qui échouerait si jamais l'un des deux
+apparaissait dans son appel.
+
+- `session_gated=True` : la GÉNÉRATION DE NOUVEAUX SIGNAUX (pas la
+  gestion des positions déjà ouvertes — remplissages, annulations,
+  trailing, coupe-circuits continuent à CHAQUE itération, jamais gatés,
+  geler la gestion du risque hors session serait dangereux) est
+  restreinte à `SESSION_OPEN_HOURS_UTC = (0, 8, 13)`, extrait en
+  fonction pure testable (`_should_generate_signals`) plutôt qu'une
+  condition inline.
+- `require_regime_confirmation=True` : après qu'`entry_fn` (le
+  déclencheur propre à l'hypothèse, inchangé) produit un signal,
+  `regime_confirmation.confirm_regime` est appelée ; si elle échoue, le
+  signal est rejeté (jamais persisté), le déclencheur lui-même n'a
+  jamais été altéré.
+- Fenêtre de session = l'heure UTC pleine suivant chaque ouverture
+  (00h00-00h59 pour l'Asie, etc.), pas une largeur réglable séparée —
+  évite d'introduire un second paramètre non demandé, cohérent avec le
+  traitement "fait calendaire" de la décision d'Ismaël.
+
+### Câblage par hypothèse
+
+| | Résolution | `session_gated` | `require_regime_confirmation` |
+|---|---|---|---|
+| H1 | HOUR (inchangé) | — (jamais passé) | — (jamais passé) |
+| H2 | HOUR → **M15** | True | False (option C) |
+| H3 | M15 (inchangé) | True | **True** |
+| H4 | HOUR → **M15** | True | **True** |
+| H5 | HOUR → **M15** | True | False (option C) |
+
+`executor._TREND_CANDLE_RESOLUTION` aligné en conséquence pour H2/H5
+(M15, cohérence entre résolution d'entrée et résolution du trailing ATR
+post-TP2 du même trade — sinon décision d'entrée et gestion de position
+raisonneraient sur deux échelles de temps différentes) et H4 (M15,
+sans effet pratique — H4 n'a aucun trailing, aligné pour la cohérence
+seule).
+
+### Dépassement du budget §2.11 pour H5 — EXPLICITEMENT ASSUMÉ, pas un oubli
+
+H5 était déjà à 3/3 (config RSI, TP1 R, TP2 R). Le changement de
+résolution M15 porte le total à **4/3**, au-delà du plafond 2-3.
+Ismaël a maintenu ce choix après mise en garde explicite de ma part
+(l'option "H5 exclue du timeframe, garde HOUR" avait été présentée dans
+`docs/HYPOTHESES.md` comme alternative restant dans le plafond — non
+retenue). Traité comme un écart assumé et journalisé, même précédent
+que le dépassement déjà accepté du plafond §3.9 pour H4/H5
+(21/08/2026).
+
+### `trades.timing_layer` — troisième dimension indépendante
+
+`NULL` (H1, Station X — jamais concernées) | `"aucune"` (trades H2-H5
+antérieurs à cette couche, rétro-remplis — contrairement à `regime_
+type`/`exit_type`, cette couche est entièrement NOUVELLE, aucune
+"ancienne variante" n'existait, jamais confondue avec une bascule d'un
+mécanisme vers un autre) | `"session_multi_tf"` (nouveaux trades).
+`executor._TIMING_LAYER_BY_SOURCE` (mapping figé au déploiement,
+même patron que `_REGIME_TYPE_BY_SOURCE`/`_EXIT_TYPE_BY_SOURCE`),
+`db._backfill_timing_layer` (même garde-fou table sans `source` que les
+deux backfills précédents). Dimension INDÉPENDANTE des deux autres —
+un trade H3 post-déploiement porte `regime_type="ma200"` (inchangé),
+`exit_type="tp_partiel"` (bascule du matin) ET `timing_layer=
+"session_multi_tf"` (cette couche) simultanément, sans qu'aucune ne
+dépende des deux autres dans le schéma ou les migrations.
+
+### Tests
+
+`tests/test_regime_confirmation.py` (nouveau, 14 tests, 100%),
+`tests/test_technical_strategy_executor.py` (+7 : confirmation
+acceptée/rejetée/non requise, gate de session sur les 4 combinaisons),
+`tests/test_trend_executor.py` (+1, régression H1 stricte),
+`tests/test_db.py` (+5 : migration `timing_layer`, rétro-remplissage
+par source, idempotence, garde-fou table sans `source`),
+`tests/test_hypothesis2_executor.py`/`test_hypothesis3_executor.py`/
+`test_hypothesis4_executor.py`/`test_hypothesis5_executor.py` (résolution
+et nouveaux paramètres). 685 tests passent au total, 100% toujours
+vérifié sur `risk_engine`/`capital_manager`/`go_nogo`/`validator`/
+`trend_strategy`/`circuit_breaker`/`ict_strategy`/`mean_reversion_
+strategy`/`confidence_scorer`/`hypothesis2_strategy`/`hypothesis3_
+strategy`/`hypothesis5_strategy`/`regime_confirmation`.
+
+### Déploiement et vérification en direct
+
+Voir l'entrée séparée ci-dessous, écrite après coup avec les résultats
+constatés — même niveau de vérification que pour les bascules
+précédentes du jour (7 flux au total désormais : Station X, H1, H2, H3,
+H4, H5, plus `control_bot`/`telegram_listener`).
+
+---
+
 ## 2026-08-23 — Hypothèse #2 : bascule du régime MA200 -> structure BOS/CHoCH ; Hypothèse #5 REDÉFINIE (ICT + RSI) ; déploiement réel des deux
 
 Session unique, trois volets demandés par Ismaël ensemble : (1) bascule
