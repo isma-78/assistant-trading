@@ -1,9 +1,10 @@
 """
 process_watchdog.py — Surveille les process critiques du VPS
 (telegram_listener, executor_loop, trend_executor, control_bot,
-hypothesis3_executor, hypothesis2_executor, et depuis le 21/08/2026
-hypothesis4_executor — voir docs/DECISIONS.md) et alerte via le bot
-Telegram (même canal que les coupe-circuits) si l'un d'eux a disparu.
+hypothesis3_executor, hypothesis2_executor, hypothesis4_executor et
+depuis le 23/08/2026 hypothesis5_executor — voir docs/DECISIONS.md) et
+alerte via le bot Telegram (même canal que les coupe-circuits) si l'un
+d'eux a disparu.
 Ne relance JAMAIS un
 process automatiquement (demande explicite d'Ismaël, 19/08/2026) : un
 redémarrage aveugle masquerait la cause de l'arrêt et pourrait
@@ -69,6 +70,7 @@ PROCESSES = {
     "hypothesis3_executor": "src.hypothesis3_executor",
     "hypothesis2_executor": "src.hypothesis2_executor",
     "hypothesis4_executor": "src.hypothesis4_executor",
+    "hypothesis5_executor": "src.hypothesis5_executor",
 }
 
 

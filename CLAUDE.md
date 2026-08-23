@@ -601,25 +601,26 @@ gap comblé rétroactivement en même temps que l'ajout de H5.
   sans modification d'`executor._evaluate_position_management`.
   Indépendance vis-à-vis de Station X vérifiée (aucune lecture DB dans
   le module, toutes les valeurs viennent des bougies H5 elles-mêmes).
-  **Déployée en code sur le VPS, PAS démarrée** — 2 des 4 identifiants
-  Capital.com dédiés manquent encore dans le `.env` du VPS
-  (`CAPITAL_API_KEY_HYPOTHESIS5`, `CAPITAL_ACCOUNT_ID_HYPOTHESIS5`),
-  écart trouvé entre la demande ("credentials déjà dans .env") et l'état
-  réel constaté avant déploiement — voir `docs/DECISIONS.md`.
+  **Déployée et active sur le VPS depuis le 23/08/2026 après-midi**
+  (4 identifiants complétés — compte "hypothèse 5" identifié via
+  `GET /accounts` en lecture seule, accountId `328096601896998046` —
+  voir `docs/DECISIONS.md` pour le détail complet, dont deux expositions
+  de secrets supplémentaires signalées en cours de route, aucune
+  réutilisée).
 - Correction pour comparaisons multiples (§3.9) : calibrée sur **5
   hypothèses simultanées (H1-H5), jamais 4** — toute future
   évaluation/validation devra l'appliquer (voir `docs/HYPOTHESES.md`).
-- 633 tests passent au total, 100% toujours vérifié sur
+- 659 tests passent au total, 100% toujours vérifié sur
   `risk_engine`/`capital_manager`/`go_nogo`/`validator`/`trend_strategy`/
   `circuit_breaker`/`ict_strategy`/`mean_reversion_strategy`/
-  `confidence_scorer`/`hypothesis5_strategy`.
-- `scripts/process_watchdog.py` surveille déjà `hypothesis2_executor` ET
-  `hypothesis4_executor` (les deux tournent réellement, voir ci-dessus —
-  correctif de documentation, `hypothesis4_executor` y avait été ajouté
-  dès le 21/08/2026, jamais retiré, contrairement à ce que CLAUDE.md
-  affirmait) ; **non étendu** à `hypothesis5_executor` (pas démarré,
-  identifiants incomplets — l'ajouter aurait déclenché une fausse
-  alerte).
+  `confidence_scorer`/`hypothesis2_strategy`/`hypothesis3_strategy`/
+  `hypothesis5_strategy`.
+- `scripts/process_watchdog.py` surveille désormais les 4 hypothèses
+  déployées (`hypothesis2_executor`/`hypothesis3_executor`/
+  `hypothesis4_executor`/`hypothesis5_executor`, ce dernier ajouté au
+  démarrage de H5 le 23/08/2026 après-midi) — les 4 tournent
+  réellement, plus aucune hypothèse construite en attente d'identifiants
+  à ce jour.
 
 ## Palier P2.9 (suite) — Sortie TP1/TP2/trailing pour H2 et H3 (23/08/2026, décision explicite d'Ismaël)
 

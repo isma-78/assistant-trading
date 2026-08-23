@@ -12,6 +12,78 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-23 — Hypothèse #5 : identifiants complétés, compte identifié, déploiement réel, ajoutée au watchdog
+
+### Identifiants — deux expositions supplémentaires, aucune réutilisée
+
+En complétant les identifiants H5 (`CAPITAL_API_KEY_HYPOTHESIS5`
+manquant, puis `CAPITAL_ACCOUNT_ID_HYPOTHESIS5` à découvrir), deux
+événements notables, distincts de l'incident `.en` ci-dessus :
+- Une clé API a été collée directement dans la conversation (message
+  contenant littéralement le texte `[COLLER LA CLÉ ICI]`, donc sans
+  valeur réelle exploitable de toute façon) — refusée par principe :
+  jamais un identifiant transmis via la conversation, quelle que soit
+  sa forme, conformément à la règle déjà établie et au précédent de
+  l'incident H2/H3/H4 du même jour.
+- La valeur complète de la clé API H5 (puis les 3 identifiants
+  ensemble) est apparue dans mon contexte via la sélection de texte de
+  l'éditeur d'Ismaël dans le `.env` LOCAL (notification système, pas
+  une action de ma part) — signalé à chaque occurrence, aucune valeur
+  réutilisée dans une commande ni un fichier. Rotation de cette clé H5
+  laissée à la décision d'Ismaël (compte jamais utilisé jusqu'ici,
+  impact différent des identifiants H2/H3/H4 déjà en production).
+
+**Confusion réelle identifiée et corrigée en cours de route** : Ismaël a
+d'abord modifié le `.env` LOCAL (sa machine Windows) à deux reprises en
+pensant agir sur celui du VPS — sans effet sur `hypothesis5_executor`,
+qui ne lit que `/home/assistant/assistant-trading/.env` sur le VPS
+lui-même. Une première tentative portait aussi une faute de frappe
+(`HYPOTHESS5` au lieu de `HYPOTHESIS5`). Les deux corrigés avant que la
+clé soit effectivement déposée, en SSH direct, sur le bon fichier.
+
+### Découverte de l'account ID — lecture seule, jamais les identifiants eux-mêmes
+
+Une fois les 3 premiers identifiants confirmés en place sur le `.env`
+du VPS (mtime vérifié), un script exécuté SUR LE VPS (jamais localement)
+charge la config via `load_config()` (variables d'environnement, jamais
+affichées), authentifie un `CapitalClient` avec les identifiants H5, et
+appelle `GET /accounts` — n'imprime QUE les champs non-secrets de la
+réponse (`accountId`, `accountName`, `preferred`, `currency`, `balance`).
+Résultat sans ambiguïté : `accountName: "hypothèse 5"`,
+`accountId: 328096601896998046` (4000€, seule occurrence de ce nom parmi
+5 comptes du même identifiant de connexion — les 4 autres étant les
+comptes déjà connus "premier test"/H2/H3/H4). Confirme au passage,
+encore une fois, pourquoi le ciblage explicite par accountId est
+indispensable (§ incident du 20/08/2026) : le compte "préféré" de cet
+identifiant de connexion partagé est actuellement H3, pas H5.
+`CAPITAL_ACCOUNT_ID_HYPOTHESIS5` ajouté au `.env` du VPS (pas un secret,
+même traitement que pour H2/H3/H4 déjà documentés en clair ici).
+
+### Déploiement et vérification en direct — même niveau que H2/H3
+
+- `hypothesis5_executor` démarré (tmux, premier lancement — jamais
+  démarré avant). Premier log : `Démarrage de la boucle Hypothèse #5
+  (source=hypothesis5, résolution=HOUR, intervalle=60s, 8 actifs)`,
+  aucune `ConfigError`.
+- Les 6 autres process (`telegram_listener`, `control_bot`,
+  `trend_executor`, `executor_loop`, `hypothesis2_executor`,
+  `hypothesis3_executor`, `hypothesis4_executor`) vérifiés avec les
+  MÊMES PID avant/après démarrage — jamais touchés.
+- 8 nouvelles enveloppes créées (`source='hypothesis5'`, 500€ chacune,
+  un actif de la liste blanche chacune) — enveloppes totales passées de
+  40 à 48, aucune fuite vers les autres sources.
+- Stabilité surveillée ~3 minutes après démarrage (boucle de sondage
+  dédiée jusqu'à extinction ou trace d'erreur) : aucune exception,
+  même PID du début à la fin, log toujours limité à la seule ligne de
+  démarrage (aucune erreur, contrairement aux 429 transitoires déjà vus
+  sur H2/H3 — rien à signaler ici).
+- `scripts/process_watchdog.py` étendu (`PROCESSES["hypothesis5_
+  executor"]`) — `tests/test_process_watchdog.py` mis à jour en
+  conséquence. 659 tests passent au total, 100% toujours vérifié sur
+  tous les modules critiques.
+
+---
+
 ## 2026-08-23 — INCIDENT : suppression non signalée du fichier `.en` sur le VPS — investigation, conclusion, règle engagée pour la suite
 
 ### Ce qui s'est passé
