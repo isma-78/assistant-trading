@@ -106,8 +106,29 @@ exécution réelle (dry-run n'écrit rien, run réel convertit uniquement
 le trade candidat, un trade clos et un trade déjà `tp_partiel` restent
 intacts, idempotent — second passage sans effet).
 
-**Rapport d'exécution réelle sur le VPS** (id, ancien/nouveau exit_type,
-TP1/TP2 calculés) : voir la sous-section déploiement ci-dessous.
+**Rapport d'exécution réelle sur le VPS** — `--dry-run` d'abord (sortie
+identique à l'exécution réelle qui a suivi, valeurs vérifiées sensées
+avant d'écrire), puis exécution réelle, puis second passage confirmant
+l'idempotence (« Aucun trade H2/H3 ouvert en trailing_pur — rien à
+faire. »). 8 trades convertis, tous `trailing_pur -> tp_partiel_
+retroactif` :
+
+| trade_id | source | actif | tp1 | tp2 |
+|---|---|---|---|---|
+| 13 | hypothesis3 | GOLD | 4610.75 | 4656.92 |
+| 24 | hypothesis3 | EURUSD | 1.164895 | 1.16175 |
+| 25 | hypothesis3 | US30 | 53490.6 | 53760.6 |
+| 31 | hypothesis3 | GBPUSD | 1.368445 | 1.37174 |
+| 32 | hypothesis3 | USDJPY | 159.339 | 159.63 |
+| 34 | hypothesis2 | US100 | 28744.3027 | 28151.9054 |
+| 43 | hypothesis3 | ETHUSD | 2478.645 | 2528.85 |
+| 44 | hypothesis3 | BTCUSD | 78797.05 | 80248.6 |
+
+Aucun trade H4 (déjà `tp_fixe` depuis son origine) ni H5 (déjà
+`tp_partiel` depuis son origine) trouvé — conforme à l'attendu, aucun
+des deux n'a jamais eu de trade `trailing_pur`. Vérifié en base après
+écriture : `signals.tp1`/`tp2` renseignés, `trades.exit_type` basculé,
+pour ces 8 trades exactement.
 
 ### Budget §2.11
 
@@ -129,10 +150,33 @@ assertions `session_gated` remplacées par `"session_gated" not in
 kwargs`. 688 tests passent, 100% de couverture confirmée sur
 `regime_confirmation.py` et les autres modules critiques.
 
-### Déploiement — à compléter après exécution réelle
+### Déploiement — fait et vérifié en direct
 
-*(rempli après la vérification en direct sur le VPS — voir la suite de
-cette entrée ou une entrée de suivi si publiée séparément)*
+Commit `edad979` poussé sur `main`, VPS synchronisé (`git pull`), 688
+tests + 100% de couverture reconfirmés sur le VPS avant tout
+redémarrage. Script rétroactif exécuté (voir rapport ci-dessus) AVANT
+le redémarrage des exécuteurs — le prochain cycle de chacun lit
+immédiatement les tp1/tp2 fraîchement écrits. `hypothesis2_executor`,
+`hypothesis3_executor`, `hypothesis4_executor`, `hypothesis5_executor`
+redémarrés **séquentiellement** (~8s d'écart chacun, même précaution
+que le déploiement précédent) : PID passés de 109162/109391/109450/
+109509 à 110594/110662/110721/110781. PID de `telegram_listener`
+(41928), `executor` Station X (71745), `trend_executor` H1 (54310) et
+`control_bot` (43732) vérifiés **identiques** avant/après (non
+touchés). **Nouveau mécanisme confirmé fonctionnel en direct dans les
+logs** dès le premier cycle : `Hypothèse #3 : contexte de régime
+rafraîchi -> {'GOLD': None, 'US100': 'long', 'US30': 'short', ...}`
+(US30/US100 en désaccord -> régime confirmé None pour les 6 actifs
+génériques) suivi de `Hypothèse #4 : signal long sur GOLD rejeté —
+contexte de régime actuellement actif : None` — le rejet fail-safe
+attendu, observé en production, pas seulement en test. Quelques erreurs
+429/400/connexion isolées dans les logs de démarrage (rate-limiting
+Capital.com et un dépassement de stop max, déjà documentés comme
+fragilités préexistantes indépendantes de ce changement, capturées par
+les gestionnaires d'exception déjà en place, jamais fatales). Stabilité
+confirmée sur 3 minutes (4/4 processus vivants en continu), watchdog
+cron (18h30 UTC) : les 8 processus rapportent `up`, aucune fausse
+alerte.
 
 ---
 
