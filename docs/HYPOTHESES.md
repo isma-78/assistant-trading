@@ -1394,5 +1394,113 @@ une nouvelle variable réglable au sens de l'invariant #10.
 
 ---
 
+## 2026-08-23 — Couche session/multi-timeframe sur H1-H5 — PROPOSITION, PAS VALIDÉE, AUCUN CODE CONSTRUIT
+
+Demandée par Ismaël comme ajout PAR-DESSUS le déclencheur existant de
+chaque hypothèse (jamais un remplacement, jamais une fusion vers une
+logique générique commune) : chaque hypothèse garde son propre principe
+(H2 confluence ICT, H3 rupture Donchian, H4 Bollinger, H5 ICT+RSI).
+
+Trois ajouts proposés, non encore implémentés :
+1. Analyse à l'ouverture des sessions (Asie 00h/Londres 08h/New York
+   13h UTC par défaut) — périmètre exact (quelles hypothèses) non
+   tranché, voir ci-dessous.
+2. Confirmation de régime (tendance/contre-tendance) via un indicateur
+   technique ET un indice boursier combinés.
+3. Exécution de l'entrée sur M15/M30 (au lieu de la bougie horaire
+   actuelle de H1/H2/H4/H5) — périmètre et choix M15 vs M30 non
+   tranchés.
+
+### Collision de nommage à lever avant toute chose
+
+Le prompt d'Ismaël emploie "H1" dans deux sens différents dans la même
+demande : "H1/H4" (point 1) désigne très probablement l'Hypothèse #1 et
+l'Hypothèse #4 ; "au lieu de H1" (point 3) désigne la bougie horaire
+(convention M15/M30/H1). Lecture retenue pour cette proposition, à
+confirmer explicitement par Ismaël avant tout code — une mauvaise
+interprétation ici fausserait tout le reste.
+
+### Périmètre — non tranché
+
+Les points 1 et 3 s'appliquent-ils uniquement à H1/H4 (nommées au point
+1), ou aux 5 hypothèses ? Le point 2 (confirmation de régime) est
+discuté pour H2/H3/H4/H5 dans la demande d'Ismaël — H1 non mentionnée
+explicitement mais suivrait logiquement la même lecture que H3 (même
+mécanisme Donchian). Pas de décision prise ici.
+
+### H3 (Donchian) et H4 (Bollinger) — lecture confirmée
+
+H3 : rupture de canal dans le sens du régime = continuation = tendance
+par construction. H4 : toucher de bande opposée au régime = retour à la
+moyenne = contre-tendance par construction. Cohérent avec les mécanismes
+déjà en place, rien à trancher ici.
+
+### H2/H5 (confluence ICT) — trois options présentées, aucune tranchée
+
+La confluence ICT (retracement Fibonacci dans le sens du régime
+structurel, confirmé par un FVG) n'est ni une rupture pure (tendance) ni
+un fading pur (contre-tendance) — une continuation après repli, dans une
+structure déjà établie.
+
+- **Option A** : assimiler à "tendance" (toujours dans le sens du
+  régime structurel). Simple, aucun nouveau paramètre, mais mélange deux
+  mécaniques d'entrée réellement différentes (rupture vs retracement)
+  sous une même étiquette pour une future analyse.
+- **Option B** : troisième catégorie de régime ("continuation
+  structurée"), distincte de tendance/contre-tendance. Honnête
+  analytiquement, mais exige une logique de confirmation séparée pour
+  H2/H5 (pas juste un binaire tendance/contre-tendance).
+- **Option C** : ne pas appliquer la confirmation tendance/contre-
+  tendance à H2/H5 — leur régime structurel joue déjà ce rôle de filtre
+  directionnel, une seconde confirmation serait redondante. Économe en
+  budget (voir ci-dessous), H2/H5 recevraient alors seulement les points
+  1/3 si ceux-ci s'appliquent à elles.
+
+### Règle de combinaison indicateur technique + indice boursier — proposée
+
+**ET strict** (indicateur technique ET indice boursier doivent
+concorder) proposé comme règle simple, fixée a priori, sans nouveau
+seuil réglable. OU écarté (trop permissif, l'actif et un indice large
+sont déjà souvent corrélés — un OU filtrerait à peine plus que
+l'indicateur seul). Pondération écartée (introduirait un seuil de score
+à fixer, contraire à "simple et fixée a priori" ; ET est déjà une
+pondération binaire égale, seuil = accord total, sans paramètre
+supplémentaire).
+
+**Ouvert** : quel indice boursier précisément ? US100/US30 déjà dans la
+liste blanche (aucune nouvelle source de données nécessaire), mais lequel
+utiliser, pour quel actif/quelle session — un seul indice universel ou
+un indice par session (aucun indice asiatique dans la liste blanche
+actuelle) ? Non tranché, pas assez d'éléments pour proposer un choix
+unique sans deviner.
+
+### Budget de variables (§2.11) — ALERTE, dépassement probable pour plusieurs hypothèses
+
+État actuel : H1 1/3, H2 1/3, H3 1/3, H4 2/3, **H5 3/3 (déjà au
+plafond, zéro marge)**. Trois nouveaux paramètres candidats identifiés :
+config sessions (bornes horaires, groupées en un seul paramètre comme
+la config Bollinger de H4 — **mais les bornes citées ici, 00h/08h/13h,
+diffèrent légèrement de celles déjà en place dans `session_marker.py`
+pour la collecte, 00h/07h/13h — à harmoniser, pas à faire coexister**),
+choix de l'indice boursier, choix du timeframe d'exécution (M15/M30).
+
+**H5 ne peut recevoir cette couche sans dépasser le plafond**, quel que
+soit le périmètre exact retenu (déjà à 3/3). H4 (2/3) et H2 (1/3)
+risquent également un dépassement selon combien des 3 ajouts leur
+sont appliqués. H3 reste dans le plafond si le point 3 (déjà M15) ne
+lui est pas appliqué. Signalé, non corrigé — le choix du périmètre
+(section précédente) et la question de savoir si les bornes de session
+strictement fixes comptent comme un paramètre "réglable" au sens de
+l'invariant #10 restent à trancher par Ismaël.
+
+### Discipline confirmée pour la suite
+
+Trades existants gardent leurs `regime_type`/`exit_type` d'origine,
+jamais mélangés avec de futurs trades sous cette couche. Aucun code,
+aucun test, aucune migration DB écrits pour cette proposition — attente
+de la validation d'Ismaël avant toute implémentation.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4 ou #5 — jamais une modification de ce qui précède.*
