@@ -12,6 +12,345 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-23 — Hypothèse #2 : bascule du régime MA200 -> structure BOS/CHoCH ; Hypothèse #5 REDÉFINIE (ICT + RSI) ; déploiement réel des deux
+
+Session unique, trois volets demandés par Ismaël ensemble : (1) bascule
+du régime H2, (2) redéfinition et construction de H5 (remplace
+l'entrée "Hypothèse #5" du même jour ci-dessous — proposée et validée
+dans la même demande, toujours non déployée à l'époque), (3) mise à
+jour transversale + déploiement réel. Détail théorique complet des deux
+premiers volets dans `docs/HYPOTHESES.md` (deux nouvelles entrées,
+23/08/2026) — cette entrée couvre l'implémentation, les vérifications
+faites AVANT d'écrire une ligne de code, les tests, et le déploiement.
+
+### 1. Bascule du régime de l'Hypothèse #2 — `src/ict_strategy.py`
+
+**Le point difficile, résolu par calcul avant tout code** :
+`classify_structure_break(current_close, swing_highs, swing_lows, bias)`
+CLASSE une cassure relative à un `bias` déjà donné, elle ne DÉTECTE pas
+un régime à partir de rien. Traduction retenue (nouvelle fonction
+`compute_structural_regime`, stateless comme `compute_regime` qu'elle
+remplace) : essaie `bias="long"` puis `bias="short"`, retient celui qui
+produit "BOS" (la clôture dépasse le dernier swing confirmé dans le sens
+testé). Prouvé algébriquement AVANT d'écrire le code (puis vérifié en
+exécutant le code réel) : une clôture strictement à l'intérieur de la
+zone de retracement Fibonacci d'une jambe ne peut JAMAIS constituer un
+BOS/CHoCH de cette même jambe (la zone 61,8-78,6 % est toujours
+strictement comprise entre le swing bas et le swing haut de sa propre
+jambe — `compute_fibonacci_zone` ne peut mathématiquement pas produire
+une borne égale à l'une des deux extrémités). Conséquence : un signal H2
+valide exige une cassure structurelle RÉCENTE et DISTINCTE de la jambe
+d'entrée — les derniers swings confirmés de la fenêtre (utilisés par le
+régime) doivent être différents de ceux de la jambe (utilisés par la
+zone). Vérifié en construisant une fixture réelle à deux jambes (une
+grande jambe pour la zone/FVG, un second swing haut plus local et plus
+récent pour la cassure de structure) et en l'exécutant contre le code
+réel avant de l'intégrer aux tests — pas seulement calculé à la main.
+
+**Changements de code** :
+- `compute_structural_regime(swing_highs, swing_lows, current_close)`
+  (nouvelle fonction, `src/ict_strategy.py`) — réutilise
+  `classify_structure_break` telle quelle, aucune nouvelle logique de
+  cassure.
+- `_evaluate_entry` : `compute_regime(candles)` (MA200) remplacé par
+  `compute_structural_regime(swing_highs, swing_lows, current_close)`
+  (mêmes swings que ceux déjà calculés pour la jambe — pas de second
+  calcul). Garde de longueur minimale : `MA_PERIOD` (200) remplacé par
+  `RECENT_WINDOW + 2*FRACTAL_K + 1` (25) — la fenêtre réellement
+  nécessaire, plus de dépendance à une moyenne mobile longue qui n'existe
+  plus. Import `trend_strategy.compute_regime`/`MA_PERIOD` supprimé.
+- Le trailing de sortie (`trend_strategy.compute_trailing_stop_channel`,
+  Donchian(20)) est INCHANGÉ — seul le régime d'entrée bascule.
+
+**Tests** (`tests/test_ict_strategy.py`) : 6 nouveaux tests unitaires sur
+`compute_structural_regime` (BOS haussier/baissier, aucun swing, clôture
+à l'intérieur de la fourchette) + fixture bout-en-bout entièrement
+reconstruite (`_RECENT_LONG`, validée en exécutant le code réel avant
+intégration, voir commentaire dans le fichier pour le détail géométrique
+exact) + un nouveau test couvrant la branche "régime confirmé mais
+aucune jambe valide" (jamais atteignable avant, le régime nécessitait
+d'office une jambe pour exister). 100% de couverture maintenue.
+
+### 2. Hypothèse #5 REDÉFINIE — `src/hypothesis5_strategy.py` (réécriture complète)
+
+L'ancienne version (délégation intégrale à `ict_strategy.evaluate_entry`,
+ajout de TP1/TP2) est remplacée par : régime structurel (hérité du H2
+post-bascule) + confluence ICT de H2 **ET** RSI(14) franchissant 50 dans
+le même sens, sur la même bougie. **Aucun trade H5 n'a jamais existé
+sous l'ancienne définition** (vérifié en base avant d'écrire cette
+entrée) — pas un ajustement sur des résultats.
+
+**`compute_rsi`** (nouvelle, RSI de Wilder — même méthode de lissage
+exponentiel 1/period que `market_data.compute_atr`, pas une formule
+inventée). **`_rsi_just_crossed_threshold`** : compare le RSI calculé
+sur `candles` et sur `candles[:-1]` — un FRANCHISSEMENT (pas simplement
+"être du bon côté de 50" depuis plusieurs bougies), cohérent avec le mot
+"franchissant" de la demande d'Ismaël.
+
+**`_evaluate_entry`** : appelle `ict_strategy.evaluate_entry` (régime +
+confluence, réutilisée à l'identique) PUIS exige en plus
+`_rsi_just_crossed_threshold(candles, ict_signal.direction)` — les deux
+DOIVENT être vraies. TP1(1R)/TP2(2R) calculés sur le risque initial du
+signal ICT reçu, inchangé par rapport à l'ancienne version.
+
+**Indépendance vis-à-vis de Station X — vérifiée, pas affirmée** :
+relecture complète du module (`hypothesis5_strategy.py`) confirme
+qu'aucune fonction n'ouvre de connexion base de données, ne lit
+`signals`/`trades`, ni aucune table — toutes les valeurs proviennent de
+`candles` (paramètre d'entrée, alimenté par `technical_strategy_
+executor.py` via `market_data.get_candles` sur le compte H5) et des
+calculs d'`ict_strategy.evaluate_entry`/`compute_rsi`/`_compute_tp_
+levels` appliqués à ces mêmes bougies. Le mécanisme de sortie §2.10
+réutilisé (`executor._evaluate_position_management`) applique ses
+fractions/formule de trailing à `OpenTradeState`, construit par
+`_load_open_trade_state` à partir du SIGNAL et du TRADE H5 eux-mêmes
+(`signal_id`/`source='hypothesis5'`) — jamais d'un signal ou trade
+Station X.
+
+**Le seul changement nécessaire hors de ce module** (confirmé, pas
+re-vérifié inutilement — déjà établi pour l'ancienne version de H5) :
+`technical_strategy_executor._generate_and_queue_signal` persiste
+`tp1`/`tp2` via `getattr`, câblage déjà en place, aucune modification.
+
+**Tests** (`tests/test_hypothesis5_strategy.py`, réécrit) : 22 tests,
+100% de couverture. Note de méthode : les cas positifs bout-en-bout
+("les deux conditions réunies", long et short) utilisent un double sur
+`_ict_evaluate_entry` plutôt qu'une fenêtre de bougies entièrement
+organique — construire UNE fenêtre satisfaisant simultanément la
+géométrie ICT (hauts/bas contraints par la structure) ET une trajectoire
+RSI précise est sur-contraint (quasi aucune liberté résiduelle pour
+façonner le RSI sans casser la géométrie). Le cas "confluence ICT
+présente MAIS RSI non franchi" utilise en revanche une fenêtre RÉELLE
+(aucun double) pour prouver que le filtre s'applique bien sur une vraie
+sortie d'`ict_strategy.evaluate_entry`, pas seulement en théorie.
+
+### 3. `trades.regime_type` — séparation vérifiable en base, pas seulement documentée
+
+Nouvelle colonne (`src/db.py`) : `"ma200"` | `"structural_bos_choch"` |
+`NULL` (Station X, aucune notion de régime). Deux mécanismes :
+- `executor._REGIME_TYPE_BY_SOURCE` (nouveau dict, mapping figé au
+  moment du déploiement de cette bascule) : écrit dans `trades.
+  regime_type` par `open_signal` à CHAQUE ouverture, toute source
+  hypothèse confondue — `hypothesis`/`hypothesis3`/`hypothesis4`
+  -> `"ma200"` (inchangés), `hypothesis2`/`hypothesis5` ->
+  `"structural_bos_choch"`.
+- `db._backfill_regime_type` (nouveau, appelé depuis `init_db()`,
+  idempotent comme `_add_column_if_missing`) : rétro-remplit `"ma200"`
+  pour les trades hypothèse DÉJÀ en base (y compris les 2 trades H2
+  antérieurs à cette bascule, qui n'ont jamais tourné sous le régime
+  structurel). Ne touche jamais une ligne déjà renseignée (tout trade
+  futur l'est dès l'ouverture).
+
+**Bug réel trouvé par les tests avant tout déploiement** : une table
+`trades` hypothétique encore plus dépouillée que celle visée par la
+migration `deal_id` (sans même la colonne `source`) faisait échouer
+`_backfill_regime_type` (`no such column: source`), révélé par
+`tests/test_db.py::test_init_db_migrates_deal_id_onto_pre_existing_
+trades_table` qui simule exactement ce cas pour une autre colonne.
+Corrigé : la fonction vérifie la présence de `source` avant d'agir, sans
+objet sinon (aucune ligne ne peut référencer une source hypothèse sans
+cette colonne). 4 tests dédiés ajoutés (`tests/test_db.py`) : migration
+de la colonne, rétro-remplissage correct par source (y compris Station X
+qui reste `NULL`), idempotence (un trade H2 post-bascule n'est jamais
+réécrit), garde-fou table sans `source`.
+
+### 4. Correction pour comparaisons multiples : confirmée à 5 hypothèses (H1-H5)
+
+Décision du 21/08/2026 (H4) puis du même jour (H5, entrée précédente)
+réaffirmée par Ismaël dans cette demande : H5 (sous sa nouvelle
+définition) reste en exécution démo, et toute future évaluation/
+validation devra appliquer la correction calibrée sur 5 hypothèses
+simultanées, jamais 4. Aucun changement de code (`hypothesis_engine` du
+§3.9 n'existe toujours pas).
+
+### 5. Déploiement réel — H2 (bascule) et H5 (nouveau déploiement)
+
+Autorisation explicite d'Ismaël ("déploiement réel autorisé dès que la
+construction est terminée, pas d'attente cette fois"). Détail de la
+vérification en direct effectuée avant/après déploiement (VPS, logs,
+requêtes réelles — même niveau que l'audit des 4 flux du 21/08/2026) :
+voir l'entrée séparée ci-dessous, écrite après coup avec les résultats
+constatés, pas avant.
+
+**Identifiants H5 — écart trouvé entre la demande et l'état réel du
+VPS, signalé plutôt que contourné** : la demande indiquait "les
+credentials H5 sont déjà dans `.env`". Vérifié (présence des clés
+uniquement, jamais leur contenu) : le `.env` LOCAL n'en contient que 2
+des 4 (`CAPITAL_IDENTIFIER_HYPOTHESIS5`, `CAPITAL_API_PASSWORD_
+HYPOTHESIS5` — `CAPITAL_API_KEY_HYPOTHESIS5` et `CAPITAL_ACCOUNT_ID_
+HYPOTHESIS5` absents), et le `.env` du VPS (celui qui compte pour le
+déploiement réel, dernière modification 21/08/2026) n'en contient
+AUCUN. `hypothesis5_executor.py` est donc construit, testé, déployé en
+CODE sur le VPS, mais PAS DÉMARRÉ (`run_hypothesis5_loop` échouerait net
+en `ConfigError`, comportement voulu, invariant #7) — pas ajouté à
+`scripts/process_watchdog.py` (même précédent que H2/H4 avant leurs
+identifiants, l'ajouter aurait déclenché une fausse alerte). En attente
+que Ismaël complète les 4 variables dans le `.env` du VPS directement en
+SSH (jamais transmises à un LLM, CLAUDE.md) avant de démarrer le
+process.
+
+**Découverte non liée, faite en vérifiant l'état réel du VPS avant ce
+déploiement** : `hypothesis4_executor` tourne EN PRODUCTION depuis le
+21/08/2026 20:50 (tmux actif, identifiants présents dans le `.env` du
+VPS, 2 trades réels déjà produits le 23/08/2026 04:51-05:10 UTC) —
+contrairement à ce que CLAUDE.md et cette même page de DECISIONS.md
+affirmaient depuis son entrée du 21/08/2026 ("PAS déployée, identifiants
+manquants"). `scripts/process_watchdog.py` le surveille déjà depuis son
+ajout au commit `54ca78a` (jamais retiré, contrairement à l'intention
+documentée à l'époque). Manifestement démarré manuellement par Ismaël
+en SSH après la session qui l'a construit, jamais resynchronisé dans la
+documentation par une session suivante. CLAUDE.md corrigé en
+conséquence. Aucune autre investigation menée sur H4 (hors périmètre de
+cette demande) — signalé, pas creusé.
+
+---
+
+## 2026-08-23 — Hypothèse #5 : sortie progressive §2.10 sur l'entrée ICT de H2 — proposée et validée dans la même demande, réutilisation vérifiée à 100%, toujours NON déployée
+
+Détail complet de la justification théorique, des paramètres et des
+garde-fous dans `docs/HYPOTHESES.md` ("Hypothèse #5", 23/08/2026).
+Contrairement à H1-H4, la proposition et la validation d'Ismaël sont
+arrivées dans le même message — pas de cycle "proposé puis tranché"
+séparé pour cette hypothèse.
+
+### Vérification préalable, avant d'écrire une seule ligne de code de production
+
+Ismaël a explicitement demandé de vérifier si le mécanisme de sortie
+§2.10 (TP1 50%/TP2 30%/TP3 20% sous trailing 2×ATR, déjà utilisé par
+Station X) pouvait se brancher sur H5 sans dupliquer de code. Réponse :
+**oui, intégralement, sans toucher une seule ligne de dispatch existant.**
+
+`executor._evaluate_position_management` distinguait déjà 3 mécanismes
+de sortie, choisis uniquement par la présence de champs sur
+`OpenTradeState` (jamais par `state.source`) :
+1. `state.take_profit is not None` → clôture fixe unique (H4).
+2. `state.tp1 is not None` → Station X : TP1(50%)/TP2(30%)/TP3(20% ATR).
+3. `state.tp1 is None` (et ni 1 ni 2) → trailing Donchian perpétuel (H1/H3/H2).
+
+Le point 2 ne teste QUE la présence de `tp1`/`tp2` sur le trade, jamais
+sa source. H5 n'avait donc besoin que d'un signal qui **renseigne**
+`tp1`/`tp2` — le dispatch générique fait le reste tout seul. Vérifié
+ligne par ligne (`src/executor.py`, fonction `_evaluate_position_
+management`) avant d'écrire `hypothesis5_strategy.py`, pas supposé.
+
+### Ce qui a dû changer (le seul vrai gap trouvé)
+
+`technical_strategy_executor._generate_and_queue_signal` — le point
+d'entrée générique partagé par H1/H2/H3/H4/H5 — persistait déjà
+`take_profit` via `getattr(signal, "take_profit", None)` (ajout H4,
+21/08/2026) mais n'écrivait **jamais** `tp1`/`tp2`, même si l'objet
+signal les portait : la colonne `INSERT` ne les listait pas du tout.
+Seul changement de code nécessaire côté dispatch : ajouter `tp1`, `tp2`
+à cette requête, lus par le même patron `getattr(signal, "tp1", None)`
+(TrendSignal/ICT/MeanReversionSignal n'ont pas ce champ → NULL comme
+avant, aucune régression sur H1/H2/H3/H4).
+
+### `src/hypothesis5_strategy.py` (nouveau)
+
+- `evaluate_entry` délègue à `ict_strategy.evaluate_entry` (import
+  direct, réutilisée à l'identique — mêmes `FRACTAL_K=2`, ratios
+  Fibonacci, régime MA200) puis calcule `tp1 = entrée ± 1R`,
+  `tp2 = entrée ± 2R` (R = risque initial du signal ICT reçu).
+  `Hypothesis5Signal` (dataclass frozen) reprend la forme attendue par
+  `_generate_and_queue_signal` (asset/direction/entry_price/stop_price/
+  confidence + tp1/tp2, PAS `take_profit` — les deux mécanismes de
+  sortie restent mutuellement exclusifs, même règle que H4).
+- Fail-safe (invariant #7) : `evaluate_entry` capture toute exception
+  interne et retourne `None`, même patron que
+  `trend_strategy.evaluate_entry`/`ict_strategy.evaluate_entry`.
+- **Module critique, 100% de couverture** (même exigence que
+  `ict_strategy.py`) : 10 tests
+  (`tests/test_hypothesis5_strategy.py`), y compris le calcul TP1/TP2
+  long/short, la délégation bout en bout (même fixture de bougies que
+  `tests/test_ict_strategy.py` pour obtenir un vrai signal ICT), l'absence
+  de signal, l'entrée malformée, et le fail-safe interne (direction
+  invalide simulée par un double).
+
+### `src/executor.py`
+
+- `HYPOTHESIS5_SOURCE = "hypothesis5"` ajoutée à
+  `_KNOWN_HYPOTHESIS_SOURCES` et à `_TREND_CANDLE_RESOLUTION` (→
+  `"HOUR"`, comme H2 — sans effet réel sur le trailing lui-même puisque
+  H5 n'entre jamais dans la branche Donchian, `state.tp1` n'étant jamais
+  `None` pour ce flux, mais utilisée pour les bougies de l'ATR du
+  trailing TP3, voir `manage_open_trades`).
+- **`_evaluate_position_management` : ZÉRO changement.** Vérifié par un
+  test de régression bout en bout dédié
+  (`test_manage_open_trades_hypothesis5_routes_to_own_envelope_and_
+  hour_resolution`, `tests/test_executor.py`) : un trade `source=
+  "hypothesis5"` avec TP1/TP2 déjà touchés (`trade_partials`) fait
+  correctement engager le trailing ATR sur son reliquat de 20%, routé
+  vers l'enveloppe `("EURUSD", "hypothesis5")` — si `HYPOTHESIS5_SOURCE`
+  n'avait pas été ajoutée à `_KNOWN_HYPOTHESIS_SOURCES`,
+  `_envelope_source_key` aurait replié la source sur `"stationx"`,
+  provoquant une `KeyError` avalée par le fail-safe de
+  `manage_open_trades` (aucune enveloppe `("EURUSD", "stationx")`
+  fournie) — le test échoue si cet ajout est oublié.
+
+### `_KNOWN_HYPOTHESIS_SOURCES` (4 copies dupliquées)
+
+`HYPOTHESIS5_SOURCE = "hypothesis5"` ajoutée aux 4 copies
+(`executor.py`, `metrics.py`, `circuit_breaker_store.py`,
+`confidence_scorer.py`) — même geste que H4 le 21/08/2026.
+`tests/test_source_normalization_consistency.py` mis à jour :
+`"hypothesis5"` déplacée du groupe "inconnue → stationx" au groupe
+"connue → elle-même" ; `"hypothesis6"` la remplace comme nouvelle
+sentinelle "future hypothèse non enregistrée" (`"hypothesis5"` ne peut
+plus jouer ce rôle, désormais une source réellement connue).
+
+### `src/hypothesis5_executor.py` (nouveau)
+
+Câblé sur le même modèle que H2/H3/H4
+(`technical_strategy_executor.run_technical_strategy_loop`, résolution
+HOUR, 8 actifs, `hypothesis5_strategy.evaluate_entry`). `src/config.py`
+étendu (`capital_*_hypothesis5`, tous `Optional[str] = None`, même
+patron que H2/H3/H4 — repli de l'identifiant sur `CAPITAL_IDENTIFIER`
+si absent). `.env.example` étendu en conséquence.
+
+### Tests
+
+`tests/test_hypothesis5_strategy.py` (nouveau, 10 tests, 100%),
+`tests/test_hypothesis5_executor.py` (nouveau, 4 tests, même patron que
+`test_hypothesis2_executor.py`),
+`tests/test_technical_strategy_executor.py` (+1, persistance de
+tp1/tp2 sans jamais toucher take_profit),
+`tests/test_executor.py` (+1, régression bout en bout routage
+enveloppe/résolution H5 — voir ci-dessus),
+`tests/test_config.py` (+2),
+`tests/test_source_normalization_consistency.py` (mis à jour, voir
+ci-dessus). 610 tests au total, aucune régression, 100% toujours
+vérifié sur `risk_engine`/`capital_manager`/`go_nogo`/`validator`/
+`trend_strategy`/`circuit_breaker`/`ict_strategy`/
+`mean_reversion_strategy`/`confidence_scorer`/`hypothesis5_strategy`.
+
+### Correction pour comparaisons multiples : 4 → 5 hypothèses
+
+Décision permanente d'Ismaël (confirmée dans la demande d'H5,
+23/08/2026, prolonge celle du 21/08/2026 sur H4) : H5 autorisée en
+exécution **DÉMO uniquement**, même régime que H4 (aucun capital réel
+engagé, statistiques déjà isolées par source). **Toute future
+évaluation ou validation d'un résultat (promotion en réel, comparaison
+inter-hypothèses, décision d'arrêt/poursuite) devra désormais appliquer
+la correction pour comparaisons multiples calibrée sur 5 hypothèses
+simultanées (H1-H5), jamais 4.** Aucun code n'implémente cette
+correction aujourd'hui (`hypothesis_engine` du §3.9 n'existe toujours
+pas) — mise à jour documentée pour s'appliquer le jour où ce calcul sera
+construit, pas un correctif immédiat. Voir `docs/HYPOTHESES.md` pour le
+texte de référence.
+
+### Toujours NON déployé, volontairement
+
+Aucun identifiant `CAPITAL_*_HYPOTHESIS5` dans `.env` (ni local ni
+VPS), `hypothesis5_executor` absent de `scripts/process_watchdog.py`
+(même précédent que H2/H4 avant leurs identifiants — l'ajouter aurait
+déclenché une fausse alerte), aucun process démarré. `run_hypothesis5_
+loop` échoue net (`ConfigError`) si invoqué sans ces identifiants,
+jamais un repli silencieux — comportement vérifié par test. En attente
+des identifiants du compte démo H5, qu'Ismaël fournira directement dans
+le terminal, jamais dans la conversation.
+
+---
+
 ## 2026-08-21 — Hypothèse #4 : décisions d'Ismaël appliquées, dispatch de gestion construit, exécuteur câblé — toujours NON déployée
 
 Suite à l'entrée précédente (ci-dessous) : Ismaël a tranché les quatre

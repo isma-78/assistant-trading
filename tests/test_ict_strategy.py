@@ -5,6 +5,7 @@ from src.ict_strategy import (
     RECENT_WINDOW,
     classify_structure_break,
     compute_fibonacci_zone,
+    compute_structural_regime,
     evaluate_entry,
     find_confirmed_swings,
     find_fvgs,
@@ -12,7 +13,6 @@ from src.ict_strategy import (
     _find_latest_valid_leg,
 )
 from src.market_data import Candle
-from src.trend_strategy import MA_PERIOD
 
 
 def _c(i, high, low, close):
@@ -145,6 +145,41 @@ def test_classify_structure_break_unknown_bias():
 
 
 # ---------------------------------------------------------------------------
+# compute_structural_regime (bascule du 23/08/2026 — remplace compute_regime/
+# MA200 comme régime de fond de l'Hypothèse #2, voir docs/DECISIONS.md)
+# ---------------------------------------------------------------------------
+
+def test_compute_structural_regime_long_on_break_above_last_high():
+    # Clôture au-dessus du dernier plus haut confirmé -> BOS avec bias
+    # "long" -> régime haussier.
+    assert compute_structural_regime([(5, 140)], [(3, 90)], current_close=150) == "long"
+
+
+def test_compute_structural_regime_short_on_break_below_last_low():
+    # Clôture en dessous du dernier plus bas confirmé -> BOS avec bias
+    # "short" -> régime baissier.
+    assert compute_structural_regime([(5, 140)], [(3, 90)], current_close=80) == "short"
+
+
+def test_compute_structural_regime_none_when_inside_range():
+    # Clôture entre le dernier plus bas et le dernier plus haut : ni
+    # cassure haussière ni baissière -> pas de régime tranché.
+    assert compute_structural_regime([(5, 140)], [(3, 90)], current_close=100) is None
+
+
+def test_compute_structural_regime_none_without_swing_highs():
+    assert compute_structural_regime([], [(3, 90)], current_close=150) is None
+
+
+def test_compute_structural_regime_none_without_swing_lows():
+    assert compute_structural_regime([(5, 140)], [], current_close=150) is None
+
+
+def test_compute_structural_regime_none_without_any_swings():
+    assert compute_structural_regime([], [], current_close=100) is None
+
+
+# ---------------------------------------------------------------------------
 # _find_latest_valid_leg
 # ---------------------------------------------------------------------------
 
@@ -187,25 +222,46 @@ def test_find_latest_valid_leg_unknown_direction():
 # evaluate_entry / _evaluate_entry — bout en bout
 # ---------------------------------------------------------------------------
 
-# Bougies "récentes" (25) construites à la main pour produire, en régime
-# haussier : un swing bas confirmé (idx8=90), un swing haut confirmé
-# (idx16=140), une zone de Fibonacci [100.7, 109.1], un FVG haussier en
-# fin de fenêtre (idx22->idx24, zone [98,105]) qui chevauche cette zone,
-# et une clôture finale (idx24=105) dans la zone. Voir le raisonnement
-# complet dans le message de conception (docs/HYPOTHESES.md, 21/08/2026).
+# Bougies "récentes" (25) construites à la main, VALIDÉES en exécutant le
+# code réel (pas seulement calculées à la main — voir docs/DECISIONS.md,
+# 23/08/2026, pour la méthode). Doivent produire, avec le régime
+# STRUCTUREL (bascule du 23/08/2026, remplace MA200) :
+# - idx6 : swing bas confirmé (90) — ancre de la jambe, DERNIER swing bas
+#   de toute la fenêtre (aucun autre n'apparaît nulle part après lui, ce
+#   qui garantit que `_find_latest_valid_leg` continue de l'utiliser).
+# - idx11 : swing haut confirmé (140) — extrémité de la jambe, choisie
+#   par `_find_latest_valid_leg` comme le premier swing haut après idx6.
+# - idx16 : UN SECOND swing haut confirmé, plus bas (101), formé APRÈS
+#   idx11 par une remontée isolée pendant le repli général (idx7-18
+#   volontairement à ranges larges et chevauchants pour n'introduire
+#   AUCUN gap accidentel de 3 bougies qui chevaucherait la zone de
+#   Fibonacci ci-dessous). C'est LUI, pas idx11, qui devient le DERNIER
+#   swing haut de la fenêtre — indispensable : `compute_structural_
+#   regime` teste la clôture contre le DERNIER swing (101), pas contre
+#   celui de la jambe (140) — une clôture DANS la zone de retracement de
+#   la jambe [90,140] ne peut, par construction, jamais dépasser 140
+#   (voir docstring de `compute_structural_regime`).
+# - Zone de Fibonacci de la jambe [90,140] : [100.7, 109.1].
+# - idx19-22 : plateau (bas identiques, ties) pour ne former AUCUN
+#   nouveau swing bas qui remplacerait l'ancre idx6.
+# - FVG haussier idx22->idx24 (zone [85,103]) chevauchant la zone
+#   ci-dessus ; idx23 hors de portée de confirmation (effet de bord),
+#   volontairement — voir docstring de find_confirmed_swings.
+# - Clôture finale (idx24=105) : dans la zone Fibonacci ET > 101
+#   (dernier swing haut) -> BOS confirmé -> régime "long".
 _RECENT_LONG = [
     (100, 100, 100), (100, 100, 100), (100, 100, 100), (100, 100, 100),
-    (100, 100, 100), (100, 100, 100), (100, 100, 100), (100, 100, 100),  # idx0-7
-    (97, 90, 93),      # idx8 : swing bas
-    (99, 92, 95), (101, 94, 97),                                        # idx9-10 (chevauche idx8, pas de gap)
-    (104, 96, 99), (108, 99, 103), (113, 103, 108),                     # idx11-13
-    (119, 108, 114), (126, 114, 121),                                   # idx14-15
-    (140, 121, 135),  # idx16 : swing haut (nette rupture, aucun gap avec idx14/15)
-    (134, 122, 128), (128, 116, 122),                                   # idx17-18
-    (122, 110, 116), (117, 105, 110), (112, 99, 105),                   # idx19-21
-    (98, 95, 97),      # idx22 : C1 du FVG, PAS un swing (idx23 a un low plus bas)
-    (100, 90, 94),     # idx23 : C2 du FVG
-    (109, 103, 105),   # idx24 : C3 du FVG, clôture courante, dans la zone
+    (100, 100, 100), (100, 100, 100),                                  # idx0-5 : bruit plat
+    (97, 90, 93),      # idx6 : swing bas (ancre de la jambe)
+    (120, 91, 100), (135, 95, 115), (138, 100, 125), (139, 105, 130),  # idx7-10 : montée, ranges larges (pas de gap)
+    (140, 110, 135),   # idx11 : swing haut (140, extrémité de la jambe)
+    (125, 101, 115), (110, 95, 100),                                   # idx12-13 : repli, ranges larges
+    (97, 79, 90), (93, 75, 85),                                        # idx14-15 : repli, hauts < 101 (condition du bump)
+    (101, 70, 90),     # idx16 : SECOND swing haut (101), dernier de la fenêtre
+    (95, 65, 80), (90, 60, 75),                                        # idx17-18 : repli après le bump
+    (85, 55, 70), (85, 55, 70), (85, 55, 70), (85, 55, 70),            # idx19-22 : plateau (ties, aucun nouveau swing bas)
+    (100, 90, 94),     # idx23 : C2 du FVG, hors de portée de confirmation
+    (109, 103, 105),   # idx24 : C3 du FVG, clôture courante (dans la zone ET > 101)
 ]
 
 
@@ -235,7 +291,10 @@ def test_evaluate_entry_short_full_confluence():
 
 
 def test_evaluate_entry_insufficient_history():
-    candles = _build_candles(_RECENT_LONG, baseline_n=50)
+    # Depuis la bascule du 23/08/2026, la garde de longueur minimale ne
+    # dépend plus de MA_PERIOD (200) mais de RECENT_WINDOW+2*FRACTAL_K+1
+    # (25, voir _evaluate_entry) — 10 bougies est en dessous.
+    candles = _build_candles(_RECENT_LONG[:10], baseline_n=0)
     assert evaluate_entry("EURUSD", candles) is None
 
 
@@ -245,7 +304,9 @@ def test_evaluate_entry_flat_regime_returns_none():
 
 
 def test_evaluate_entry_no_valid_leg_returns_none():
-    # Régime haussier net, mais aucun swing dans la fenêtre récente.
+    # Rampe monotone, aucun swing dans la fenêtre récente -> ni régime
+    # structurel (compute_structural_regime exige des swings des deux
+    # côtés) ni jambe possible.
     recent = [(105 + i * 0.1, 100 + i * 0.1, 102 + i * 0.1) for i in range(25)]
     candles = _build_candles(recent)
     assert evaluate_entry("EURUSD", candles) is None
@@ -263,9 +324,29 @@ def test_evaluate_entry_price_outside_zone_returns_none():
 def test_evaluate_entry_no_fvg_overlap_returns_none():
     recent = list(_RECENT_LONG)
     # Supprime le FVG en rendant idx22/idx24 non-disjoints (pas de gap) :
-    # low(idx24) <= high(idx22), la même jambe/zone reste valide.
-    recent[24] = (109, 95, 105)
+    # low(idx24) <= high(idx22)=85, la même jambe/zone/régime restent
+    # valides (validé en exécutant le code réel, voir docs/DECISIONS.md).
+    recent[24] = (109, 85, 105)
     candles = _build_candles(recent)
+    assert evaluate_entry("EURUSD", candles) is None
+
+
+def test_evaluate_entry_regime_confirmed_but_no_valid_leg_returns_none():
+    # Régime structurel confirmé (cassure baissière réelle), mais AUCUNE
+    # jambe possible dans ce sens : le swing bas précède chronologiquement
+    # le swing haut (`_find_latest_valid_leg` exige l'inverse pour
+    # "short" — un swing bas APRÈS le dernier swing haut). Couvre la
+    # branche `leg is None` de `_evaluate_entry` distincte du cas "aucun
+    # swing du tout" (régime déjà None avant même la recherche de jambe).
+    recent = (
+        [(100, 100, 100)] * 6
+        + [(90, 80, 85)]                          # idx6 : swing bas (80)
+        + [(95, 90, 93), (100, 95, 98)]            # idx7-8 : contexte
+        + [(120, 110, 115)]                        # idx9 : swing haut (120)
+        + [(100, 95, 98), (95, 90, 93)]            # idx10-11 : contexte
+        + [(70, 60, 65)] * 13                      # idx12-24 : clôture finale 65 (< 80)
+    )
+    candles = _build_candles(recent, baseline_n=0)
     assert evaluate_entry("EURUSD", candles) is None
 
 

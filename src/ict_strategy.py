@@ -4,11 +4,22 @@ validée par Ismaël le 21/08/2026 (docs/HYPOTHESES.md). MODULE CRITIQUE
 (même exigence de couverture que trend_strategy.py, demande explicite
 d'Ismaël).
 
-Reprend EXACTEMENT le régime MA(200) et le trailing Donchian(20) de
-trend_strategy.py (réutilisés, jamais redupliqués — importés
-directement), et ajoute une couche de confluence ICT pour le
-déclencheur : swings fractals (Bill Williams, K=2) comme ancrage des
-retracements de Fibonacci (61,8 %-78,6 %, valeurs prescrites
+**Bascule du régime, 23/08/2026 (voir docs/DECISIONS.md)** : le régime
+de fond n'utilise plus `trend_strategy.compute_regime` (MA200) — il
+utilise désormais `classify_structure_break` (BOS/CHoCH), déjà codée et
+testée depuis la première version de ce module mais jamais branchée
+comme condition de décision. Motivé par la cohérence théorique (une
+vraie lecture de structure de marché ICT, pas un filtre de tendance
+générique emprunté à une autre hypothèse) — décidé AVANT tout résultat
+réel, aucun trade H2 n'a été regardé pour prendre cette décision (voir
+`compute_structural_regime` ci-dessous pour la traduction mécanique
+exacte et la justification de sa conception). Le trailing Donchian(20)
+de sortie, lui, reste inchangé (réutilisé de trend_strategy.py, comme
+avant).
+
+Ajoute une couche de confluence ICT pour le déclencheur (INCHANGÉE par
+la bascule ci-dessus) : swings fractals (Bill Williams, K=2) comme
+ancrage des retracements de Fibonacci (61,8 %-78,6 %, valeurs prescrites
 littéralement par le CDC §3.3), confirmés par un FVG (Fair Value Gap)
 chevauchant la zone. Voir docs/HYPOTHESES.md (entrées du 20 et
 21/08/2026) pour la justification théorique complète, les angles morts
@@ -62,12 +73,7 @@ fail-safe (invariant #7 — toute erreur interne devient "pas de signal").
 from typing import List, Optional, Tuple
 
 from src.market_data import Candle
-from src.trend_strategy import (
-    DONCHIAN_PERIOD,
-    MA_PERIOD,
-    TrendSignal,
-    compute_regime,
-)
+from src.trend_strategy import DONCHIAN_PERIOD, TrendSignal
 
 # Seul paramètre propre à cette hypothèse (§2.11, cap 2-3 — voir
 # docs/HYPOTHESES.md, correction du modèle de budget du 21/08/2026).
@@ -162,6 +168,61 @@ def classify_structure_break(
     return None
 
 
+def compute_structural_regime(
+    swing_highs: List[Tuple[int, float]], swing_lows: List[Tuple[int, float]], current_close: float,
+) -> Optional[str]:
+    """Régime de fond de l'Hypothèse #2 (remplace `trend_strategy.
+    compute_regime`/MA200, bascule du 23/08/2026 — voir docs/DECISIONS.md
+    et la docstring du module). Réutilise `classify_structure_break`
+    EXACTEMENT telle que codée, sans nouvelle logique de cassure.
+
+    Stateless (même contrat que `compute_regime` qu'elle remplace :
+    aucun biais antérieur mémorisé d'un appel à l'autre, aucun état
+    conservé entre deux évaluations). Un biais CANDIDAT est essayé dans
+    chaque sens ; celui qui produit un BOS (poursuite confirmée dans CE
+    sens — la clôture courante dépasse le dernier swing dans le sens
+    testé) est retenu comme régime structurel courant :
+    - `classify_structure_break(close, ..., "long") == "BOS"` signifie
+      `close > swing_highs[-1]` : la clôture dépasse le dernier plus haut
+      confirmé -> régime haussier confirmé.
+    - `classify_structure_break(close, ..., "short") == "BOS"` signifie
+      `close < swing_lows[-1]` : la clôture dépasse le dernier plus bas
+      confirmé -> régime baissier confirmé.
+    Ces deux tests sont mutuellement exclusifs (la clôture ne peut pas
+    être à la fois au-dessus du dernier plus haut ET en dessous du
+    dernier plus bas) : aucune ambiguïté possible, jamais besoin
+    d'examiner les branches CHoCH (un CHoCH sous un biais candidat
+    correspond toujours au BOS symétrique sous le biais opposé — même
+    cassure, juste un label différent selon le biais testé).
+
+    None si aucun swing confirmé des deux côtés, ou si la clôture reste
+    à l'intérieur de la fourchette du dernier plus haut/plus bas (ni
+    cassure haussière ni baissière — structure "en range", pas de
+    régime tranché).
+
+    Conséquence assumée, documentée dans docs/DECISIONS.md : ce test
+    porte sur les DERNIERS swings confirmés de la fenêtre, pas
+    nécessairement ceux de la jambe utilisée ensuite pour la zone de
+    Fibonacci (`_find_latest_valid_leg` peut sélectionner une jambe plus
+    ancienne) — une clôture strictement À L'INTÉRIEUR de la zone de
+    retracement d'UNE jambe ne peut, par construction, jamais constituer
+    un BOS/CHoCH de CETTE MÊME jambe (la zone 61,8-78,6% est toujours
+    strictement comprise entre son propre swing bas et son swing haut).
+    Un signal H2 valide exige donc une cassure structurelle distincte,
+    plus récente que la jambe d'entrée elle-même — un filtre nettement
+    plus strict que MA200 (qui ne dépendait d'aucune action récente du
+    prix), qui réduit mécaniquement la fréquence des signaux. Accepté
+    comme le prix normal d'une lecture de structure plus fidèle à la
+    théorie ICT, pas corrigé ici."""
+    if not swing_highs or not swing_lows:
+        return None
+    if classify_structure_break(current_close, swing_highs, swing_lows, "long") == "BOS":
+        return "long"
+    if classify_structure_break(current_close, swing_highs, swing_lows, "short") == "BOS":
+        return "short"
+    return None
+
+
 def _find_latest_valid_leg(
     swing_highs: List[Tuple[int, float]], swing_lows: List[Tuple[int, float]], direction: str,
 ) -> Optional[Tuple[float, float]]:
@@ -188,9 +249,10 @@ def _find_latest_valid_leg(
 
 
 def evaluate_entry(asset: str, candles: List[Candle]) -> Optional[TrendSignal]:
-    """Point d'entrée unique de l'Hypothèse #2 : régime MA(200) (réutilisé
-    de trend_strategy.compute_regime), jambe de swings fractals, zone de
-    confluence Fibonacci, FVG chevauchant la zone dans le sens du régime.
+    """Point d'entrée unique de l'Hypothèse #2 : régime structurel BOS/
+    CHoCH (`compute_structural_regime`, bascule du 23/08/2026 — voir
+    docstring du module), jambe de swings fractals, zone de confluence
+    Fibonacci, FVG chevauchant la zone dans le sens du régime.
 
     Ne lève jamais d'exception : toute erreur interne devient "pas de
     signal" (fail-safe, invariant #7 — même patron que trend_strategy)."""
@@ -201,27 +263,27 @@ def evaluate_entry(asset: str, candles: List[Candle]) -> Optional[TrendSignal]:
 
 
 def _evaluate_entry(asset: str, candles: List[Candle]) -> Optional[TrendSignal]:
-    if len(candles) < MA_PERIOD:
-        return None
-    regime = compute_regime(candles)
-    if regime is None:
-        return None
-
-    # `candles` contient déjà >= MA_PERIOD (200) éléments à ce stade
-    # (garde ci-dessus) — largement plus que window_size (25 avec les
-    # valeurs par défaut), donc ce découpage ne peut jamais produire une
-    # fenêtre trop courte : pas de garde supplémentaire nécessaire.
+    # Garde de longueur minimale : uniquement ce dont find_confirmed_swings
+    # a besoin (RECENT_WINDOW + marge de confirmation des swings en bord de
+    # fenêtre) — plus de dépendance à MA_PERIOD (200) depuis la bascule du
+    # 23/08/2026, le régime ne s'appuie plus sur une moyenne mobile longue.
     window_size = RECENT_WINDOW + 2 * FRACTAL_K + 1
+    if len(candles) < window_size:
+        return None
     recent = candles[-window_size:]
 
     swing_highs, swing_lows = find_confirmed_swings(recent, FRACTAL_K)
+    current_close = candles[-1].close
+    regime = compute_structural_regime(swing_highs, swing_lows, current_close)
+    if regime is None:
+        return None
+
     leg = _find_latest_valid_leg(swing_highs, swing_lows, regime)
     if leg is None:
         return None
     swing_low, swing_high = leg
 
     zone_low, zone_high = compute_fibonacci_zone(regime, swing_low, swing_high)
-    current_close = candles[-1].close
     if not (zone_low <= current_close <= zone_high):
         return None
 

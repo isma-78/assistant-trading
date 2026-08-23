@@ -552,6 +552,75 @@ budget de 2-3 paramètres, jamais partagé).
   `hypothesis2_executor`, pas encore démarré — l'ajouter aurait
   déclenché une fausse alerte).
 
+## Palier P2.9 (suite) — Hypothèses #4 et #5 (21 et 23/08/2026)
+
+Note : H4 avait été construite et validée en démo le 21/08/2026 (voir
+`docs/HYPOTHESES.md`/`docs/DECISIONS.md`) mais jamais reportée ici —
+gap comblé rétroactivement en même temps que l'ajout de H5.
+
+- **Hypothèse #4** (`src/mean_reversion_strategy.py`, module critique
+  100% couvert + `src/hypothesis4_executor.py`) — retour à la moyenne
+  (MA200 + Bandes de Bollinger 20/2σ) : 3e mécanisme de sortie construit
+  dans `executor._evaluate_position_management`
+  (`ManagementActionType.CLOSE_FULL_TP`, TP/stop fixes, aucun trailing).
+  **Correctif de documentation, 23/08/2026 après-midi** : contrairement à
+  ce que CLAUDE.md/DECISIONS.md affirmaient depuis le 21/08/2026 (« PAS
+  déployée, identifiants manquants »), constaté en vérifiant l'état réel
+  du VPS pendant cette session : `hypothesis4_executor` tourne en
+  production (tmux, actif depuis le 21/08/2026 20:50, identifiants
+  présents dans le `.env` du VPS) et a déjà produit 2 trades réels
+  (23/08/2026, 04:51-05:10 UTC). Démarré manuellement par Ismaël en SSH
+  après la session qui l'a construit, jamais resynchronisé dans la
+  documentation — gap comblé ici, aucune autre investigation menée (hors
+  périmètre de cette session).
+- **Hypothèse #5, version d'origine** (23/08/2026, matin) — même entrée
+  ICT que H2, seule la sortie changeait (TP1 1R/TP2 2R/reliquat 20%
+  trailing). **Jamais déployée, jamais un seul trade** — remplacée le
+  jour même par la redéfinition ci-dessous avant toute exécution
+  réelle.
+
+## Palier P2.9 (suite) — Bascule du régime H2 + redéfinition et déploiement réel de H5 (23/08/2026, après-midi)
+
+- **Hypothèse #2 — bascule du régime** : `ict_strategy.py` n'utilise
+  plus `trend_strategy.compute_regime` (MA200) pour son régime de fond —
+  nouvelle fonction `compute_structural_regime` (réutilise
+  `classify_structure_break`, codée depuis l'origine mais jamais
+  branchée). Déclencheur (K=2, Fibonacci, FVG) et sortie (trailing
+  Donchian(20)) inchangés. Nouvelle colonne `trades.regime_type`
+  (`"ma200"` | `"structural_bos_choch"`) — les 2 trades H2 antérieurs à
+  la bascule sont rétro-remplis `"ma200"`, jamais mélangés aux futurs
+  trades structurels. **Déployé et actif sur le VPS**
+  (`hypothesis2_executor` redémarré).
+- **Hypothèse #5 — REDÉFINIE** (`src/hypothesis5_strategy.py`,
+  réécriture complète, module critique 100% couvert) : régime
+  structurel (hérité du H2 post-bascule) + confluence ICT de H2 **ET**
+  RSI(14) franchissant 50 dans le même sens, même bougie — les deux
+  conditions réunies pour entrer (limite assumée : impossible d'isoler
+  la contribution de chacune, voir `docs/HYPOTHESES.md`). Sortie §2.10
+  inchangée (TP1 1R/TP2 2R/reliquat 20% trailing ATR), toujours branchée
+  sans modification d'`executor._evaluate_position_management`.
+  Indépendance vis-à-vis de Station X vérifiée (aucune lecture DB dans
+  le module, toutes les valeurs viennent des bougies H5 elles-mêmes).
+  **Déployée en code sur le VPS, PAS démarrée** — 2 des 4 identifiants
+  Capital.com dédiés manquent encore dans le `.env` du VPS
+  (`CAPITAL_API_KEY_HYPOTHESIS5`, `CAPITAL_ACCOUNT_ID_HYPOTHESIS5`),
+  écart trouvé entre la demande ("credentials déjà dans .env") et l'état
+  réel constaté avant déploiement — voir `docs/DECISIONS.md`.
+- Correction pour comparaisons multiples (§3.9) : calibrée sur **5
+  hypothèses simultanées (H1-H5), jamais 4** — toute future
+  évaluation/validation devra l'appliquer (voir `docs/HYPOTHESES.md`).
+- 633 tests passent au total, 100% toujours vérifié sur
+  `risk_engine`/`capital_manager`/`go_nogo`/`validator`/`trend_strategy`/
+  `circuit_breaker`/`ict_strategy`/`mean_reversion_strategy`/
+  `confidence_scorer`/`hypothesis5_strategy`.
+- `scripts/process_watchdog.py` surveille déjà `hypothesis2_executor` ET
+  `hypothesis4_executor` (les deux tournent réellement, voir ci-dessus —
+  correctif de documentation, `hypothesis4_executor` y avait été ajouté
+  dès le 21/08/2026, jamais retiré, contrairement à ce que CLAUDE.md
+  affirmait) ; **non étendu** à `hypothesis5_executor` (pas démarré,
+  identifiants incomplets — l'ajouter aurait déclenché une fausse
+  alerte).
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou

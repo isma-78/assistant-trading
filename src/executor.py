@@ -115,7 +115,8 @@ HYPOTHESIS_SOURCE = "hypothesis"    # Hypothèse #1 (docs/HYPOTHESES.md, 20/08/2
 HYPOTHESIS3_SOURCE = "hypothesis3"  # Hypothèse #3 (docs/HYPOTHESES.md, 21/08/2026)
 HYPOTHESIS2_SOURCE = "hypothesis2"  # Hypothèse #2 (docs/HYPOTHESES.md, 21/08/2026)
 HYPOTHESIS4_SOURCE = "hypothesis4"  # Hypothèse #4 (docs/HYPOTHESES.md, 21/08/2026 — validée en démo, non déployée)
-_KNOWN_HYPOTHESIS_SOURCES = {HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE, HYPOTHESIS4_SOURCE}
+HYPOTHESIS5_SOURCE = "hypothesis5"  # Hypothèse #5 (docs/HYPOTHESES.md, 23/08/2026 — sortie §2.10 sur l'entrée ICT de H2, non déployée)
+_KNOWN_HYPOTHESIS_SOURCES = {HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE, HYPOTHESIS4_SOURCE, HYPOTHESIS5_SOURCE}
 
 # Résolution de bougie utilisée pour recalculer le canal de Donchian du
 # trailing (§2.11) de chaque hypothèse — Station X n'y figure jamais
@@ -132,6 +133,26 @@ _TREND_CANDLE_RESOLUTION = {
     HYPOTHESIS3_SOURCE: "MINUTE_15",
     HYPOTHESIS2_SOURCE: "HOUR",
     HYPOTHESIS4_SOURCE: "HOUR",  # sans effet pratique : l'Hypothèse #4 n'a pas de trailing (voir take_profit ci-dessous)
+    HYPOTHESIS5_SOURCE: "HOUR",  # résolution des bougies utilisées pour l'ATR du trailing TP3 (§2.10, state.tp1 is
+                                 # not None pour ce flux) — H5 n'entre JAMAIS dans la branche Donchian ci-dessous.
+}
+
+# Régime de fond utilisé par chaque source hypothèse au moment de
+# l'OUVERTURE du trade (ajout 23/08/2026, voir docs/DECISIONS.md —
+# bascule du régime de l'Hypothèse #2, MA200 -> structure BOS/CHoCH).
+# Mapping figé au moment du déploiement de cette bascule : depuis cette
+# date, TOUTE nouvelle ouverture pour une source donnée utilise TOUJOURS
+# la même valeur (le code de détection lui-même a changé, pas un
+# paramètre runtime) — seuls les trades H2 déjà en base AVANT cette date
+# nécessitent un rétro-remplissage séparé (voir db._backfill_regime_type,
+# ils ne passent jamais par ce mapping). None = source sans notion de
+# régime de fond (Station X) — jamais une valeur devinée.
+_REGIME_TYPE_BY_SOURCE = {
+    HYPOTHESIS_SOURCE: "ma200",
+    HYPOTHESIS3_SOURCE: "ma200",
+    HYPOTHESIS2_SOURCE: "structural_bos_choch",
+    HYPOTHESIS4_SOURCE: "ma200",
+    HYPOTHESIS5_SOURCE: "structural_bos_choch",
 }
 
 
@@ -642,19 +663,22 @@ def open_signal(
     # jamais un second appel horloge qui pourrait diverger.
     session_marche = compute_market_session(datetime.fromisoformat(now).hour)
 
+    regime_type = _REGIME_TYPE_BY_SOURCE.get(signal_row["source"])
+
     with connection_scope(db_path) as conn:
         cursor = conn.execute(
             "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
             "prix_entree_prevu, guaranteed_stop, stop_loss_initial, stop_loss_courant, risque_eur, "
-            "pourcentage_risque_applique, ouvert_at, statut, stop_elargi, stop_origine_signal, session_marche) "
-            "VALUES (?, ?, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?)",
+            "pourcentage_risque_applique, ouvert_at, statut, stop_elargi, stop_origine_signal, session_marche, "
+            "regime_type) "
+            "VALUES (?, ?, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?)",
             (
                 signal_row["id"], result["deal_id"], signal_row["source"], asset, signal_row["sens"],
                 units, signal_row["entree_min"], int(adjustment.stop_distance > 0),
                 adjustment.stop_price, adjustment.stop_price, risk_amount_eur,
                 (risk_amount_eur / envelope_manager.balance * 100) if envelope_manager.balance else 0.0,
                 now, int(adjustment.widened), signal_row["stop_loss"] if adjustment.widened else None,
-                session_marche,
+                session_marche, regime_type,
             ),
         )
         trade_id = cursor.lastrowid

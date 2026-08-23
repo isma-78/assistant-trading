@@ -45,12 +45,29 @@ class _FakeSignalWithTakeProfit:
     confidence: float = 1.0
 
 
+@dataclass(frozen=True)
+class _FakeSignalWithTp1Tp2:
+    # Forme d'un Hypothesis5Signal (Hypothèse #5) : porte tp1/tp2,
+    # contrairement à TrendSignal/ICT (_FakeSignal ci-dessus) et à
+    # MeanReversionSignal (_FakeSignalWithTakeProfit, take_profit unique).
+    direction: str
+    entry_price: float
+    stop_price: float
+    tp1: float
+    tp2: float
+    confidence: float = 1.0
+
+
 def _fake_entry_fn(asset, candles):
     return _FakeSignal(direction="long", entry_price=1.2, stop_price=1.1)
 
 
 def _fake_entry_fn_with_take_profit(asset, candles):
     return _FakeSignalWithTakeProfit(direction="long", entry_price=1.2, stop_price=1.1, take_profit=1.15)
+
+
+def _fake_entry_fn_with_tp1_tp2(asset, candles):
+    return _FakeSignalWithTp1Tp2(direction="long", entry_price=1.2, stop_price=1.1, tp1=1.3, tp2=1.4)
 
 
 def _no_entry_fn(asset, candles):
@@ -157,6 +174,37 @@ def test_generate_and_queue_signal_persists_take_profit_never_tp1_tp2(tmp_path):
         assert signal["take_profit"] == pytest.approx(1.15)
         assert signal["tp1"] is None
         assert signal["tp2"] is None
+    finally:
+        conn.close()
+
+
+def test_generate_and_queue_signal_persists_tp1_tp2_never_take_profit(tmp_path):
+    # Hypothèse #5 (hypothesis5_strategy.Hypothesis5Signal, 23/08/2026) :
+    # tp1/tp2 doivent atterrir dans signals.tp1/tp2 (dispatch Station X
+    # dans executor._evaluate_position_management), JAMAIS dans
+    # signals.take_profit (réservé au dispatch H4) — voir
+    # docs/DECISIONS.md (21/08/2026 puis 23/08/2026).
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.return_value = {
+        "prices": [{
+            "snapshotTimeUTC": "2026-08-23T00:00:00Z",
+            "openPrice": {"bid": 1.2, "ask": 1.2}, "highPrice": {"bid": 1.2, "ask": 1.2},
+            "lowPrice": {"bid": 1.2, "ask": 1.2}, "closePrice": {"bid": 1.2, "ask": 1.2},
+        }]
+    }
+    _generate_and_queue_signal(
+        db_path, client, "EURUSD",
+        source="hypothesis5", resolution="HOUR", entry_fn=_fake_entry_fn_with_tp1_tp2,
+        channel="hypothesis5_channel", hypothesis_label="Hypothèse #5",
+    )
+    conn = get_connection(db_path)
+    try:
+        signal = conn.execute("SELECT * FROM signals").fetchone()
+        assert signal["tp1"] == pytest.approx(1.3)
+        assert signal["tp2"] == pytest.approx(1.4)
+        assert signal["take_profit"] is None
     finally:
         conn.close()
 

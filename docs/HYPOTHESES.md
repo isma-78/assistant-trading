@@ -1058,5 +1058,314 @@ Détail complet dans `docs/DECISIONS.md`.
 
 ---
 
+## 2026-08-23 — Hypothèse #5 : sortie progressive sur l'entrée ICT de l'Hypothèse #2 — proposée et validée par Ismaël dans la même demande
+
+Entrée écrite et datée **avant toute observation de résultat** (aucun
+trade H5 n'existe à ce jour, base de production vérifiée) — pré-
+enregistrement au sens de l'en-tête de ce fichier. Contrairement aux
+entrées H1-H4, la proposition et la validation d'Ismaël arrivent dans le
+même message : les paramètres ci-dessous sont donc directement les
+paramètres retenus, pas une proposition en attente.
+
+### Question posée — complémentaire à H2, pas une nouvelle théorie d'edge
+
+H2 teste si la confluence ICT/SMC (swings fractals K=2, zone de
+Fibonacci 61,8-78,6%, FVG) a un edge à l'**entrée**, avec une sortie
+tout-ou-rien (trailing Donchian(20) perpétuel dès l'ouverture, comme
+H1/H3). H5 teste une question différente et complémentaire : sur la
+**même entrée ICT**, est-ce qu'une **sortie** qui sécurise
+progressivement les gains (TP1/TP2 fixes, seuls 20% de la position
+continuent de courir sous trailing) produit des résultats plus
+réguliers (moins de variance, plus de gains concrétisés) qu'une sortie
+tout-en-trailing — même si le R total moyen peut être plus faible.
+
+**Une seule variable change entre H2 et H5 : la sortie.** L'entrée est
+rigoureusement identique (même fonction, mêmes paramètres, réutilisée
+sans modification) — comparaison propre, cause isolée. C'est une
+question sur le *mécanisme de sortie*, indépendante de la validité de
+l'edge d'entrée ICT lui-même (H2 reste la seule source de vérité sur ce
+point).
+
+### Conception — réutilisation intégrale, aucune nouvelle logique de décision
+
+- **Entrée** : `ict_strategy.evaluate_entry` réutilisée À L'IDENTIQUE
+  (import direct, jamais redupliquée), paramètres H2 inchangés
+  (`FRACTAL_K=2`, Fibonacci 61,8%/78,6%, régime MA(200), résolution
+  horaire). Aucun nouveau paramètre d'entrée — K=2 reste "dépensé" une
+  seule fois par H2 (même précédent que H3 réutilisant MA200/Donchian(20)
+  de H1 sans re-consommer son budget, voir la correction de modèle de
+  budget du 21/08/2026 plus haut dans ce fichier).
+- **Sortie** : mécanisme §2.10 déjà construit pour Station X — TP1
+  50%/TP2 30%/TP3 20% sous trailing 2×ATR(14), stop déplacé au
+  breakeven dès TP1 touché, resserrement uniquement (invariant #5).
+  **Vérifié avant d'écrire cette entrée (voir `docs/DECISIONS.md`,
+  23/08/2026) : ce mécanisme se branche sur `signals.tp1`/`tp2`
+  seulement — aucune modification d'`executor._evaluate_position_
+  management` n'a été nécessaire.**
+- **Paramètres réellement nouveaux (§2.11, cap 2-3 propres à cette
+  hypothèse)** : la distance de TP1 et TP2, exprimées en multiples de R
+  (R = risque initial du trade, jamais recalculé après une clôture
+  partielle, §2.1) :
+
+| Paramètre | Valeur | Statut |
+|---|---|---|
+| Distance TP1 | **1R** | **Paramètre #1** — valeur ronde, choisie a priori, non ajustée aux données |
+| Distance TP2 | **2R** | **Paramètre #2** — idem |
+| TP3 (reliquat 20%) | Aucune cible fixe, trailing 2×ATR(14) dès TP2 touché | Découle mécaniquement du mécanisme §2.10 réutilisé, pas un 3e paramètre libre |
+| Régime/entrée ICT | Identique à H2 (K=2, Fibonacci, FVG, MA200) | Réutilisé, budget déjà consommé par H2 |
+| Résolution des bougies | HOUR | Fixe, identique à H2 — H5 ne teste pas de changement de résolution |
+| Actifs | Les 8 de la liste blanche (GOLD, US100, US30, EURUSD, GBPUSD, USDJPY, BTCUSD, ETHUSD) | Identique à H1/H2/H3/H4 |
+| Source dédiée | `hypothesis5` | Compte démo Capital.com séparé, statistiques isolées (§2.11) |
+
+**2 paramètres propres à cette hypothèse**, dans la limite des 2-3
+imposée par §2.11 — 1 slot de marge, même situation que H4.
+
+### Ce que cette hypothèse teste précisément (et ce qu'elle ne teste pas)
+
+- Teste : régularité du profil de gains (variance, taux de trades
+  clôturés en gain net) avec sortie progressive vs. sortie tout-en-
+  trailing, sur une entrée d'edge identique à H2.
+- Ne teste PAS : un nouvel edge d'entrée (déjà couvert par H2), une
+  distance de TP différente de 1R/2R (pourrait faire l'objet d'une H6+
+  future, jamais un ajustement de cette entrée), un mécanisme de sortie
+  hybride autre que celui déjà câblé pour Station X.
+- Conséquence attendue et acceptée d'avance : le R total moyen de H5
+  peut être structurellement inférieur à celui de H2 sur le même flux de
+  signaux (sécuriser tôt plafonne le haut de la distribution) — ce n'est
+  pas un signe d'échec de l'hypothèse, c'est exactement le compromis
+  qu'elle mesure.
+
+### Budget de variables (invariant #10)
+
+Modèle du 21/08/2026 (§2.11 vs §3.8, voir plus haut dans ce fichier) :
+chaque hypothèse a son propre budget de 2-3 paramètres, jamais partagé.
+H5 : 2/3 propres (TP1 R, TP2 R). 0/5 consommé sur `adaptive_rules`
+(§3.8) — aucune promotion à ce jour, comme les 4 autres.
+
+### Plafond §3.9 et correction pour comparaisons multiples
+
+Décision permanente déjà actée le 21/08/2026 (entrée H4 ci-dessus,
+confirmée par Ismaël dans cette même demande) : H5 autorisée en
+exécution **DÉMO uniquement** (aucun capital réel engagé, statistiques
+déjà isolées par source), même régime que H4. **Toute future
+évaluation ou validation d'un résultat (promotion en réel, comparaison
+entre hypothèses, décision d'arrêt/poursuite) devra désormais appliquer
+la correction statistique pour comparaisons multiples calibrée sur 5
+hypothèses simultanées (H1-H5), jamais 4** — voir `docs/DECISIONS.md`
+(23/08/2026) pour l'application de cette mise à jour.
+
+### Score de confiance du signal
+
+Identique aux Hypothèses #1/#2/#3/#4 : entièrement déterministe,
+`confidence = 1.0`, `boosted = False` (hérité du signal ICT sous-jacent,
+jamais recalculé par H5).
+
+### Ce que cette hypothèse NE fait PAS (rappel des garde-fous)
+
+- N'introduit aucune nouvelle logique de détection d'entrée — délègue
+  entièrement à `ict_strategy.evaluate_entry`.
+- N'implique aucun LLM à aucune étape de la décision (invariant #1).
+- Ne sera jamais ajustée automatiquement sur la base de ses propres
+  résultats — toute évolution = nouvelle entrée datée.
+- Ne produit aucune conclusion statistique avant **10 trades minimum
+  par variable réglable** (2 variables ici → 20 trades minimum avant
+  toute interprétation, invariant #10) — comparaison H2 vs H5 incluse.
+- **Aucun identifiant Capital.com câblé, aucune exécution réelle même
+  démo** — en attente des identifiants du compte démo H5 dédié,
+  qu'Ismaël fournira directement dans le terminal, jamais dans la
+  conversation (même principe que H2/H3/H4).
+
+Détail complet de l'implémentation (vérification de la réutilisation
+sans duplication, tests, couverture) dans `docs/DECISIONS.md`
+(23/08/2026).
+
+---
+
+## 2026-08-23 — Hypothèse #2 : bascule du régime de fond (MA200 -> structure BOS/CHoCH)
+
+Décision d'Ismaël, appliquée le jour même. Cette entrée documente
+UNIQUEMENT le changement du **régime** (niveau 1 de l'architecture à
+deux niveaux §2.11) — le **déclencheur** (niveau 2 : swings fractals
+K=2, zone de Fibonacci 61,8-78,6 %, FVG) reste rigoureusement inchangé.
+
+### Motivation — théorique, pas empirique
+
+Cohérence avec une vraie lecture de structure de marché ICT/Smart Money
+Concepts, plutôt qu'un filtre de tendance générique (MA200) emprunté à
+une autre famille d'hypothèses (H1/H3, trend-following classique).
+`classify_structure_break` (BOS/CHoCH) était déjà codée et testée à
+100% depuis la version d'origine de ce module (20-21/08/2026) mais
+jamais branchée comme condition de décision — la proposition d'origine
+notait explicitement : "**capacité disponible et testée, pas encore une
+condition de décision**". Décidé AVANT tout résultat réel : aucun des 2
+trades H2 déjà en base (ouverts sous l'ancien régime MA200) n'a été
+regardé pour prendre cette décision — vérifié en écrivant cette entrée
+avant de consulter la base de production.
+
+### Traduction mécanique — `compute_structural_regime` (nouvelle fonction, `src/ict_strategy.py`)
+
+`classify_structure_break(current_close, swing_highs, swing_lows, bias)`
+exige un `bias` en entrée (elle CLASSE une cassure relative à un biais
+donné, elle ne DÉTECTE pas un régime à partir de rien). Traduction
+choisie, stateless (même contrat que `trend_strategy.compute_regime`
+qu'elle remplace — aucun biais mémorisé d'un appel à l'autre) : un biais
+CANDIDAT est essayé dans chaque sens ; celui qui produit un BOS (la
+clôture courante dépasse le dernier swing confirmé dans le sens testé)
+est retenu comme régime. Les deux tests (`bias="long"` donnant BOS, et
+`bias="short"` donnant BOS) sont mutuellement exclusifs — aucune
+ambiguïté, jamais besoin d'examiner les branches CHoCH séparément (un
+CHoCH sous un biais donné correspond toujours au BOS symétrique sous le
+biais opposé, même cassure).
+
+**Conséquence structurelle découverte et documentée, pas corrigée** :
+une clôture strictement À L'INTÉRIEUR de la zone de retracement de
+Fibonacci d'une jambe ne peut, par construction algébrique, jamais
+constituer un BOS/CHoCH de CETTE MÊME jambe (la zone 61,8-78,6 % est
+toujours strictement comprise entre le swing bas et le swing haut de sa
+propre jambe — prouvé et vérifié en exécutant le code réel avant
+d'écrire cette entrée, voir docs/DECISIONS.md). Un signal H2 valide
+exige donc une cassure structurelle RÉCENTE et DISTINCTE de la jambe
+d'entrée elle-même (typiquement une cassure plus locale, formée après
+l'extrémité de la jambe, pendant le repli). C'est un filtre nettement
+plus strict que MA200 (qui ne dépendait d'aucune action récente du
+prix) — la fréquence des signaux H2 va mécaniquement baisser. Accepté
+comme le prix normal d'une lecture de structure plus fidèle à la
+théorie ICT, pas un défaut à corriger.
+
+### Séparation des trades pré/post-bascule — `trades.regime_type`
+
+Les 2 trades H2 déjà en base ont été ouverts sous MA200, avant ce
+changement — ils restent étiquetés comme tels, jamais mélangés aux
+futurs trades H2 structurels dans une même statistique. Nouvelle colonne
+`trades.regime_type` (`"ma200"` | `"structural_bos_choch"` | `NULL` pour
+Station X, sans notion de régime) rendant cette séparation **vérifiable
+en base**, pas seulement documentée ici — détail de la migration/
+rétro-remplissage dans docs/DECISIONS.md.
+
+### Ce qui NE change PAS
+
+Le déclencheur (K=2, Fibonacci, FVG), le stop initial (swing opposé), la
+sortie (trailing Donchian(20) de trend_strategy, réutilisé tel quel), le
+budget de variables de H2 (K=2 reste son seul paramètre propre, 1/3),
+les 8 actifs, la résolution horaire.
+
+---
+
+## 2026-08-23 — Hypothèse #5 : REDÉFINIE (confluence ICT + momentum RSI) — remplace l'entrée du même jour ci-dessus, jamais déployée sous l'ancienne définition
+
+Pré-enregistrement écrit et daté **avant toute observation de
+résultat** — aucun trade H5 n'a jamais existé, sous quelque définition
+que ce soit (vérifié en base avant d'écrire cette entrée). Cette
+entrée REMPLACE intégralement l'entrée "Hypothèse #5" plus haut dans ce
+fichier (même date) : ce n'est PAS un ajustement sur des résultats
+(convention de ce fichier, "Règle de modification" en en-tête) —
+c'est une redéfinition avant toute donnée, décidée par Ismaël dans la
+même conversation que la proposition d'origine.
+
+### Ce qui change par rapport à l'entrée remplacée
+
+| | Ancienne définition (remplacée) | Nouvelle définition (retenue) |
+|---|---|---|
+| Régime | MA200 (hérité de l'ancien H2) | **Structurel** (BOS/CHoCH, hérité du nouveau H2 — voir entrée ci-dessus) |
+| Déclencheur | Confluence ICT de H2 seule | Confluence ICT de H2 **ET** RSI(14) franchissant 50 dans le même sens, même bougie |
+| Sortie | §2.10 (TP1 1R/TP2 2R/trailing 20%) | **Inchangée** |
+
+### Régime
+
+Structurel, identique au nouveau régime de l'Hypothèse #2
+(`ict_strategy.compute_structural_regime`) — jamais MA200. Hérité,
+jamais recalculé différemment ici : aucun nouveau paramètre.
+
+### Déclencheur
+
+Confluence ICT de H2 (swings fractals K=2, zone de Fibonacci
+61,8-78,6 %, FVG chevauchant la zone) **ET** momentum RSI(14)
+franchissant le seuil 50 dans le sens de la structure, **au même
+moment** (sur la même bougie que la confluence ICT) — les deux
+conditions doivent être réunies pour qu'un signal se déclenche.
+`ict_strategy.evaluate_entry` (régime + confluence, incluant déjà le
+nouveau régime structurel) est réutilisée à l'identique ; seul le filtre
+RSI est ajouté.
+
+**Limite assumée, documentée explicitement (pas une simplification
+cachée)** : combiner confluence ICT et momentum RSI dans une même
+condition empêche d'attribuer un résultat à l'un ou l'autre facteur
+séparément — si H5 sur- ou sous-performe H2, impossible de savoir
+laquelle des deux couches explique l'écart. Accepté sciemment : H5
+teste la COMBINAISON comme hypothèse à part entière, pas chacun des
+deux facteurs isolément. Une hypothèse future pourrait tester le RSI
+seul (sans confluence ICT) si ce résultat combiné le justifie — pas
+construite ici, une nouvelle entrée le jour venu.
+
+### Sortie (inchangée par rapport à la version remplacée)
+
+Mécanisme §2.10 déjà construit pour Station X : TP1 50 % à 1R, TP2 30 %
+à 2R, TP3 20 % sous trailing 2×ATR(14) plancher breakeven, stop déplacé
+au breakeven dès TP1 touché (resserrement seulement, invariant #5). R
+toujours calculé sur le risque initial DE CE TRADE H5, jamais recalculé
+après une clôture partielle (§2.1).
+
+### Paramètres exacts (choisis a priori, avant observation)
+
+| Paramètre | Valeur | Statut |
+|---|---|---|
+| Régime structurel (BOS/CHoCH) | Hérité de H2 | Réutilisé, pas un nouveau choix |
+| Confluence ICT (K=2, Fibonacci, FVG) | Hérité de H2 | Réutilisé, pas un nouveau choix |
+| **Config RSI** (période + seuil de franchissement) | 14, 50 | **Paramètre #1** — conventions RSI standard (Wilder, période 14 ; seuil médian 50, ligne de partage momentum haussier/baissier), regroupées en un seul paramètre — même convention que la "config des bandes" de l'Hypothèse #4 |
+| **Distance TP1** | 1R | **Paramètre #2** — valeur ronde, choisie a priori |
+| **Distance TP2** | 2R | **Paramètre #3** — idem |
+| TP3 (reliquat 20%) | Trailing 2×ATR(14) dès TP2 touché | Découle mécaniquement du mécanisme §2.10 réutilisé |
+| Résolution des bougies | HOUR | Fixe, identique à H2 |
+| Actifs | Les 8 de la liste blanche | Identique à H1/H2/H3/H4 |
+| Source dédiée | `hypothesis5` | Compte démo Capital.com séparé |
+
+**3 paramètres propres à cette hypothèse — pile au plafond des 2-3
+imposé par §2.11, aucune marge.**
+
+### Budget de variables (invariant #10)
+
+Modèle du 21/08/2026 (§2.11 vs §3.8) : chaque hypothèse a son propre
+budget de 2-3 paramètres, jamais partagé. H5 : 3/3 propres (config RSI,
+TP1 R, TP2 R) — le régime structurel et la confluence ICT sont hérités
+de H2, jamais "dépensés" une seconde fois (même précédent que H3
+réutilisant MA200/Donchian(20) de H1). 0/5 consommé sur `adaptive_rules`
+(§3.8) — aucune promotion à ce jour, comme les 4 autres.
+
+### Indépendance vis-à-vis de Station X (vérifiée, pas seulement affirmée)
+
+Aucune valeur (TP, R, niveau, prix) n'est lue depuis les signaux réels
+ou la table `signals` de Station X — uniquement la mécanique (fractions
+50/30/20, formule de trailing 2×ATR) du mécanisme §2.10, appliquée aux
+propres entrée/stop/ATR de H5, calculés à partir des bougies H5
+elles-mêmes. Détail de la vérification (lecture du code, aucune requête
+touchant Station X) dans docs/DECISIONS.md.
+
+### Score de confiance du signal
+
+Identique aux autres hypothèses : entièrement déterministe,
+`confidence = 1.0`, `boosted = False`.
+
+### Ce que cette hypothèse NE fait PAS (rappel des garde-fous)
+
+- N'introduit aucune nouvelle logique de détection de régime ou de
+  confluence — délègue entièrement à `ict_strategy.evaluate_entry`.
+- N'implique aucun LLM à aucune étape de la décision (invariant #1).
+- Ne sera jamais ajustée automatiquement sur la base de ses propres
+  résultats — toute évolution = nouvelle entrée datée.
+- Ne produit aucune conclusion statistique avant **10 trades minimum
+  par variable réglable** (3 variables ici → 30 trades minimum avant
+  toute interprétation, invariant #10) — comparaison H2 vs H5 incluse.
+
+### Plafond §3.9 et correction pour comparaisons multiples
+
+Inchangé par rapport à l'entrée remplacée : H5 autorisée en démo
+uniquement, correction pour comparaisons multiples calibrée sur **5
+hypothèses simultanées (H1-H5), jamais 4** pour toute future validation.
+
+Détail complet de l'implémentation (RSI de Wilder, tests, couverture,
+vérification en direct sur le VPS) dans `docs/DECISIONS.md` (23/08/2026).
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
-#2, #3 ou #4 — jamais une modification de ce qui précède.*
+#2, #3, #4 ou #5 — jamais une modification de ce qui précède.*

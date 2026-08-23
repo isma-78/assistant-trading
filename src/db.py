@@ -155,7 +155,10 @@ CREATE TABLE IF NOT EXISTS trades (
     cloture_reason TEXT,  -- ajout 20/08/2026 hors §4.5 : "stop_initial" | "stop_breakeven" | "trailing" | "stop_urgence", voir docs/DECISIONS.md
     stop_elargi INTEGER NOT NULL DEFAULT 0,  -- ajout 20/08/2026 hors §4.5 : stop élargi au minimum garanti broker, voir docs/DECISIONS.md
     stop_origine_signal REAL,  -- stop tel qu'émis par le signal AVANT élargissement ; NULL si stop_elargi=0
-    session_marche TEXT  -- ajout 20/08/2026 hors §4.5 : "asie" | "europe" | "us" | "hors_session", collecte uniquement, voir docs/DECISIONS.md
+    session_marche TEXT,  -- ajout 20/08/2026 hors §4.5 : "asie" | "europe" | "us" | "hors_session", collecte uniquement, voir docs/DECISIONS.md
+    regime_type TEXT  -- ajout 23/08/2026 hors §4.5 : "ma200" | "structural_bos_choch", voir docs/DECISIONS.md
+                       -- (bascule du régime de l'Hypothèse #2). NULL pour Station X (aucune notion de
+                       -- régime de fond) et pour tout trade antérieur à cet ajout non rétro-rempli.
 );
 
 CREATE TABLE IF NOT EXISTS trade_partials (
@@ -425,6 +428,7 @@ _COLUMN_MIGRATIONS = [
     ("trades", "stop_origine_signal", "REAL"),
     ("trades", "session_marche", "TEXT"),
     ("signals", "take_profit", "REAL"),
+    ("trades", "regime_type", "TEXT"),
 ]
 
 
@@ -432,6 +436,59 @@ def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, co
     existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
     if column not in existing:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}")
+
+
+# Sources hypothèse dont TOUS les trades existants, à la date de cette
+# migration (23/08/2026), ont été ouverts sous un régime MA200 — jamais
+# les constantes d'executor.py (importer executor.py depuis db.py créerait
+# un import circulaire, executor.py important déjà connection_scope
+# d'ici) : littéraux dupliqués, même convention que _KNOWN_HYPOTHESIS_
+# SOURCES (executor.py/metrics.py/circuit_breaker_store.py/
+# confidence_scorer.py). N'inclut PAS "hypothesis2" : ses trades
+# ANTÉRIEURS à la bascule du régime (23/08/2026, voir docs/DECISIONS.md)
+# doivent être étiquetés "ma200" malgré tout — traité séparément ci-dessous.
+_MA200_ONLY_HYPOTHESIS_SOURCES = ("hypothesis", "hypothesis3", "hypothesis4")
+
+
+def _backfill_regime_type(conn: sqlite3.Connection) -> None:
+    """Rétro-remplit `trades.regime_type` pour les trades hypothèse déjà
+    en base AVANT l'ajout de cette colonne (`ALTER TABLE ADD COLUMN` la
+    laisse NULL pour toutes les lignes existantes, indéfiniment, sans ce
+    backfill) — voir docs/DECISIONS.md, 23/08/2026 (bascule du régime de
+    l'Hypothèse #2, MA200 -> structure BOS/CHoCH). Distingue deux cas :
+
+    - H1/H3/H4 n'ont jamais changé de régime (toujours MA200) : tous
+      leurs trades, passés et futurs, sont "ma200".
+    - H2 a basculé : ses trades déjà en base à cette date ont TOUS été
+      ouverts sous l'ANCIEN régime MA200 (aucun trade H2 structurel
+      n'existe encore, la bascule et cette migration sont déployées dans
+      le même changement) — donc rétro-remplis "ma200" comme les autres,
+      pas "structural_bos_choch".
+
+    Idempotent : ne cible que les lignes encore NULL. Tout futur trade
+    (toute source, y compris un H2 post-bascule) écrit `regime_type` à
+    l'ouverture (`executor.open_signal`), jamais NULL — ne peut donc plus
+    jamais matcher cette condition une fois inséré, quelle que soit la
+    fréquence d'appel de cette fonction (exécutée à chaque `init_db`,
+    même patron que `_add_column_if_missing`).
+
+    Garde-fou trouvé par les tests avant tout déploiement (voir
+    docs/DECISIONS.md, 23/08/2026) : une table `trades` encore plus
+    ancienne que celle visée par `_add_column_if_missing` (ex. un
+    doublure de test antérieure à l'ajout même de `source`) ferait
+    échouer la requête ci-dessous (`no such column: source`) — sans
+    objet dans ce cas (aucune ligne ne peut référencer une source
+    hypothèse sans cette colonne), donc silencieusement ignorée plutôt
+    que de faire échouer `init_db()` en entier."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(trades)")}
+    if "source" not in existing:
+        return
+    sources = _MA200_ONLY_HYPOTHESIS_SOURCES + ("hypothesis2",)
+    placeholders = ",".join("?" for _ in sources)
+    conn.execute(
+        f"UPDATE trades SET regime_type = 'ma200' WHERE regime_type IS NULL AND source IN ({placeholders})",
+        sources,
+    )
 
 
 def _migrate_envelopes_source(conn: sqlite3.Connection) -> None:
@@ -493,6 +550,7 @@ def init_db(db_path: str) -> None:
         for table, column, column_def in _COLUMN_MIGRATIONS:
             _add_column_if_missing(conn, table, column, column_def)
         _migrate_envelopes_source(conn)
+        _backfill_regime_type(conn)
         conn.commit()
     finally:
         conn.close()

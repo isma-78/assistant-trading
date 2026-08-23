@@ -96,6 +96,18 @@ class AppConfig:
     capital_api_password_hypothesis4: Optional[str] = None
     capital_account_id_hypothesis4: Optional[str] = None
 
+    # Compte démo dédié à l'Hypothèse #5 (confluence ICT + momentum RSI,
+    # régime structurel, sortie progressive §2.10 — voir
+    # docs/HYPOTHESES.md, redéfinie et déployée le 23/08/2026).
+    # Identifiants fournis par Ismaël directement dans `.env` (jamais
+    # dans la conversation) — voir docs/DECISIONS.md. `hypothesis5_
+    # executor.run_hypothesis5_loop` échoue toujours net (ConfigError)
+    # si l'un d'eux venait à manquer.
+    capital_api_key_hypothesis5: Optional[str] = None
+    capital_identifier_hypothesis5: Optional[str] = None
+    capital_api_password_hypothesis5: Optional[str] = None
+    capital_account_id_hypothesis5: Optional[str] = None
+
 
 def _require(name: str) -> str:
     value = os.environ.get(name)
@@ -170,4 +182,8 @@ def load_config(dotenv_path: str = ".env") -> AppConfig:
         capital_identifier_hypothesis4=os.environ.get("CAPITAL_IDENTIFIER_HYPOTHESIS4") or os.environ.get("CAPITAL_IDENTIFIER") or None,
         capital_api_password_hypothesis4=os.environ.get("CAPITAL_API_PASSWORD_HYPOTHESIS4") or None,
         capital_account_id_hypothesis4=os.environ.get("CAPITAL_ACCOUNT_ID_HYPOTHESIS4") or None,
+        capital_api_key_hypothesis5=os.environ.get("CAPITAL_API_KEY_HYPOTHESIS5") or None,
+        capital_identifier_hypothesis5=os.environ.get("CAPITAL_IDENTIFIER_HYPOTHESIS5") or os.environ.get("CAPITAL_IDENTIFIER") or None,
+        capital_api_password_hypothesis5=os.environ.get("CAPITAL_API_PASSWORD_HYPOTHESIS5") or None,
+        capital_account_id_hypothesis5=os.environ.get("CAPITAL_ACCOUNT_ID_HYPOTHESIS5") or None,
     )

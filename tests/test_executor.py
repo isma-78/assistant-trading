@@ -1378,6 +1378,71 @@ def test_manage_open_trades_flux_b_trailing_forwards_guaranteed_stop(tmp_path):
         conn.close()
 
 
+def test_manage_open_trades_hypothesis5_routes_to_own_envelope_and_hour_resolution(tmp_path):
+    # Hypothèse #5 (§2.11, docs/HYPOTHESES.md, 23/08/2026) : sortie
+    # Station X (TP1/TP2 déjà touchés, reliquat 20% sous trailing ATR)
+    # sur une source "hypothesis5" — vérifie que _KNOWN_HYPOTHESIS_SOURCES
+    # (donc _envelope_source_key) reconnaît bien cette source. Régression
+    # ciblée : sans cet ajout, le trade retomberait sur l'enveloppe
+    # "stationx" (absente du dict fourni ici), la mise à jour du trailing
+    # échouerait silencieusement (KeyError avalé par le fail-safe de
+    # manage_open_trades) et update_position_stop ne serait jamais appelé.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(
+        db_path, actif="EURUSD", sens="long", entree=1.10, stop=1.09,
+        tp1=1.11, tp2=1.12, source="hypothesis5",
+    )
+
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-h5', 'hypothesis5', 'EURUSD', 'demo', 'long', 100.0, "
+            "1.10, 1.09, 1.10, 10.0, 2.0, '2026-08-23T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO trade_partials (trade_id, palier, fraction, prix_sortie, r_atteint, executed_at) "
+            "VALUES (?, 'tp1', 0.5, 1.11, 1.0, '2026-08-23T01:00:00Z')", (trade_id,),
+        )
+        conn.execute(
+            "INSERT INTO trade_partials (trade_id, palier, fraction, prix_sortie, r_atteint, executed_at) "
+            "VALUES (?, 'tp2', 0.3, 1.12, 2.0, '2026-08-23T02:00:00Z')", (trade_id,),
+        )
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 1.20, "offer": 1.20, "marketStatus": "TRADEABLE"}}
+    client.get_prices.return_value = {
+        "prices": [
+            {
+                "snapshotTimeUTC": "t",
+                "openPrice": {"bid": 1.10, "ask": 1.10}, "highPrice": {"bid": 1.13, "ask": 1.13},
+                "lowPrice": {"bid": 1.09, "ask": 1.09}, "closePrice": {"bid": 1.12, "ask": 1.12},
+            }
+            for _ in range(DONCHIAN_PERIOD + 1)
+        ]
+    }
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "EURUSD", "demo", 500.0, source="hypothesis5")
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("EURUSD", "hypothesis5"): envelope_manager},
+        envelope_ids={("EURUSD", "hypothesis5"): envelope_id},
+        include_sources=["hypothesis5"],
+    )
+
+    client.get_prices.assert_called_once_with("EURUSD", resolution="HOUR", max_bars=DONCHIAN_PERIOD + 1)
+    client.update_position_stop.assert_called_once()
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT stop_loss_courant FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["stop_loss_courant"] > 1.10  # resserré au-delà du breakeven, jamais élargi
+    finally:
+        conn.close()
+
+
 def test_manage_open_trades_trailing_capped_at_broker_minimum(tmp_path):
     # Incident réel du 21/08/2026 (voir docs/DECISIONS.md) : le canal
     # Donchian voulait resserrer bien plus que le minimum garanti du

@@ -126,11 +126,15 @@ def _generate_and_queue_signal(
     mean_reversion_strategy.MeanReversionSignal) est écrit dans la
     colonne dédiée `signals.take_profit` si présente sur l'objet signal
     (`getattr`, jamais un accès direct — TrendSignal/ICT n'ont pas ce
-    champ), JAMAIS dans tp1/tp2 : ces deux colonnes restent NULL pour
-    toute stratégie technique complémentaire, comme avant (voir
-    docs/DECISIONS.md, 21/08/2026, pour la raison — le dispatch de
-    gestion de position d'executor.py distingue les trois mécanismes de
-    sortie par la colonne renseignée, jamais par une valeur partagée)."""
+    champ) ; `signal.tp1`/`signal.tp2` (Hypothèse #5 UNIQUEMENT, voir
+    hypothesis5_strategy.Hypothesis5Signal — ajout du 23/08/2026, même
+    patron `getattr`) sont écrits dans les colonnes `signals.tp1`/`tp2`.
+    Un signal ne porte JAMAIS les deux à la fois (`take_profit` et
+    `tp1`/`tp2` ciblent des dispatches de gestion de position mutuellement
+    exclusifs dans `executor._evaluate_position_management`, voir
+    docs/DECISIONS.md, 21/08/2026 puis 23/08/2026) — pour H1/H2/H3
+    (TrendSignal/ICT, ni l'un ni l'autre champ), les trois colonnes
+    restent NULL, comme avant."""
     if _has_active_signal_or_trade(db_path, asset, source):
         return
 
@@ -151,11 +155,12 @@ def _generate_and_queue_signal(
         raw_message_id = raw_cursor.lastrowid
         conn.execute(
             "INSERT INTO signals (raw_message_id, source, type, actif, sens, entree_min, entree_max, stop_loss, "
-            "take_profit, confiance, statut, created_at) "
-            "VALUES (?, ?, 'signal', ?, ?, ?, ?, ?, ?, ?, 'a_valider', ?)",
+            "tp1, tp2, take_profit, confiance, statut, created_at) "
+            "VALUES (?, ?, 'signal', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'a_valider', ?)",
             (
                 raw_message_id, source, asset, signal.direction,
                 signal.entry_price, signal.entry_price, signal.stop_price,
+                getattr(signal, "tp1", None), getattr(signal, "tp2", None),
                 getattr(signal, "take_profit", None),
                 signal.confidence, now,
             ),

@@ -17,9 +17,9 @@ from src.metrics import _normalize_source as metrics_normalize
 _ALL_NORMALIZERS = [executor_normalize, cb_normalize, metrics_normalize, cs_normalize]
 
 _TEST_SOURCES = [
-    "hypothesis", "hypothesis3", "hypothesis2", "hypothesis4",
+    "hypothesis", "hypothesis3", "hypothesis2", "hypothesis4", "hypothesis5",
     "-1002481537588",  # id de canal brut Station X (voir CLAUDE.md)
-    "stationx", "", "hypothesis5",  # source inconnue future : doit retomber sur stationx partout
+    "stationx", "", "hypothesis6",  # source inconnue future : doit retomber sur stationx partout
 ]
 
 
@@ -30,18 +30,19 @@ def test_all_four_normalizers_agree_on_every_source():
 
 
 def test_known_hypothesis_sources_map_to_themselves():
-    # hypothesis4 (Hypothèse #4, 21/08/2026, voir docs/HYPOTHESES.md) est
-    # désormais connue des 4 copies — comme H1/H2/H3, malgré son exécution
-    # non encore câblée (aucun identifiant .env, aucun déploiement).
-    for source in ("hypothesis", "hypothesis3", "hypothesis2", "hypothesis4"):
+    # hypothesis4 (Hypothèse #4, 21/08/2026) et hypothesis5 (Hypothèse #5,
+    # 23/08/2026, voir docs/HYPOTHESES.md) sont désormais connues des 4
+    # copies — comme H1/H2/H3, malgré une exécution non encore câblée
+    # (aucun identifiant .env, aucun déploiement).
+    for source in ("hypothesis", "hypothesis3", "hypothesis2", "hypothesis4", "hypothesis5"):
         for fn in _ALL_NORMALIZERS:
             assert fn(source) == source
 
 
 def test_unknown_sources_collapse_to_stationx():
-    # "hypothesis5" représente une hypothèse future PAS ENCORE ajoutée à
+    # "hypothesis6" représente une hypothèse future PAS ENCORE ajoutée à
     # _KNOWN_HYPOTHESIS_SOURCES — doit rester repliée sur "stationx"
-    # partout tant qu'elle n'a pas reçu le même traitement que H4 ici.
-    for source in ("-1002481537588", "stationx", "", "hypothesis5"):
+    # partout tant qu'elle n'a pas reçu le même traitement que H4/H5 ici.
+    for source in ("-1002481537588", "stationx", "", "hypothesis6"):
         for fn in _ALL_NORMALIZERS:
             assert fn(source) == "stationx"

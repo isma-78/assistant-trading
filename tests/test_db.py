@@ -162,6 +162,106 @@ def test_init_db_migrates_signals_take_profit_column(tmp_path):
         conn.close()
 
 
+def test_init_db_migrates_regime_type_column(tmp_path):
+    # trades.regime_type (bascule du régime de l'Hypothèse #2, 23/08/2026
+    # — voir docs/DECISIONS.md) : une base créée avant son ajout doit la
+    # recevoir au prochain init_db(), même patron que deal_id ci-dessus.
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    conn.execute(
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, actif TEXT, source TEXT, statut TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    conn = get_connection(db_path)
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)")}
+        assert "regime_type" in columns
+    finally:
+        conn.close()
+
+
+def test_init_db_backfills_regime_type_ma200_for_pre_bascule_hypothesis_trades(tmp_path):
+    # Les trades H1/H2/H3/H4 déjà en base avant l'ajout de la colonne
+    # doivent être rétro-remplis "ma200" (aucun n'a jamais tourné sous
+    # le régime structurel avant cette date, y compris H2 — sa bascule
+    # et cette migration sont déployées dans le même changement, voir
+    # docs/DECISIONS.md). Station X (source arbitraire, canal Telegram)
+    # reste NULL : aucune notion de régime de fond.
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    conn.execute(
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, actif TEXT, source TEXT, statut TEXT)"
+    )
+    for source in ("hypothesis", "hypothesis2", "hypothesis3", "hypothesis4", "-1002481537588"):
+        conn.execute("INSERT INTO trades (actif, source, statut) VALUES ('EURUSD', ?, 'ferme')", (source,))
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    conn = get_connection(db_path)
+    try:
+        rows = {row["source"]: row["regime_type"] for row in conn.execute("SELECT source, regime_type FROM trades")}
+    finally:
+        conn.close()
+    assert rows["hypothesis"] == "ma200"
+    assert rows["hypothesis2"] == "ma200"  # trade pré-bascule, jamais "structural_bos_choch"
+    assert rows["hypothesis3"] == "ma200"
+    assert rows["hypothesis4"] == "ma200"
+    assert rows["-1002481537588"] is None  # Station X : pas de notion de régime
+
+
+def test_init_db_backfill_regime_type_is_idempotent_and_never_touches_future_trades(tmp_path):
+    # Un trade H2 ouvert APRÈS la bascule (regime_type déjà renseigné à
+    # l'écriture, jamais NULL) ne doit JAMAIS être réécrit par le
+    # backfill, même après plusieurs appels à init_db().
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO trades (deal_id, source, actif, mode, direction, taille_initiale, stop_loss_initial, "
+            "stop_loss_courant, risque_eur, pourcentage_risque_applique, ouvert_at, statut, regime_type) "
+            "VALUES ('d1', 'hypothesis2', 'EURUSD', 'demo', 'long', 100, 1.0, 1.0, 10.0, 2.0, "
+            "'2026-08-23T00:00:00Z', 'ouvert', 'structural_bos_choch')"
+        )
+
+    init_db(db_path)  # second appel : idempotence
+
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute("SELECT regime_type FROM trades WHERE deal_id = 'd1'").fetchone()
+    finally:
+        conn.close()
+    assert row["regime_type"] == "structural_bos_choch"
+
+
+def test_init_db_backfill_regime_type_skips_table_without_source_column(tmp_path):
+    # Garde-fou : une table trades encore plus dépouillée que celle visée
+    # par la migration deal_id (sans même `source`) ne doit jamais faire
+    # échouer init_db() — rien à rétro-remplir dans ce cas (voir
+    # docstring de db._backfill_regime_type).
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    conn.execute(
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, actif TEXT NOT NULL, statut TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)  # ne doit lever aucune exception
+
+    conn = get_connection(db_path)
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)")}
+        assert "regime_type" in columns
+    finally:
+        conn.close()
+
+
 def test_init_db_is_idempotent(tmp_path):
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
