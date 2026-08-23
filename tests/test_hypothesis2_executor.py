@@ -13,6 +13,8 @@ class _FakeSignal:
     direction: str
     entry_price: float
     stop_price: float
+    tp1: float
+    tp2: float
 
 
 def test_hypothesis2_assets_matches_hypothesis1_and_3():
@@ -22,11 +24,15 @@ def test_hypothesis2_assets_matches_hypothesis1_and_3():
 
 
 def test_describe_signal_mentions_ict_concepts():
-    text = _describe_signal("Hypothèse #2", "GOLD", _FakeSignal("long", 2400.0, 2380.0))
+    text = _describe_signal("Hypothèse #2", "GOLD", _FakeSignal("long", 2400.0, 2380.0, 2420.0, 2440.0))
     assert "fractal" in text.lower()
     assert "Fibonacci" in text
     assert "FVG" in text
     assert "GOLD" in text
+    assert "2420" in text
+    assert "2440" in text
+    assert "1R" in text
+    assert "2R" in text
 
 
 def test_run_hypothesis2_loop_forwards_h2_credentials_and_resolution():

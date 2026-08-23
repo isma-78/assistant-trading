@@ -14,6 +14,7 @@ from src.trend_strategy import (
     MA_PERIOD,
     compute_donchian_channel,
     compute_regime,
+    compute_tp_levels,
     compute_trailing_stop_channel,
     evaluate_entry,
 )
@@ -149,6 +150,45 @@ def test_evaluate_entry_short_no_breakout_returns_none():
 def test_evaluate_entry_internal_error_is_caught_fail_safe():
     # candles=None fait planter len(candles) à l'intérieur -> capturé
     assert evaluate_entry("EURUSD", None) is None
+
+
+def test_evaluate_entry_never_sets_tp1_tp2():
+    # Régression H1 (§ docs/DECISIONS.md, 23/08/2026, sortie H2/H3
+    # basculée mais H1 volontairement inchangée, seul témoin encore en
+    # trailing pur) : trend_strategy.evaluate_entry ne doit JAMAIS
+    # renseigner tp1/tp2 lui-même — ce module ne les calcule pas, ils
+    # restent None par défaut, ajoutés uniquement par
+    # hypothesis2_strategy.py/hypothesis3_strategy.py via
+    # dataclasses.replace() sur le signal qu'il retourne.
+    signal = evaluate_entry("EURUSD", _regime_setup("long", breakout=True))
+    assert signal is not None
+    assert signal.tp1 is None
+    assert signal.tp2 is None
+
+
+# --- compute_tp_levels (ajout 23/08/2026, sortie H2/H3, docs/DECISIONS.md) --
+
+def test_compute_tp_levels_long():
+    tp1, tp2 = compute_tp_levels("long", entry_price=105.0, stop_price=90.0, tp1_r_multiple=1.0, tp2_r_multiple=2.0)
+    assert tp1 == pytest.approx(105.0 + 15.0)
+    assert tp2 == pytest.approx(105.0 + 30.0)
+
+
+def test_compute_tp_levels_short():
+    tp1, tp2 = compute_tp_levels("short", entry_price=95.0, stop_price=110.0, tp1_r_multiple=1.0, tp2_r_multiple=2.0)
+    assert tp1 == pytest.approx(95.0 - 15.0)
+    assert tp2 == pytest.approx(95.0 - 30.0)
+
+
+def test_compute_tp_levels_custom_r_multiples():
+    tp1, tp2 = compute_tp_levels("long", entry_price=100.0, stop_price=90.0, tp1_r_multiple=0.5, tp2_r_multiple=3.0)
+    assert tp1 == pytest.approx(105.0)
+    assert tp2 == pytest.approx(130.0)
+
+
+def test_compute_tp_levels_unknown_direction_raises():
+    with pytest.raises(ValueError):
+        compute_tp_levels("sideways", entry_price=100.0, stop_price=90.0, tp1_r_multiple=1.0, tp2_r_multiple=2.0)
 
 
 # --- compute_trailing_stop_channel --------------------------------------

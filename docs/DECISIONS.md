@@ -12,6 +12,115 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-23 — Sortie à prise de profit pour H2 et H3 — DÉCISION EXPLICITE D'ISMAËL, contraire à ma recommandation
+
+**Attribution explicite** : ce changement est une décision d'Ismaël,
+assumée pleinement par lui — pas une proposition de ma part. Il va
+délibérément à l'encontre de la recommandation que j'avais formulée en
+construisant l'Hypothèse #3 (docs/HYPOTHESES.md, 20/08/2026 : « identique
+à l'Hypothèse #1, seule la résolution de bougie change » — l'intérêt
+explicite de cette conception étant une isolation "timeframe seule",
+un point de comparaison propre avec H1 sans introduire de seconde
+variable). Ismaël a choisi consciemment de sacrifier cette isolation
+pour H3 (et de basculer H2 au passage) — noté ici pour la traçabilité,
+pas comme une objection maintenue.
+
+### Changement
+
+H2 et H3 : le trailing Donchian(20) pur d'origine est remplacé par le
+mécanisme §2.10 déjà câblé pour Station X et l'Hypothèse #5 — TP1 50 %
+à 1R / TP2 30 % à 2R / TP3 20 % sous trailing 2×ATR(14), plancher
+breakeven, stop au breakeven dès TP1 touché. **H1 reste inchangée** —
+seul témoin restant en trailing pur, utile comme point de comparaison
+(la seule chose de la recommandation d'origine qui survit à cette
+décision).
+
+### Implémentation — aucune nouvelle logique de sortie
+
+`executor._evaluate_position_management` (le dispatch TP1/TP2/trailing)
+n'a subi AUCUNE modification — il route déjà uniquement sur la présence
+de `tp1`/`tp2` sur le trade, jamais sur sa source (même vérification que
+pour H5 le 23/08/2026 plus tôt dans cette journée). Seul le point
+d'ENTRÉE de H2/H3 doit désormais fournir TP1/TP2 :
+
+- `src/hypothesis2_strategy.py` (nouveau) : délègue à `ict_strategy.
+  evaluate_entry` (régime structurel + confluence ICT, INCHANGÉS —
+  aucune modification de ce module), ajoute TP1(1R)/TP2(2R).
+- `src/hypothesis3_strategy.py` (nouveau) : délègue à `trend_strategy.
+  evaluate_entry` (MA200 + Donchian(20), INCHANGÉS), ajoute TP1(1R)/
+  TP2(2R). **`trend_strategy.evaluate_entry` lui-même n'est PAS modifié**
+  — H1 (`trend_executor.py`) continue de l'appeler directement, jamais
+  via ce nouveau wrapper.
+- `trend_strategy.TrendSignal` étendu avec `tp1`/`tp2: Optional[float] =
+  None` (défaut `None`, zéro risque de régression pour H1 : `trend_
+  strategy.evaluate_entry` ne les renseigne jamais lui-même, testé
+  explicitement — voir `test_evaluate_entry_never_sets_tp1_tp2`).
+  Nouvelle fonction pure `trend_strategy.compute_tp_levels` (R-multiples,
+  partagée par les deux wrappers — pas de logique dupliquée entre H2 et
+  H3). `hypothesis5_strategy._compute_tp_levels` (logiquement identique)
+  volontairement LAISSÉE INTACTE plutôt que refactorée pour utiliser la
+  fonction partagée — H5 déjà déployée en code, zéro risque de
+  régression plutôt qu'une factorisation cosmétique.
+- `hypothesis2_executor.py`/`hypothesis3_executor.py` : `entry_fn`
+  pointe désormais vers le nouveau wrapper (pas `ict_strategy.
+  evaluate_entry`/`trend_strategy.evaluate_entry` directement).
+  `_describe_signal` étendu (mentionne TP1/TP2).
+
+### Prospectif uniquement — aucune position en cours modifiée
+
+Vérifié explicitement : `_load_open_trade_state` (executor.py) lit
+`tp1`/`tp2` depuis `signals`, jamais recalculés après ouverture — un
+trade H2/H3 déjà ouvert au moment de ce déploiement référence un
+`signal_id` dont `tp1`/`tp2` sont NULL (signal généré par l'ANCIEN
+`ict_strategy.evaluate_entry`/`trend_strategy.evaluate_entry` direct,
+sans wrapper) et continuera donc son trailing Donchian(20) pur jusqu'à
+sa clôture normale, sans aucune intervention de ce déploiement. Seuls
+les NOUVEAUX signaux, générés après redémarrage des process, passent par
+le wrapper et portent TP1/TP2.
+
+### `trades.exit_type` — dimension INDÉPENDANTE de `regime_type`
+
+Nouvelle colonne, demandée explicitement séparée de `regime_type` (ajout
+du même jour, plus tôt — bascule du régime H2) : l'une porte sur
+l'ENTRÉE (régime de fond), l'autre sur la SORTIE (mécanisme de gestion
+de position) — analysables indépendamment, jamais fusionnées dans une
+même colonne ni une même statistique. Valeurs : `"trailing_pur"` |
+`"tp_partiel"` | `"tp_fixe"`.
+
+`executor._EXIT_TYPE_BY_SOURCE` (mapping figé au moment de ce
+déploiement, même patron que `_REGIME_TYPE_BY_SOURCE`) : H1 ->
+`trailing_pur` (jamais changé), H4 -> `tp_fixe` (jamais changé, cible
+unique sans trailing, mécanisme distinct du §2.10), H2/H3 -> `tp_partiel`
+(bascule), tout le reste (Station X, H5, sources inconnues) ->
+`tp_partiel` par défaut (le mécanisme pour lequel §2.10 a été construit
+à l'origine). `db._backfill_exit_type` (même patron que `_backfill_
+regime_type`, même garde-fou table sans `source`) rétro-remplit les
+trades H2/H3 déjà en base à `"trailing_pur"` — leur comportement RÉEL
+avant cette date, jamais `"tp_partiel"` — conformément au caractère
+prospectif du changement.
+
+### Tests
+
+`tests/test_trend_strategy.py` (+5 : `compute_tp_levels` long/short/
+R-multiples personnalisés/direction inconnue, régression `evaluate_
+entry` H1 ne renseigne jamais tp1/tp2), `tests/test_hypothesis2_
+strategy.py` (nouveau, 8 tests, 100%), `tests/test_hypothesis3_
+strategy.py` (nouveau, 9 tests, 100%), `tests/test_db.py` (+5 : migration
+`exit_type`, rétro-remplissage par source, idempotence, garde-fou table
+sans `source`, indépendance des deux colonnes), `tests/test_executor.py`
+(+1 : `open_signal` renseigne correctement `regime_type` ET `exit_type`
+pour les 5 sources — H1/H2/H3/H4/Station X — en un seul test paramétré),
+`tests/test_hypothesis2_executor.py`/`test_hypothesis3_executor.py`
+(describe_signal étendu). 659 tests passent au total, 100% toujours
+vérifié sur `risk_engine`/`capital_manager`/`go_nogo`/`validator`/
+`trend_strategy`/`circuit_breaker`/`ict_strategy`/`mean_reversion_
+strategy`/`confidence_scorer`/`hypothesis2_strategy`/`hypothesis3_
+strategy`/`hypothesis5_strategy`.
+
+### Vérification en direct — voir entrée séparée ci-dessous (écrite après coup, résultats constatés)
+
+---
+
 ## 2026-08-23 — INCIDENT : identifiants Capital.com H2/H3/H4 exposés à l'assistant par une commande shell trop large
 
 Pendant la vérification de la date de déploiement réelle de H4, une

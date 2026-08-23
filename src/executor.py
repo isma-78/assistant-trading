@@ -155,6 +155,28 @@ _REGIME_TYPE_BY_SOURCE = {
     HYPOTHESIS5_SOURCE: "structural_bos_choch",
 }
 
+# Mécanisme de sortie utilisé par chaque source au moment de l'OUVERTURE
+# du trade (ajout 23/08/2026, voir docs/DECISIONS.md — sortie à prise de
+# profit des Hypothèses #2/#3, décision explicite d'Ismaël, PROSPECTIVE
+# UNIQUEMENT). Dimension INDÉPENDANTE de `_REGIME_TYPE_BY_SOURCE`
+# ci-dessus (l'une porte sur l'entrée, l'autre sur la sortie — jamais
+# fusionnées). Mapping figé au moment de ce déploiement, comme pour
+# `_REGIME_TYPE_BY_SOURCE` — les trades H2/H3 déjà en base avant cette
+# date nécessitent un rétro-remplissage séparé (voir
+# db._backfill_exit_type, ils ne passent jamais par ce mapping).
+# `.get(source, "tp_partiel")` : toute source absente de ce dict
+# (Station X — canal Telegram brut, jamais une des constantes ci-dessus)
+# utilise le mécanisme §2.10 TP1/TP2/trailing, celui pour lequel ce
+# mécanisme a été construit à l'origine — jamais une valeur devinée pour
+# les sources hypothèse elles-mêmes, toutes explicitement listées.
+_EXIT_TYPE_BY_SOURCE = {
+    HYPOTHESIS_SOURCE: "trailing_pur",   # H1 : seul témoin restant en trailing pur, jamais changé
+    HYPOTHESIS3_SOURCE: "tp_partiel",    # bascule du 23/08/2026
+    HYPOTHESIS2_SOURCE: "tp_partiel",    # bascule du 23/08/2026
+    HYPOTHESIS4_SOURCE: "tp_fixe",       # cible unique, aucun trailing — mécanisme distinct du §2.10
+    HYPOTHESIS5_SOURCE: "tp_partiel",    # tp_partiel depuis son origine, inchangé
+}
+
 
 def _envelope_source_key(source: str) -> str:
     return source if source in _KNOWN_HYPOTHESIS_SOURCES else "stationx"
@@ -664,21 +686,22 @@ def open_signal(
     session_marche = compute_market_session(datetime.fromisoformat(now).hour)
 
     regime_type = _REGIME_TYPE_BY_SOURCE.get(signal_row["source"])
+    exit_type = _EXIT_TYPE_BY_SOURCE.get(signal_row["source"], "tp_partiel")
 
     with connection_scope(db_path) as conn:
         cursor = conn.execute(
             "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
             "prix_entree_prevu, guaranteed_stop, stop_loss_initial, stop_loss_courant, risque_eur, "
             "pourcentage_risque_applique, ouvert_at, statut, stop_elargi, stop_origine_signal, session_marche, "
-            "regime_type) "
-            "VALUES (?, ?, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?)",
+            "regime_type, exit_type) "
+            "VALUES (?, ?, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?, ?)",
             (
                 signal_row["id"], result["deal_id"], signal_row["source"], asset, signal_row["sens"],
                 units, signal_row["entree_min"], int(adjustment.stop_distance > 0),
                 adjustment.stop_price, adjustment.stop_price, risk_amount_eur,
                 (risk_amount_eur / envelope_manager.balance * 100) if envelope_manager.balance else 0.0,
                 now, int(adjustment.widened), signal_row["stop_loss"] if adjustment.widened else None,
-                session_marche, regime_type,
+                session_marche, regime_type, exit_type,
             ),
         )
         trade_id = cursor.lastrowid

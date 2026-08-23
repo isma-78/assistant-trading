@@ -2,9 +2,18 @@
 hypothesis3_executor.py — Boucle autonome de l'Hypothèse #3
 (docs/HYPOTHESES.md, 20/08/2026 : « identique à l'Hypothèse #1, seule
 la résolution de bougie change »). MA(200) + Donchian(20) — EXACTEMENT
-la même logique de décision que le Flux B (trend_strategy.evaluate_entry,
-compute_trailing_stop_channel, réutilisés tels quels, jamais
-redupliqués), sur des bougies M15 (`MINUTE_15`) au lieu de H1.
+la même logique d'ENTRÉE que le Flux B (trend_strategy.evaluate_entry,
+réutilisée telle quelle, jamais redupliquée), sur des bougies M15
+(`MINUTE_15`) au lieu de H1.
+
+**Sortie basculée le 23/08/2026** (décision explicite d'Ismaël, voir
+docs/DECISIONS.md — va délibérément à l'encontre de l'isolation
+"timeframe seule" documentée le 20/08/2026) : `hypothesis3_strategy.
+evaluate_entry` (pas `trend_strategy.evaluate_entry` directement) ajoute
+désormais TP1(1R)/TP2(2R) au signal, déclenchant le mécanisme §2.10
+(TP1/TP2/trailing sur le reliquat) au lieu du trailing Donchian(20) pur.
+H1 reste le seul témoin en trailing pur (`trend_executor.py`, jamais
+touché).
 
 Process indépendant, compte Capital.com démo dédié ("hypothèse 3",
 accountId retrouvé le 21/08/2026 via GET /accounts avec la clé H3 déjà
@@ -25,8 +34,8 @@ le raisonnement (compte totalement séparé, aucun risque de collision).
 """
 
 from src.executor import HYPOTHESIS3_SOURCE
+from src.hypothesis3_strategy import evaluate_entry
 from src.technical_strategy_executor import run_technical_strategy_loop
-from src.trend_strategy import evaluate_entry
 
 HYPOTHESIS3_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD"]
 
@@ -38,8 +47,9 @@ _HYPOTHESIS_LABEL = "Hypothèse #3"
 def _describe_signal(hypothesis_label: str, asset: str, signal) -> str:
     return (
         f"{hypothesis_label} — {asset} : rupture de canal Donchian(20) en régime {signal.direction} "
-        f"(filtre MA200, bougies M15), entrée={signal.entry_price}, stop={signal.stop_price} "
-        f"(docs/HYPOTHESES.md)"
+        f"(filtre MA200, bougies M15), entrée={signal.entry_price}, stop={signal.stop_price}, "
+        f"TP1={signal.tp1} (1R), TP2={signal.tp2} (2R), reliquat 20% sous trailing ATR "
+        f"(docs/HYPOTHESES.md, docs/DECISIONS.md 23/08/2026)"
     )
 
 

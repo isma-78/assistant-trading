@@ -262,6 +262,128 @@ def test_init_db_backfill_regime_type_skips_table_without_source_column(tmp_path
         conn.close()
 
 
+def test_init_db_migrates_exit_type_column(tmp_path):
+    # trades.exit_type (sortie à prise de profit H2/H3, 23/08/2026 — voir
+    # docs/DECISIONS.md) : une base créée avant son ajout doit la
+    # recevoir au prochain init_db(), même patron que deal_id ci-dessus.
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    conn.execute(
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, actif TEXT, source TEXT, statut TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    conn = get_connection(db_path)
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)")}
+        assert "exit_type" in columns
+    finally:
+        conn.close()
+
+
+def test_init_db_backfills_exit_type_by_source(tmp_path):
+    # H1 -> trailing_pur (jamais changé) ; H4 -> tp_fixe (jamais changé) ;
+    # H2/H3 déjà en base à cette date -> trailing_pur (prospectif
+    # uniquement, ont tourné sous l'ancien mécanisme) ; tout le reste
+    # (Station X, H5) -> tp_partiel (mécanisme §2.10 déjà en place).
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    conn.execute(
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, actif TEXT, source TEXT, statut TEXT)"
+    )
+    for source in ("hypothesis", "hypothesis2", "hypothesis3", "hypothesis4", "hypothesis5", "-1002481537588"):
+        conn.execute("INSERT INTO trades (actif, source, statut) VALUES ('EURUSD', ?, 'ferme')", (source,))
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    conn = get_connection(db_path)
+    try:
+        rows = {row["source"]: row["exit_type"] for row in conn.execute("SELECT source, exit_type FROM trades")}
+    finally:
+        conn.close()
+    assert rows["hypothesis"] == "trailing_pur"
+    assert rows["hypothesis2"] == "trailing_pur"  # trade pré-bascule, jamais "tp_partiel"
+    assert rows["hypothesis3"] == "trailing_pur"  # trade pré-bascule, jamais "tp_partiel"
+    assert rows["hypothesis4"] == "tp_fixe"
+    assert rows["hypothesis5"] == "tp_partiel"
+    assert rows["-1002481537588"] == "tp_partiel"  # Station X
+
+
+def test_init_db_backfill_exit_type_is_idempotent_and_never_touches_future_trades(tmp_path):
+    # Un trade H2/H3 ouvert APRÈS la bascule (exit_type déjà renseigné à
+    # l'écriture, jamais NULL) ne doit JAMAIS être réécrit par le
+    # backfill, même après plusieurs appels à init_db().
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO trades (deal_id, source, actif, mode, direction, taille_initiale, stop_loss_initial, "
+            "stop_loss_courant, risque_eur, pourcentage_risque_applique, ouvert_at, statut, exit_type) "
+            "VALUES ('d1', 'hypothesis2', 'EURUSD', 'demo', 'long', 100, 1.0, 1.0, 10.0, 2.0, "
+            "'2026-08-23T00:00:00Z', 'ouvert', 'tp_partiel')"
+        )
+
+    init_db(db_path)  # second appel : idempotence
+
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute("SELECT exit_type FROM trades WHERE deal_id = 'd1'").fetchone()
+    finally:
+        conn.close()
+    assert row["exit_type"] == "tp_partiel"
+
+
+def test_init_db_backfill_exit_type_skips_table_without_source_column(tmp_path):
+    # Garde-fou : une table trades encore plus dépouillée que celle visée
+    # par la migration deal_id (sans même `source`) ne doit jamais faire
+    # échouer init_db().
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    conn.execute(
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, actif TEXT NOT NULL, statut TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)  # ne doit lever aucune exception
+
+    conn = get_connection(db_path)
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)")}
+        assert "exit_type" in columns
+    finally:
+        conn.close()
+
+
+def test_regime_type_and_exit_type_are_independent_dimensions(tmp_path):
+    # Garde-fou explicite demandé par Ismaël : les deux colonnes doivent
+    # rester analysables indépendamment, jamais fusionnées. Un trade H2
+    # post-bascule porte structural_bos_choch (régime) ET tp_partiel
+    # (sortie) simultanément, sans qu'aucune des deux ne dépende de
+    # l'autre dans le schéma ou les migrations.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO trades (deal_id, source, actif, mode, direction, taille_initiale, stop_loss_initial, "
+            "stop_loss_courant, risque_eur, pourcentage_risque_applique, ouvert_at, statut, regime_type, exit_type) "
+            "VALUES ('d2', 'hypothesis2', 'EURUSD', 'demo', 'long', 100, 1.0, 1.0, 10.0, 2.0, "
+            "'2026-08-23T00:00:00Z', 'ouvert', 'structural_bos_choch', 'tp_partiel')"
+        )
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute("SELECT regime_type, exit_type FROM trades WHERE deal_id = 'd2'").fetchone()
+    finally:
+        conn.close()
+    assert row["regime_type"] == "structural_bos_choch"
+    assert row["exit_type"] == "tp_partiel"
+
+
 def test_init_db_is_idempotent(tmp_path):
     db_path = str(tmp_path / "test.db")
     init_db(db_path)

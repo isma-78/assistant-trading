@@ -156,9 +156,12 @@ CREATE TABLE IF NOT EXISTS trades (
     stop_elargi INTEGER NOT NULL DEFAULT 0,  -- ajout 20/08/2026 hors §4.5 : stop élargi au minimum garanti broker, voir docs/DECISIONS.md
     stop_origine_signal REAL,  -- stop tel qu'émis par le signal AVANT élargissement ; NULL si stop_elargi=0
     session_marche TEXT,  -- ajout 20/08/2026 hors §4.5 : "asie" | "europe" | "us" | "hors_session", collecte uniquement, voir docs/DECISIONS.md
-    regime_type TEXT  -- ajout 23/08/2026 hors §4.5 : "ma200" | "structural_bos_choch", voir docs/DECISIONS.md
+    regime_type TEXT,  -- ajout 23/08/2026 hors §4.5 : "ma200" | "structural_bos_choch", voir docs/DECISIONS.md
                        -- (bascule du régime de l'Hypothèse #2). NULL pour Station X (aucune notion de
                        -- régime de fond) et pour tout trade antérieur à cet ajout non rétro-rempli.
+    exit_type TEXT     -- ajout 23/08/2026 hors §4.5 : "trailing_pur" | "tp_partiel" | "tp_fixe", voir
+                       -- docs/DECISIONS.md (sortie à prise de profit H2/H3) — dimension INDÉPENDANTE de
+                       -- regime_type (l'une porte sur l'entrée, l'autre sur la sortie), jamais fusionnées.
 );
 
 CREATE TABLE IF NOT EXISTS trade_partials (
@@ -429,6 +432,7 @@ _COLUMN_MIGRATIONS = [
     ("trades", "session_marche", "TEXT"),
     ("signals", "take_profit", "REAL"),
     ("trades", "regime_type", "TEXT"),
+    ("trades", "exit_type", "TEXT"),
 ]
 
 
@@ -491,6 +495,46 @@ def _backfill_regime_type(conn: sqlite3.Connection) -> None:
     )
 
 
+def _backfill_exit_type(conn: sqlite3.Connection) -> None:
+    """Rétro-remplit `trades.exit_type` pour les trades déjà en base
+    AVANT l'ajout de cette colonne — voir docs/DECISIONS.md, 23/08/2026
+    (sortie à prise de profit des Hypothèses #2/#3, décision explicite
+    d'Ismaël, PROSPECTIVE UNIQUEMENT). Dimension INDÉPENDANTE de
+    `regime_type` (l'une porte sur l'entrée, l'autre sur la sortie —
+    jamais fusionnées, voir le schéma). Trois cas :
+
+    - H1 (`hypothesis`) : toujours `"trailing_pur"`, jamais changé —
+      seul témoin restant en trailing pur (voir docs/DECISIONS.md).
+    - H4 (`hypothesis4`) : toujours `"tp_fixe"` (cible unique, aucun
+      trailing, mécanisme distinct du §2.10 — voir mean_reversion_
+      strategy.py), jamais changé.
+    - H2/H3 déjà en base à cette date (`hypothesis2`/`hypothesis3`) :
+      ont TOUS tourné sous l'ANCIEN trailing pur — rétro-remplis
+      `"trailing_pur"`, jamais `"tp_partiel"` (prospectif uniquement,
+      aucune position en cours n'est réinterprétée).
+    - Tout le reste (Station X, l'Hypothèse #5, toute source non
+      listée ci-dessus) : `"tp_partiel"`, le mécanisme §2.10 déjà en
+      place pour ces flux depuis l'origine.
+
+    Idempotent, même garde-fou (`source` absente) et même patron que
+    `_backfill_regime_type` — voir sa docstring pour le raisonnement
+    détaillé, non dupliqué ici."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(trades)")}
+    if "source" not in existing:
+        return
+    conn.execute(
+        "UPDATE trades SET exit_type = 'trailing_pur' WHERE exit_type IS NULL AND source = 'hypothesis'"
+    )
+    conn.execute(
+        "UPDATE trades SET exit_type = 'tp_fixe' WHERE exit_type IS NULL AND source = 'hypothesis4'"
+    )
+    conn.execute(
+        "UPDATE trades SET exit_type = 'trailing_pur' WHERE exit_type IS NULL "
+        "AND source IN ('hypothesis2', 'hypothesis3')"
+    )
+    conn.execute("UPDATE trades SET exit_type = 'tp_partiel' WHERE exit_type IS NULL")
+
+
 def _migrate_envelopes_source(conn: sqlite3.Connection) -> None:
     """`envelopes.source` (ajout P2.5, Flux B — voir docs/DECISIONS.md) ne
     peut pas être ajoutée par un simple ADD COLUMN : la contrainte
@@ -551,6 +595,7 @@ def init_db(db_path: str) -> None:
             _add_column_if_missing(conn, table, column, column_def)
         _migrate_envelopes_source(conn)
         _backfill_regime_type(conn)
+        _backfill_exit_type(conn)
         conn.commit()
     finally:
         conn.close()

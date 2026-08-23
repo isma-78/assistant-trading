@@ -621,6 +621,40 @@ gap comblé rétroactivement en même temps que l'ajout de H5.
   identifiants incomplets — l'ajouter aurait déclenché une fausse
   alerte).
 
+## Palier P2.9 (suite) — Sortie TP1/TP2/trailing pour H2 et H3 (23/08/2026, décision explicite d'Ismaël)
+
+Va à l'encontre de ma recommandation de préserver H3 comme copie exacte
+de H1 (isolation "timeframe seule", entrée du 20/08/2026 de
+`docs/HYPOTHESES.md`) — décision assumée pleinement par Ismaël, pas la
+mienne. Détail complet dans `docs/DECISIONS.md`/`docs/HYPOTHESES.md`
+(23/08/2026).
+
+- H2 et H3 : trailing Donchian(20) pur remplacé par le mécanisme §2.10
+  (TP1 50% à 1R/TP2 30% à 2R/TP3 20% trailing 2×ATR) déjà câblé pour
+  Station X et H5 — aucune nouvelle logique de sortie, `executor.
+  _evaluate_position_management` non modifié. **H1 reste inchangée**,
+  seul témoin encore en trailing pur.
+- `src/hypothesis2_strategy.py`/`src/hypothesis3_strategy.py` (nouveaux,
+  modules critiques 100% couverts) : enveloppent `ict_strategy.
+  evaluate_entry`/`trend_strategy.evaluate_entry` (INCHANGÉS) et
+  ajoutent TP1(1R)/TP2(2R) via `trend_strategy.compute_tp_levels`
+  (nouvelle, partagée). `trend_strategy.TrendSignal` étendu avec
+  `tp1`/`tp2` (défaut `None`, zéro impact sur H1, testé explicitement).
+- Prospectif uniquement : les trades H2/H3 déjà ouverts/clos gardent
+  leur trailing pur d'origine jusqu'à clôture normale — vérifié
+  explicitement (`_load_open_trade_state` lit `tp1`/`tp2` depuis le
+  signal d'origine, jamais recalculés).
+- Nouvelle colonne `trades.exit_type` (`"trailing_pur"` |
+  `"tp_partiel"` | `"tp_fixe"`) — dimension INDÉPENDANTE de
+  `regime_type` (l'une porte sur l'entrée, l'autre sur la sortie),
+  migration + rétro-remplissage par source (`db._backfill_exit_type`),
+  même patron que `regime_type` du 23/08/2026 matin.
+- 659 tests passent au total, 100% toujours vérifié sur
+  `risk_engine`/`capital_manager`/`go_nogo`/`validator`/`trend_strategy`/
+  `circuit_breaker`/`ict_strategy`/`mean_reversion_strategy`/
+  `confidence_scorer`/`hypothesis2_strategy`/`hypothesis3_strategy`/
+  `hypothesis5_strategy`.
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou

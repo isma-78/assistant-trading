@@ -516,12 +516,13 @@ def test_guaranteed_stop_adjustment_unknown_direction_raises():
 
 def _insert_signal(
     db_path, actif="GOLD", sens="short", entree=100.0, stop=101.0, tp1=98.0, tp2=96.0, tp3=None,
-    take_profit=None, confiance=1.0, statut="a_valider", source="station_x",
+    take_profit=None, confiance=1.0, statut="a_valider", source="station_x", telegram_msg_id=1,
 ):
     with connection_scope(db_path) as conn:
         raw_id = conn.execute(
             "INSERT INTO raw_messages (telegram_msg_id, channel, received_at, raw_text, message_type) "
-            "VALUES (1, 'station_x', '2026-08-16T00:00:00Z', 'texte', 'signal')"
+            "VALUES (?, 'station_x', '2026-08-16T00:00:00Z', 'texte', 'signal')",
+            (telegram_msg_id,),
         ).lastrowid
         signal_id = conn.execute(
             "INSERT INTO signals (raw_message_id, source, actif, sens, entree_min, entree_max, stop_loss, "
@@ -580,6 +581,42 @@ def test_open_signal_approved_places_limit_order_and_records_trade(tmp_path):
         assert trade["statut"] == "en_attente"
     finally:
         conn.close()
+
+
+def test_open_signal_records_regime_type_and_exit_type_per_source(tmp_path):
+    # Ajout 23/08/2026 (voir docs/DECISIONS.md, sortie H2/H3 basculée) :
+    # regime_type et exit_type sont deux dimensions INDÉPENDANTES,
+    # renseignées à l'ouverture par open_signal() selon la source —
+    # jamais fusionnées, jamais devinées pour une source inconnue.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-abc", "level": 100.0}
+    envelope_manager = CapitalManager(initial_balance=500.0)
+
+    cases = [
+        ("hypothesis", "ma200", "trailing_pur"),          # H1 : inchangée
+        ("hypothesis2", "structural_bos_choch", "tp_partiel"),  # H2 : bascule des deux
+        ("hypothesis3", "ma200", "tp_partiel"),            # H3 : régime inchangé, sortie basculée
+        ("hypothesis4", "ma200", "tp_fixe"),               # H4 : ni l'un ni l'autre ne change
+        ("station_x", None, "tp_partiel"),                 # Station X : pas de régime, tp_partiel d'origine
+    ]
+    for i, (source, expected_regime, expected_exit) in enumerate(cases):
+        signal_row = _insert_signal(db_path, source=source, telegram_msg_id=100 + i)
+        open_signal(
+            db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+            confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+        )
+        conn = get_connection(db_path)
+        try:
+            trade = conn.execute(
+                "SELECT regime_type, exit_type FROM trades WHERE signal_id = ?", (signal_row["id"],)
+            ).fetchone()
+        finally:
+            conn.close()
+        assert trade["regime_type"] == expected_regime, source
+        assert trade["exit_type"] == expected_exit, source
 
 
 def test_open_signal_no_widening_needed_sizing_unchanged_from_original_stop(tmp_path):

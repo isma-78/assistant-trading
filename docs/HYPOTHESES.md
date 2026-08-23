@@ -1367,5 +1367,32 @@ vérification en direct sur le VPS) dans `docs/DECISIONS.md` (23/08/2026).
 
 ---
 
+## 2026-08-23 — Hypothèses #2 et #3 : sortie basculée vers TP1/TP2/trailing (décision explicite d'Ismaël)
+
+Décision d'Ismaël, prise et appliquée le jour même — assumée pleinement,
+va à l'encontre de la recommandation de préserver H3 comme copie exacte
+de H1 (entrée du 20/08/2026 ci-dessus : « identique à l'Hypothèse #1,
+seule la résolution de bougie change », dont l'intérêt explicite était
+une isolation "timeframe seule" pour une comparaison propre avec H1).
+Détail complet de l'implémentation, de la vérification "prospectif
+uniquement", et des tests dans `docs/DECISIONS.md` (23/08/2026).
+
+**Ce qui change** : sortie uniquement — TP1 50 % à 1R / TP2 30 % à 2R /
+TP3 20 % sous trailing 2×ATR(14), le mécanisme §2.10 déjà en place pour
+Station X et H5, réutilisé sans nouvelle logique. Régime/déclencheur de
+H2 (structure BOS/CHoCH + confluence ICT) et de H3 (MA200 + Donchian(20))
+strictement inchangés.
+
+**Ce qui ne change pas** : H1 reste en trailing Donchian(20) pur, seul
+témoin restant de ce mécanisme — la seule partie de l'isolation
+d'origine qui survit à cette décision.
+
+**Budget de variables** : aucun nouveau paramètre de DÉCISION pour H2 ou
+H3 (TP1=1R/TP2=2R sont les mêmes valeurs déjà retenues pour H5, pas un
+second choix indépendant) — un changement de MÉCANISME de sortie, pas
+une nouvelle variable réglable au sens de l'invariant #10.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4 ou #5 — jamais une modification de ce qui précède.*

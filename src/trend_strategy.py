@@ -37,6 +37,11 @@ class TrendSignal:
     entry_price: float
     stop_price: float
     confidence: float = 1.0  # déterministe par construction — voir docs/HYPOTHESES.md
+    tp1: Optional[float] = None  # ajout 23/08/2026 (voir docs/DECISIONS.md, sortie à prise de profit
+    tp2: Optional[float] = None  # H2/H3) — None pour H1 (jamais construit avec ces champs, trailing pur
+                                  # inchangé), renseignés par hypothesis2_strategy.py/hypothesis3_strategy.py
+                                  # via dataclasses.replace() sur le signal retourné par evaluate_entry ici,
+                                  # jamais par ce module lui-même
 
 
 def compute_regime(candles: List[Candle]) -> Optional[str]:
@@ -102,6 +107,26 @@ def _evaluate_entry(asset: str, candles: List[Candle]) -> Optional[TrendSignal]:
         return TrendSignal(asset=asset, direction="short", entry_price=current_close, stop_price=highest)
 
     return None
+
+
+def compute_tp_levels(
+    direction: str, entry_price: float, stop_price: float,
+    tp1_r_multiple: float, tp2_r_multiple: float,
+) -> Tuple[float, float]:
+    """Calcule TP1/TP2 en multiples du risque initial R = |entry_price -
+    stop_price| (ajout 23/08/2026, voir docs/DECISIONS.md — sortie à
+    prise de profit des Hypothèses #2/#3, mécanisme §2.10 déjà câblé pour
+    Station X/H5). Pure arithmétique, aucun état, réutilisée par
+    hypothesis2_strategy.py/hypothesis3_strategy.py (et logiquement
+    identique à hypothesis5_strategy._compute_tp_levels, laissée
+    intacte — voir sa docstring — pour ne courir aucun risque de
+    régression sur un module déjà déployé)."""
+    r = abs(entry_price - stop_price)
+    if direction == "long":
+        return entry_price + tp1_r_multiple * r, entry_price + tp2_r_multiple * r
+    if direction == "short":
+        return entry_price - tp1_r_multiple * r, entry_price - tp2_r_multiple * r
+    raise ValueError(f"direction inconnue : {direction!r}")
 
 
 def compute_trailing_stop_channel(
