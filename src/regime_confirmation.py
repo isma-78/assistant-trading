@@ -36,6 +36,23 @@ Sessions et indices (fixés a priori, voir docs/HYPOTHESES.md) :
   pour ce cas. "Moyenne des régimes" écartée : un régime long/short/
   aucun est catégoriel, une moyenne n'a pas de sens dessus.
 
+**Crypto (BTCUSD/ETHUSD) — exemption ajoutée le 23/08/2026** (voir
+docs/DECISIONS.md, docs/HYPOTHESES.md) : `CRYPTO_ASSETS` court-circuite
+`_confirm_regime` en pass-through (True), quelle que soit l'heure —
+même traitement que la session Asie, mais déclenché par l'actif, pas
+par l'heure. Raisonnement : la couche session/multi-timeframe exempte
+désormais la crypto de la fenêtre de session (analyse continue,
+`technical_strategy_executor._should_generate_signals`), donc `now`
+tombe la plupart du temps hors {0, 8, 13} pour la crypto ; sans cette
+exemption, la branche défensive "hors session" (fail-closed) aurait
+rejeté silencieusement la quasi-totalité des signaux crypto d'H3/H4,
+annulant de fait l'analyse continue demandée. Par ailleurs, US30/US100
+sont des indices actions, structurellement liés à leurs propres heures
+de marché — les associer à une confirmation crypto 24/7 n'a pas de
+rationnel de session à faire correspondre, contrairement au forex/GOLD/
+indices qui partagent bien la même horloge de session que les indices
+de confirmation.
+
 Aucun LLM (invariant #1) : comparaisons déterministes, fail-safe
 (invariant #7 — toute erreur interne devient un ÉCHEC de confirmation,
 jamais un signal laissé passer sur une confirmation indéterminée).
@@ -57,6 +74,12 @@ _CANDLE_COUNT = MA_PERIOD + 20
 _ASIA_HOUR = 0
 _LONDON_HOUR = 8
 _NY_HOUR = 13
+
+# Actifs exemptés de la fenêtre de session (analyse continue, 23/08/2026
+# — voir docstring du module). Dupliquée dans technical_strategy_executor.py
+# par import (source unique ici) plutôt que recopiée, pour éviter toute
+# divergence entre les deux points où la crypto doit être reconnue.
+CRYPTO_ASSETS: Tuple[str, ...] = ("BTCUSD", "ETHUSD")
 
 
 def confirmation_indices(asset: str) -> Tuple[str, ...]:
@@ -84,6 +107,12 @@ def confirm_regime(client: CapitalClient, asset: str, direction: str, resolution
 def _confirm_regime(client: CapitalClient, asset: str, direction: str, resolution: str, now: datetime) -> bool:
     if now.tzinfo is None:
         raise ValueError("`now` doit être timezone-aware (UTC)")
+
+    if asset in CRYPTO_ASSETS:
+        # Analyse continue (23/08/2026) : pas de session à faire
+        # correspondre à un indice actions, pass-through comme l'Asie.
+        return True
+
     hour = now.astimezone(timezone.utc).hour
 
     if hour == _ASIA_HOUR:

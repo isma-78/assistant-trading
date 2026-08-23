@@ -1731,5 +1731,70 @@ déploiement et de la vérification en direct dans `docs/DECISIONS.md`
 
 ---
 
+## Exemption crypto de la couche session/multi-timeframe (23/08/2026)
+
+Demande explicite d'Ismaël, après constat en direct que la couche
+session/multi-timeframe (ci-dessus) bloquait toute génération de signal
+crypto (BTCUSD, ETHUSD) hors des 3 fenêtres UTC (0h/8h/13h) sur H2/H3/
+H4/H5, alors que le marché crypto ne ferme jamais — contrairement au
+forex/indices/GOLD, pour qui la fenêtre de session a un sens (heures de
+marché réelles). Message d'Ismaël (verbatim, reformulé pour la clarté
+typographique) : "modifie uniquement pour la crypto, pour toutes les
+hypothèses — la logique et la stratégie restent les mêmes, juste les
+heures d'analyse et de déclenchement changent pour la crypto : une
+analyse en continu des marchés."
+
+**Décision** : BTCUSD/ETHUSD sont exemptés, pour H2/H3/H4/H5
+uniquement (même périmètre que la couche elle-même, H1 toujours
+exclue), de deux mécanismes :
+1. La fenêtre de génération de signaux (0h/8h/13h UTC) —
+   `_should_generate_signals` retourne toujours True pour la crypto,
+   quelle que soit l'heure. Le déclencheur propre à chaque hypothèse
+   (confluence ICT pour H2, Donchian pour H3, Bollinger pour H4,
+   ICT+RSI pour H5) est réévalué à chaque itération de boucle (~60s),
+   comme avant l'introduction de la couche de session.
+2. La confirmation de régime croisée (H3/H4 uniquement) —
+   `regime_confirmation.confirm_regime` retourne toujours True pour la
+   crypto. Sans cette seconde exemption, la première aurait été
+   neutralisée en pratique : la branche défensive "heure hors session"
+   de `_confirm_regime` (fail-closed, jamais censée être atteinte en
+   usage normal) serait devenue le cas normal pour la crypto la plupart
+   du temps, rejetant silencieusement la quasi-totalité des signaux
+   crypto d'H3/H4.
+
+**Raison de la seconde exemption (US30/US100)** : les indices de
+confirmation (US30, US100) sont eux-mêmes liés à des heures de marché
+actions, structurellement proches de la fenêtre de session Londres/NY —
+contrairement au forex/GOLD/indices, la crypto n'a pas d'horloge de
+session à faire correspondre à celle des indices de confirmation. Les
+associer en continu (24/7 crypto contre heures de marché actions
+partielles) n'aurait pas de rationnel théorique a priori — écarté plutôt
+que codé sans justification (invariant #10).
+
+**Le déclencheur propre à chaque hypothèse (Donchian, Bollinger,
+confluence ICT, ICT+RSI) n'est pas modifié pour la crypto** — seule la
+CADENCE d'évaluation change (continue au lieu de 3 fenêtres/jour), et
+pour H3/H4 le filtre de confirmation croisée est levé pour ces deux
+actifs. Aucune nouvelle donnée historique n'est utilisée : `get_candles`
+interrogeait déjà, avant comme après ce changement, les bougies les
+plus récentes disponibles à chaque appel — "analyse en continu... et de
+l'historique" (formulation d'Ismaël) se traduit ici par une évaluation
+plus fréquente sur les mêmes données de marché, pas par un nouvel
+indicateur ni une fenêtre d'historique différente.
+
+**Budget §2.11** : traité comme les bornes de session fixes déjà
+tranchées non comptées (précédent explicite ci-dessus) — la liste des
+actifs crypto (BTCUSD, ETHUSD) est un fait structurel fixe (la
+composition de la liste blanche §1.2), pas une variable ajustée ou
+ajustable sur la base des résultats de trading. Aucun changement aux
+budgets déjà comptés par hypothèse (H2 2/3, H3 2/3, H4 3/3, H5 4/3
+dépassement déjà assumé).
+
+Implémentation, tests (100% sur `regime_confirmation.py`, cas ajoutés
+sur `_should_generate_signals`) et déploiement détaillés dans
+`docs/DECISIONS.md` (23/08/2026).
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4 ou #5 — jamais une modification de ce qui précède.*

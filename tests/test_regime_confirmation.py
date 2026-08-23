@@ -3,7 +3,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.regime_confirmation import MA_PERIOD, _confirm_regime, confirm_regime, confirmation_indices
+from src.regime_confirmation import (
+    CRYPTO_ASSETS,
+    MA_PERIOD,
+    _confirm_regime,
+    confirm_regime,
+    confirmation_indices,
+)
 from src.trend_strategy import MA_PERIOD as TREND_MA_PERIOD
 
 
@@ -99,12 +105,13 @@ def test_confirm_regime_other_asset_first_index_mismatch_short_circuits():
 
 
 def test_confirm_regime_other_asset_second_index_mismatch():
+    # EURUSD (pas BTCUSD : la crypto est exemptée, voir plus bas).
     client = MagicMock()
     long_resp = _client_with_regime("long").get_prices.return_value
     short_resp = _client_with_regime("short").get_prices.return_value
     client.get_prices.side_effect = [long_resp, short_resp]  # US30 concorde, US100 non
     now = datetime(2026, 8, 24, 13, 0, tzinfo=timezone.utc)
-    assert confirm_regime(client, "BTCUSD", "long", "HOUR", now) is False
+    assert confirm_regime(client, "EURUSD", "long", "HOUR", now) is False
     assert client.get_prices.call_count == 2
 
 
@@ -137,3 +144,29 @@ def test_confirm_regime_internal_exception_is_fail_safe_false():
     client.get_prices.side_effect = RuntimeError("panne broker")
     now = datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc)
     assert confirm_regime(client, "EURUSD", "long", "HOUR", now) is False
+
+
+# --- crypto (BTCUSD/ETHUSD) — exemption, analyse continue (23/08/2026) ------
+
+def test_crypto_assets_are_btcusd_ethusd():
+    assert CRYPTO_ASSETS == ("BTCUSD", "ETHUSD")
+
+
+def test_confirm_regime_crypto_always_true_no_client_call():
+    client = MagicMock()
+    for asset in CRYPTO_ASSETS:
+        # Heure de session ET heure hors-session : toujours True, jamais
+        # d'appel réseau — la crypto n'a pas d'indice à interroger.
+        for hour in (0, 8, 13, 5, 17, 23):
+            now = datetime(2026, 8, 24, hour, 0, tzinfo=timezone.utc)
+            assert confirm_regime(client, asset, "long", "HOUR", now) is True
+    client.get_prices.assert_not_called()
+
+
+def test_confirm_regime_crypto_true_even_on_naive_datetime_hour_branch():
+    # La vérification de l'actif crypto passe AVANT l'accès à `now.hour`
+    # mais APRÈS la garde `tzinfo`, qui reste stricte pour tous les
+    # actifs (invariant #7 — jamais assoupli pour la crypto).
+    client = MagicMock()
+    naive_now = datetime(2026, 8, 24, 8, 0)
+    assert confirm_regime(client, "BTCUSD", "long", "HOUR", naive_now) is False

@@ -12,6 +12,95 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-23 — Exemption crypto (BTCUSD/ETHUSD) de la fenêtre de session — H2/H3/H4/H5
+
+Suite au constat en direct (même journée) que la couche session/multi-
+timeframe bloquait toute génération de signal crypto hors des 3
+fenêtres UTC (0h/8h/13h), alors que le marché crypto ne ferme jamais.
+Demande explicite d'Ismaël, détail complet du raisonnement dans
+`docs/HYPOTHESES.md` (23/08/2026, entrée dédiée) — cette entrée couvre
+l'implémentation.
+
+### Deux mécanismes modifiés, tous les deux nécessaires
+
+1. **`technical_strategy_executor._should_generate_signals`** — signature
+   étendue avec un paramètre `asset` (jusque-là, seul `session_gated` +
+   `hour_utc` déterminaient le gate, uniforme pour tous les actifs d'une
+   même boucle). Retourne désormais `True` inconditionnellement si
+   `asset in regime_confirmation.CRYPTO_ASSETS` (`("BTCUSD", "ETHUSD")`),
+   avant toute autre vérification. Conséquence mécanique : le gate,
+   auparavant appliqué à la boucle `for asset in assets` entière (skip
+   total de l'itération hors session), est descendu À L'INTÉRIEUR de
+   cette boucle — chaque actif est désormais évalué individuellement
+   (`if not _should_generate_signals(...): continue`), plutôt que la
+   totalité des actifs d'une hypothèse ensemble. Comportement inchangé
+   pour les 6 actifs non-crypto (toujours gatés en bloc, la boucle
+   produit exactement le même résultat qu'avant — testé en régression :
+   `test_should_generate_signals_non_crypto_unaffected_by_crypto_
+   exemption`).
+
+2. **`regime_confirmation.CRYPTO_ASSETS`** (nouvelle constante publique,
+   `("BTCUSD", "ETHUSD")`, définie dans `regime_confirmation.py` et
+   importée par `technical_strategy_executor.py` — source unique, jamais
+   dupliquée en dur dans les deux modules) — `_confirm_regime` retourne
+   `True` inconditionnellement si l'actif est crypto, vérifié juste après
+   la garde `tzinfo` (invariant #7 jamais assoupli) mais avant tout calcul
+   d'heure ou appel réseau. **Cette seconde modification est nécessaire,
+   pas optionnelle** : sans elle, la première aurait été neutralisée en
+   pratique — la branche défensive "heure hors session" de
+   `_confirm_regime` (fail-closed, conçue pour n'être jamais atteinte en
+   usage normal puisque le gate de session filtrait déjà) serait devenue
+   le cas normal pour la crypto la majorité du temps une fois évaluée en
+   continu, rejetant silencieusement la quasi-totalité de ses signaux sur
+   H3/H4. Repéré en concevant le changement, avant tout test — pas un bug
+   trouvé après coup.
+
+### Ce qui n'a PAS changé
+
+- Le déclencheur propre à chaque hypothèse (confluence ICT pour H2,
+  rupture Donchian pour H3, Bollinger pour H4, ICT+RSI pour H5) —
+  aucune modification, ni pour la crypto ni pour les autres actifs.
+- La résolution d'exécution (M15/M30 selon l'hypothèse) — inchangée
+  pour la crypto, seule la CADENCE de génération de nouveaux signaux
+  change (continue au lieu de 3 fenêtres/jour).
+- La gestion des positions déjà ouvertes (remplissages, trailing,
+  coupe-circuits) — jamais gatée, ni avant ni après ce changement,
+  pour aucun actif.
+- H1 (`trend_executor.py`) — n'appelle jamais `_should_generate_signals`
+  ni `confirm_regime` avec un paramètre `session_gated`/
+  `require_regime_confirmation`, donc structurellement hors de portée de
+  ce changement, comme pour le reste de la couche.
+
+### Tests et vérification
+
+- `regime_confirmation.py` : 4 tests ajoutés (constante `CRYPTO_ASSETS`,
+  pass-through inconditionnel sur toutes les heures sans appel réseau,
+  garde `tzinfo` toujours stricte même pour la crypto). Un test existant
+  (`test_confirm_regime_other_asset_second_index_mismatch`) utilisait
+  `BTCUSD` comme actif "autre" générique — changé pour `EURUSD`, la
+  prémisse (confirmation par indices) ne s'applique plus à la crypto.
+  Toujours 100% de couverture.
+- `technical_strategy_executor.py` : 2 tests ajoutés sur
+  `_should_generate_signals` (pass-through crypto sur les 24 heures,
+  non-régression des 6 autres actifs).
+- Suite complète : 690 tests passent, 100% de couverture confirmée sur
+  `risk_engine`/`capital_manager`/`go_nogo`/`validator`/`trend_strategy`/
+  `circuit_breaker`/`metrics`/`confidence_scorer`/`ict_strategy`/
+  `regime_confirmation`.
+
+### Déploiement
+
+Commit poussé sur `main`, VPS synchronisé (`git pull`), suite de tests
+relancée sur le VPS avant tout redémarrage. `hypothesis2_executor`,
+`hypothesis3_executor`, `hypothesis4_executor`, `hypothesis5_executor`
+redémarrés **séquentiellement** (leçon retenue de l'incident 429 du
+même jour lors du déploiement de la couche session/multi-timeframe,
+voir entrée ci-dessous) — PID de `telegram_listener`/`executor_loop`
+(Station X)/`trend_executor` (H1)/`control_bot` vérifiés inchangés
+après coup.
+
+---
+
 ## 2026-08-23 — Hypothèse #5 : identifiants complétés, compte identifié, déploiement réel, ajoutée au watchdog
 
 ### Identifiants — deux expositions supplémentaires, aucune réutilisée

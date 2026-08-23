@@ -55,7 +55,7 @@ from src.executor import (
 )
 from src.go_nogo import GoNoGoStatus
 from src.market_data import Candle, get_candles
-from src.regime_confirmation import confirm_regime
+from src.regime_confirmation import CRYPTO_ASSETS, confirm_regime
 from src.risk_engine import RiskCaps, RiskEngine
 from src.trend_strategy import MA_PERIOD
 
@@ -74,11 +74,22 @@ SESSION_OPEN_HOURS_UTC = (0, 8, 13)
 logger = logging.getLogger(__name__)
 
 
-def _should_generate_signals(session_gated: bool, hour_utc: int) -> bool:
+def _should_generate_signals(session_gated: bool, hour_utc: int, asset: str) -> bool:
     """Fonction pure, extraite pour être testable indépendamment de la
     boucle infinie de `run_technical_strategy_loop`. `session_gated=
     False` (cas de H1, jamais appelée avec ce paramètre) : toujours
-    True, comportement strictement inchangé."""
+    True, comportement strictement inchangé.
+
+    Exemption crypto (23/08/2026, voir docs/DECISIONS.md) : BTCUSD/ETHUSD
+    (`regime_confirmation.CRYPTO_ASSETS`) ne sont jamais gatés par la
+    fenêtre de session — le marché crypto ne ferme jamais (contrairement
+    au forex/indices/GOLD, fermés hors session), une fenêtre calquée sur
+    les heures d'ouverture Asie/Londres/New York n'a pas de sens dessus.
+    Vérifiée avant `session_gated` : même pour H1 (jamais gatée de toute
+    façon) le résultat est identique, mais l'ordre documente clairement
+    que la crypto est un cas à part, pas un sous-cas du gate de session."""
+    if asset in CRYPTO_ASSETS:
+        return True
     return not session_gated or hour_utc in SESSION_OPEN_HOURS_UTC
 
 # Marge au-delà de MA_PERIOD pour garantir un historique suffisant même
@@ -172,7 +183,12 @@ def _generate_and_queue_signal(
     inchangé, cette confirmation s'ajoute PAR-DESSUS, elle ne le
     remplace jamais. False par défaut : H1 (jamais appelée avec ce
     paramètre) et H2/H5 (option C, voir docs/HYPOTHESES.md — déjà
-    couvertes par leur régime structurel) ne sont jamais affectées."""
+    couvertes par leur régime structurel) ne sont jamais affectées.
+    Crypto (BTCUSD/ETHUSD) : `confirm_regime` retourne toujours True
+    pour ces deux actifs, quelle que soit l'heure (voir
+    `regime_confirmation.CRYPTO_ASSETS`) — géré à l'intérieur de
+    `confirm_regime`, pas ici, ce module reste agnostique de la liste
+    des actifs crypto."""
     if _has_active_signal_or_trade(db_path, asset, source):
         return
 
@@ -260,7 +276,11 @@ def run_technical_strategy_loop(
     (remplissages, annulations, trailing, coupe-circuits) continue à
     CHAQUE itération, jamais gatée : geler la gestion du risque en
     dehors des heures de session serait dangereux, pas juste
-    conservateur."""
+    conservateur. Exemption crypto (23/08/2026, voir docs/DECISIONS.md) :
+    BTCUSD/ETHUSD ignorent `session_gated` (analyse continue, voir
+    `_should_generate_signals`) et `require_regime_confirmation`
+    (pass-through, voir `regime_confirmation.CRYPTO_ASSETS`) — le reste
+    des actifs de `assets` n'est pas affecté par cette exemption."""
     import time
 
     import anthropic
@@ -343,15 +363,16 @@ def run_technical_strategy_loop(
                 time.sleep(interval_seconds)
                 continue
 
-            if _should_generate_signals(session_gated, now.hour):
-                for asset in assets:
-                    _generate_and_queue_signal(
-                        db_path, client, asset,
-                        source=source, resolution=resolution, entry_fn=entry_fn,
-                        channel=channel, hypothesis_label=hypothesis_label,
-                        describe_signal=describe_signal,
-                        require_regime_confirmation=require_regime_confirmation,
-                    )
+            for asset in assets:
+                if not _should_generate_signals(session_gated, now.hour, asset):
+                    continue
+                _generate_and_queue_signal(
+                    db_path, client, asset,
+                    source=source, resolution=resolution, entry_fn=entry_fn,
+                    channel=channel, hypothesis_label=hypothesis_label,
+                    describe_signal=describe_signal,
+                    require_regime_confirmation=require_regime_confirmation,
+                )
 
             check_pending_fills(
                 db_path, client, sources=[source],

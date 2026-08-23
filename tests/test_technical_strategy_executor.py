@@ -301,22 +301,40 @@ def test_generate_and_queue_signal_no_confirmation_check_when_not_required(tmp_p
 def test_should_generate_signals_not_gated_always_true():
     # H1 : jamais appelée avec session_gated=True, toujours True.
     for hour in range(24):
-        assert _should_generate_signals(session_gated=False, hour_utc=hour) is True
+        assert _should_generate_signals(session_gated=False, hour_utc=hour, asset="EURUSD") is True
 
 
 def test_should_generate_signals_gated_true_on_session_open_hours():
     for hour in SESSION_OPEN_HOURS_UTC:
-        assert _should_generate_signals(session_gated=True, hour_utc=hour) is True
+        assert _should_generate_signals(session_gated=True, hour_utc=hour, asset="EURUSD") is True
 
 
 def test_should_generate_signals_gated_false_outside_session_open_hours():
     for hour in range(24):
         if hour not in SESSION_OPEN_HOURS_UTC:
-            assert _should_generate_signals(session_gated=True, hour_utc=hour) is False
+            assert _should_generate_signals(session_gated=True, hour_utc=hour, asset="EURUSD") is False
 
 
 def test_session_open_hours_are_asia_london_ny():
     assert SESSION_OPEN_HOURS_UTC == (0, 8, 13)
+
+
+# --- _should_generate_signals — exemption crypto (23/08/2026) ---------------
+
+def test_should_generate_signals_crypto_always_true_gated_any_hour():
+    # BTCUSD/ETHUSD : analyse continue, jamais gatée par la session,
+    # quelle que soit l'heure UTC.
+    for asset in ("BTCUSD", "ETHUSD"):
+        for hour in range(24):
+            assert _should_generate_signals(session_gated=True, hour_utc=hour, asset=asset) is True
+
+
+def test_should_generate_signals_non_crypto_unaffected_by_crypto_exemption():
+    # Garde-fou de non-régression : l'exemption crypto ne change rien
+    # pour les 6 autres actifs de la liste blanche.
+    for asset in ("GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY"):
+        assert _should_generate_signals(session_gated=True, hour_utc=5, asset=asset) is False
+        assert _should_generate_signals(session_gated=True, hour_utc=8, asset=asset) is True
 
 
 def test_generate_and_queue_signal_uses_custom_describe_signal(tmp_path):
