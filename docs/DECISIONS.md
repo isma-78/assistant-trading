@@ -405,12 +405,47 @@ vérifié sur `risk_engine`/`capital_manager`/`go_nogo`/`validator`/
 strategy`/`confidence_scorer`/`hypothesis2_strategy`/`hypothesis3_
 strategy`/`hypothesis5_strategy`/`regime_confirmation`.
 
-### Déploiement et vérification en direct
+### Déploiement et vérification en direct — résultats constatés
 
-Voir l'entrée séparée ci-dessous, écrite après coup avec les résultats
-constatés — même niveau de vérification que pour les bascules
-précédentes du jour (7 flux au total désormais : Station X, H1, H2, H3,
-H4, H5, plus `control_bot`/`telegram_listener`).
+`git pull` sur le VPS (fast-forward), 685 tests rejoués SUR LE VPS :
+verts. `hypothesis2_executor`/`hypothesis3_executor`/`hypothesis4_
+executor`/`hypothesis5_executor` redémarrés.
+
+**Incident réel pendant le redémarrage, sans rapport avec cette couche**
+: en redémarrant les 4 process SIMULTANÉMENT, `hypothesis4_executor` et
+`hypothesis5_executor` ont chacun planté sur une exception NON gérée
+(`CapitalApiError: 429 error.too-many.requests` sur `GET /markets/
+USDJPY`, appelée par `get_eur_conversion_rate` dans le code de
+DÉMARRAGE ponctuel de `run_technical_strategy_loop` — hors du
+try/except par itération de la boucle, donc fatal). Cause : 4 process
+faisant chacun ~10+ appels API de démarrage (login, compte, taux de
+conversion, whitelist, 8 enveloppes) en même temps a dépassé le taux
+limite du compte démo Capital.com — pas un bug introduit par cette
+couche (le code de démarrage n'a pas été modifié), révélé par le fait
+d'avoir redémarré 4 process d'un coup au lieu d'un par un comme les
+fois précédentes. Corrigé en redémarrant H4 puis H5 SÉQUENTIELLEMENT
+(quelques secondes d'écart) : les deux ont démarré proprement à la
+deuxième tentative. Coupure réelle mais brève (< 1 minute), tombée
+entre deux cycles du watchdog (5 min) — aucune alerte déclenchée,
+vérifié sur les logs. Non corrigé dans le code (pas de retry sur le
+démarrage ponctuel) : hors périmètre de cette demande, à traiter
+séparément si ça devient gênant en pratique.
+
+- Migration confirmée par requête réelle : colonne `timing_layer`
+  créée, rétro-remplissage correct (`NULL` pour `hypothesis`/Station X,
+  `"aucune"` pour les 3+22+2 trades H2/H3/H4 déjà en base).
+- Les 4 process non touchés (`telegram_listener`, `control_bot`,
+  `trend_executor`, `executor_loop`) vérifiés avec les MÊMES PID
+  avant/après — jamais redémarrés.
+- Stabilité surveillée en continu (~3 minutes après le redémarrage
+  réussi des 4) : aucune extinction. Tracebacks résiduels sur H3
+  (erreurs `error.invalid.stoploss.minvalue/maxvalue` en gérant les
+  trades #24/#31, déjà ouverts avant ce déploiement) : comportement de
+  réconciliation déjà existant, aucun rapport avec cette couche,
+  process toujours vivant après (fail-safe par trade, "passage au
+  suivant").
+- Isolation vérifiée par requête réelle sur `envelopes` : 48 lignes
+  (8 actifs × 6 sources, `stationx` incluse), aucune fuite croisée.
 
 ---
 
