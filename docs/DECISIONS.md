@@ -88,16 +88,25 @@ l'implémentation.
   `circuit_breaker`/`metrics`/`confidence_scorer`/`ict_strategy`/
   `regime_confirmation`.
 
-### Déploiement
+### Déploiement — fait et vérifié en direct
 
-Commit poussé sur `main`, VPS synchronisé (`git pull`), suite de tests
-relancée sur le VPS avant tout redémarrage. `hypothesis2_executor`,
-`hypothesis3_executor`, `hypothesis4_executor`, `hypothesis5_executor`
-redémarrés **séquentiellement** (leçon retenue de l'incident 429 du
-même jour lors du déploiement de la couche session/multi-timeframe,
-voir entrée ci-dessous) — PID de `telegram_listener`/`executor_loop`
-(Station X)/`trend_executor` (H1)/`control_bot` vérifiés inchangés
-après coup.
+Commit `832ba53` poussé sur `main`, VPS synchronisé (`git pull`), 690
+tests + 100% de couverture reconfirmés sur le VPS avant tout
+redémarrage. `hypothesis2_executor`, `hypothesis3_executor`,
+`hypothesis4_executor`, `hypothesis5_executor` redémarrés
+**séquentiellement** (~8s d'écart chacun — leçon retenue de l'incident
+429 du même jour lors du déploiement de la couche session/multi-
+timeframe, voir entrée ci-dessous) : PID passés de 105398/105401/
+105952/106071 à 109162/109391/109450/109509. PID de
+`telegram_listener` (41928), `executor` Station X (71745),
+`trend_executor` H1 (54310) et `control_bot` (43732) vérifiés
+**identiques** avant/après (non touchés). Quelques erreurs 429/400
+isolées observées dans les logs de démarrage (rate-limiting Capital.com
+déjà documenté comme fragilité préexistante, capturées par les
+gestionnaires d'exception par-itération/par-trade déjà en place,
+jamais fatales) — sans lien avec ce changement. Stabilité confirmée sur
+3 minutes (4/4 processus vivants en continu), watchdog cron (17h40 et
+17h45 UTC) : les 8 processus rapportent `up`, aucune fausse alerte.
 
 ---
 
