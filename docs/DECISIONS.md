@@ -12,6 +12,28 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-23 — INCIDENT : identifiants Capital.com H2/H3/H4 exposés à l'assistant par une commande shell trop large
+
+Pendant la vérification de la date de déploiement réelle de H4, une
+commande shell d'inspection du `.env` du VPS (`grep -n HYPOTHESIS
+.env`, censée lister les NOMS de variables comme les commandes
+précédentes de la même session avaient fait avec `grep -o
+'^[A-Z_]*...='`) a affiché les LIGNES COMPLÈTES, donc les valeurs
+réelles — `CAPITAL_API_KEY`/`CAPITAL_IDENTIFIER`/`CAPITAL_API_PASSWORD`/
+`CAPITAL_ACCOUNT_ID` pour les Hypothèses #2, #3 et #4 (trois comptes
+démo Capital.com). Contrevient directement au principe explicite de
+CLAUDE.md ("jamais transmises à un LLM"). Erreur de commande, pas
+intentionnelle — signalée immédiatement à Ismaël, aucune valeur
+réutilisée dans une commande, un fichier ou un commit ultérieur.
+**Aucun identifiant H5 n'a été exposé** (le `.env` du VPS n'en contenait
+alors aucun). Décision de rotation ou non des identifiants H2/H3/H4
+laissée à Ismaël, à trancher séparément — pas prise ici. Toute future
+inspection d'un `.env` (local ou VPS) par ce projet DOIT utiliser un
+motif restreint au nom de variable (`grep -o '^[A-Z_]*NOM=' `), jamais
+un motif qui capture la ligne entière.
+
+---
+
 ## 2026-08-23 — Hypothèse #2 : bascule du régime MA200 -> structure BOS/CHoCH ; Hypothèse #5 REDÉFINIE (ICT + RSI) ; déploiement réel des deux
 
 Session unique, trois volets demandés par Ismaël ensemble : (1) bascule
