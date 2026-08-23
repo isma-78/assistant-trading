@@ -43,7 +43,7 @@ def test_run_hypothesis4_loop_forwards_h4_credentials_and_resolution():
     _, kwargs = mock_loop.call_args
     assert kwargs["source"] == "hypothesis4"
     assert kwargs["resolution"] == "MINUTE_15"
-    assert kwargs["session_gated"] is True
+    assert "session_gated" not in kwargs  # paramètre retiré, voir docs/DECISIONS.md
     assert kwargs["require_regime_confirmation"] is True
     assert kwargs["api_key"] == "key4"
     assert kwargs["identifier"] == "id4"

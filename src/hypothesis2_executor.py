@@ -12,13 +12,15 @@ docs/DECISIONS.md) : `hypothesis2_strategy.evaluate_entry` (pas
 TP2(2R) au signal, déclenchant le mécanisme §2.10 (TP1/TP2/trailing sur
 le reliquat) au lieu du trailing Donchian(20) pur d'origine.
 
-**Couche session/multi-timeframe, 23/08/2026 après-midi** (décision
-explicite d'Ismaël, voir docs/DECISIONS.md/docs/HYPOTHESES.md) :
-résolution M15 (au lieu de HOUR) + génération de signaux restreinte aux
-heures d'ouverture de session (Asie 0h/Londres 8h/New York 13h UTC).
-**Aucune confirmation de régime croisée** (option C — H2 déjà couverte
-par son propre régime structurel BOS/CHoCH, une confirmation
-supplémentaire serait redondante, voir docs/HYPOTHESES.md).
+**Couche session/multi-timeframe, 23/08/2026** : résolution M15 (au lieu
+de HOUR). La fenêtre de session (0h/8h/13h UTC) ne gate PLUS la
+génération de signaux depuis la révision du 23/08/2026 fin de journée
+(voir docs/DECISIONS.md/docs/HYPOTHESES.md — l'ancien gate + l'exemption
+crypto associée sont devenus obsolètes et ont été retirés) : évaluation
+continue, tous les actifs, à chaque cycle. **Aucune confirmation de
+régime croisée** (option C — H2 déjà couverte par son propre régime
+structurel BOS/CHoCH, une confirmation supplémentaire serait redondante,
+voir docs/HYPOTHESES.md).
 
 Process indépendant, compte Capital.com démo dédié ("hypothèse 2"),
 **déployé et actif en production depuis le 21/08/2026** (identifiants
@@ -71,7 +73,6 @@ def run_hypothesis2_loop(config, db_path: str, interval_seconds: int = 60) -> No
         hypothesis_label=_HYPOTHESIS_LABEL,
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
-        session_gated=True,
     )
 
 

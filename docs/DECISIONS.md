@@ -12,6 +12,130 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-23 — Correction de la couche session/multi-timeframe : recalibration, pas porte — remplace l'exemption crypto
+
+**Remplace l'entrée précédente** (« Exemption crypto (BTCUSD/ETHUSD) de
+la fenêtre de session — H2/H3/H4/H5 », ci-dessous) — celle-ci reste dans
+l'historique, jamais réécrite ni supprimée, mais son mécanisme est
+devenu obsolète le jour même. Conception corrigée complète fournie par
+Ismaël, pré-enregistrée dans `docs/HYPOTHESES.md` avant tout test.
+
+### Ce qui change
+
+La fenêtre de session (0h/8h/13h UTC) n'est plus une porte sur la
+génération de signaux — pour AUCUN actif, AUCUNE hypothèse (H2/H3/H4/H5).
+Conséquence directe : l'exemption crypto de l'entrée précédente (pass-
+through BTCUSD/ETHUSD sur la génération ET sur la confirmation croisée)
+devient redondante — les 6 autres actifs reçoivent désormais le même
+traitement continu que la crypto recevait déjà. Retirée intégralement :
+`regime_confirmation.CRYPTO_ASSETS`/`confirm_regime`/`_confirm_regime`,
+`technical_strategy_executor._should_generate_signals`, le paramètre
+`session_gated` (plus aucun appelant n'en a besoin).
+
+### `src/regime_confirmation.py` — API remplacée
+
+- `confirm_regime(client, asset, direction, resolution, now) -> bool`
+  (calcul synchrone, par signal, avec branchement horaire) **retirée**.
+- `compute_index_regimes(client, resolution) -> {"US30": régime,
+  "US100": régime}` (nouvelle) : calcule le régime MA200 des deux
+  indices UNE SEULE FOIS par rafraîchissement — 2 appels réseau au lieu
+  de jusqu'à 8 (un par signal généré dans l'ancienne conception).
+  Fail-safe par indice (une erreur sur un indice donne None pour lui
+  seul, pas d'exception qui interromprait l'autre).
+- `derive_confirmed_regime(asset, index_regimes) -> "long"|"short"|None`
+  (nouvelle) : pure, dérive le régime confirmé d'un actif à partir des
+  régimes déjà calculés — même règle ET qu'avant (US30/US100 l'un par
+  l'autre, les 6 autres actifs — crypto incluse — par les deux
+  combinés), aucun cas particulier crypto.
+- Le module ne connaît plus aucune notion d'heure ni de session — pure
+  fonction de calcul, la planification (quand rafraîchir) vit
+  entièrement dans `technical_strategy_executor.py`.
+
+### `src/technical_strategy_executor.py` — contexte de régime en cache
+
+`run_technical_strategy_loop` maintient désormais un contexte
+`regime_context: {actif: "long"|"short"|None}` en mémoire pour toute la
+durée du process (H3/H4 uniquement, `require_regime_confirmation=True`),
+rafraîchi via `_should_refresh_regime_context(last_refresh_hour,
+hour_utc)` — True au tout premier appel (peu importe l'heure, évite un
+trou de plusieurs heures après un redémarrage/déploiement — écart
+mineur assumé par rapport à "calculée aux 3 ouvertures" au sens strict)
+puis à chaque nouvelle heure d'ouverture de session différente de la
+dernière déjà rafraîchie. Entre deux rafraîchissements, la valeur en
+cache reste active. `_generate_and_queue_signal` compare directement
+`signal.direction` au `confirmed_regime` reçu en paramètre — ne
+recalcule plus rien, ne fait plus aucun appel réseau pour la
+confirmation elle-même.
+
+`SESSION_OPEN_HOURS_UTC` change de rôle (documenté explicitement dans
+le code) : d'une porte sur la génération à une cadence de
+rafraîchissement — la constante elle-même (0, 8, 13) est inchangée.
+
+La génération de signaux (`for asset in assets: _generate_and_queue_
+signal(...)`) tourne désormais à chaque itération, sans aucune
+condition de gate — retour à la structure de boucle d'avant la première
+version de la couche session/multi-timeframe (plus tôt le 23/08/2026),
+mais avec le contexte de régime toujours actif pour H3/H4.
+
+### `hypothesis2/3/4/5_executor.py`
+
+Retrait de `session_gated=True` des 4 appels à
+`run_technical_strategy_loop` (paramètre supprimé). H3/H4 gardent
+`require_regime_confirmation=True`, inchangé dans son intention, changé
+dans son mécanisme (voir ci-dessus). Docstrings des 4 modules mises à
+jour pour ne plus décrire un gate qui n'existe plus.
+
+### Application rétroactive — `scripts/retrofit_h2_h3_tp_partiel.py` (nouveau)
+
+Script ponctuel, lancé manuellement une seule fois (jamais un backfill
+automatique au démarrage comme `db._backfill_exit_type` — celui-ci
+modifie le comportement de positions RÉELLEMENT OUVERTES, trop
+conséquent pour tourner sans revue explicite). Cible : trades H2/H3
+`statut='ouvert' AND exit_type='trailing_pur'` (jamais un trade clos, ni
+un trade déjà basculé vers `tp_partiel` par la bascule prospective du
+même jour). Pour chacun : `tp1`/`tp2` calculés via
+`trend_strategy.compute_tp_levels` sur l'entrée (`prix_entree_reel` ou,
+à défaut, `prix_entree_prevu`) et le stop **initial** déjà enregistrés
+(`stop_loss_initial`, jamais le stop courant) — mêmes constantes que
+`hypothesis2_strategy.py`/`hypothesis3_strategy.py` (1.0R/2.0R), jamais
+recalculés selon l'évolution du trade. Écrit `signals.tp1`/`tp2` (relu
+par `executor._load_open_trade_state` à chaque cycle — effet immédiat,
+aucun redémarrage requis) et `trades.exit_type =
+'tp_partiel_retroactif'`. Testé par un smoke test manuel avant
+exécution réelle (dry-run n'écrit rien, run réel convertit uniquement
+le trade candidat, un trade clos et un trade déjà `tp_partiel` restent
+intacts, idempotent — second passage sans effet).
+
+**Rapport d'exécution réelle sur le VPS** (id, ancien/nouveau exit_type,
+TP1/TP2 calculés) : voir la sous-section déploiement ci-dessous.
+
+### Budget §2.11
+
+Inchangé — même raisonnement que la fenêtre de session elle-même (déjà
+tranchée non comptée) : un changement de MÉCANISME de rafraîchissement
+n'introduit aucune variable ajustable supplémentaire, mêmes indices,
+mêmes règles ET, même constante `SESSION_OPEN_HOURS_UTC`.
+
+### Tests
+
+`test_regime_confirmation.py` réécrit intégralement pour la nouvelle
+API (`compute_index_regimes`/`derive_confirmed_regime`, fail-safe par
+indice, aucun cas particulier crypto testé explicitement pour confirmer
+la parité de traitement). `test_technical_strategy_executor.py` :
+tests `confirm_regime`-patchés remplacés par des tests directs sur
+`confirmed_regime` ; tests `_should_generate_signals` remplacés par
+`_should_refresh_regime_context`. `test_hypothesis2/3/4/5_executor.py` :
+assertions `session_gated` remplacées par `"session_gated" not in
+kwargs`. 688 tests passent, 100% de couverture confirmée sur
+`regime_confirmation.py` et les autres modules critiques.
+
+### Déploiement — à compléter après exécution réelle
+
+*(rempli après la vérification en direct sur le VPS — voir la suite de
+cette entrée ou une entrée de suivi si publiée séparément)*
+
+---
+
 ## 2026-08-23 — Exemption crypto (BTCUSD/ETHUSD) de la fenêtre de session — H2/H3/H4/H5
 
 Suite au constat en direct (même journée) que la couche session/multi-

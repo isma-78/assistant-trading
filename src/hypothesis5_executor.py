@@ -9,15 +9,17 @@ exige EN PLUS un franchissement du RSI(14) à 50 dans le même sens sur la
 même bougie, ajoute TP1(1R)/TP2(2R)), déclencheur INCHANGÉ par tout ce
 qui suit.
 
-**Couche session/multi-timeframe, 23/08/2026 après-midi** (décision
-explicite d'Ismaël, voir docs/DECISIONS.md/docs/HYPOTHESES.md) :
-résolution M15 (au lieu de HOUR — le RSI(14)/MA200 internes à
-`hypothesis5_strategy`/`ict_strategy` couvrent donc désormais ~3-4h/~50h
-de bougies au lieu de ~14h/~200h, conséquence mécanique du changement de
-résolution, pas un nouveau paramètre) + génération de signaux restreinte
-aux heures d'ouverture de session (Asie 0h/Londres 8h/New York 13h UTC).
-**Aucune confirmation de régime croisée** (option C — H5 déjà couverte
-par son propre régime structurel BOS/CHoCH, voir docs/HYPOTHESES.md).
+**Couche session/multi-timeframe, 23/08/2026** : résolution M15 (au lieu
+de HOUR — le RSI(14)/MA200 internes à `hypothesis5_strategy`/
+`ict_strategy` couvrent donc désormais ~3-4h/~50h de bougies au lieu de
+~14h/~200h, conséquence mécanique du changement de résolution, pas un
+nouveau paramètre). La fenêtre de session ne gate PLUS la génération de
+signaux depuis la révision du 23/08/2026 fin de journée (voir
+docs/DECISIONS.md/docs/HYPOTHESES.md — l'ancien gate + l'exemption
+crypto associée sont devenus obsolètes et ont été retirés) : évaluation
+continue, tous les actifs, à chaque cycle. **Aucune confirmation de
+régime croisée** (option C — H5 déjà couverte par son propre régime
+structurel BOS/CHoCH, voir docs/HYPOTHESES.md).
 
 **Dépassement du budget §2.11 EXPLICITEMENT ASSUMÉ par Ismaël** : H5
 était déjà à 3/3 paramètres (config RSI, TP1 R, TP2 R) — le changement
@@ -81,7 +83,6 @@ def run_hypothesis5_loop(config, db_path: str, interval_seconds: int = 60) -> No
         hypothesis_label=_HYPOTHESIS_LABEL,
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
-        session_gated=True,
     )
 
 

@@ -1796,5 +1796,86 @@ sur `_should_generate_signals`) et déploiement détaillés dans
 
 ---
 
+## Correction de la couche session/multi-timeframe : recalibration, pas porte (23/08/2026, fin de journée)
+
+**Écrite et datée AVANT tout test de cette conception corrigée**, comme
+pour toute évolution de ce fichier (règle en tête de document). Remplace
+le principe de la couche session/multi-timeframe déployée plus tôt le
+même jour et de son exemption crypto ajoutée dans la foulée — les deux
+sont documentées comme remplacées, pas supprimées silencieusement de
+l'historique (voir `docs/DECISIONS.md`).
+
+### Principe corrigé
+
+La fenêtre de session (0h/8h/13h UTC) n'est plus une porte sur la
+génération de signaux, pour aucun actif :
+- Le déclencheur propre à chaque hypothèse (Donchian pour H3, confluence
+  ICT pour H2/H5, toucher de bande Bollinger pour H4) est évalué à
+  CHAQUE cycle (~60s), toute la journée, sur les 8 actifs — aucun
+  blocage en dehors des 3 fenêtres, pour aucun actif, y compris
+  BTCUSD/ETHUSD.
+- Pour H3 et H4 (confirmation tendance/contre-tendance) : la
+  confirmation de régime (alignement US30/US100) devient un CONTEXTE
+  calculé/rafraîchi aux 3 ouvertures de session, qui reste actif jusqu'au
+  prochain rafraîchissement — un trigger ne devient un trade que si le
+  régime actuellement actif en cache correspond à ce que l'hypothèse
+  exige. Elle n'est plus recalculée à la volée pour chaque signal
+  individuel.
+- Pour H2 et H5 (régime déjà structurel et continu via BOS/CHoCH) :
+  aucun rôle utile pour la fenêtre de session — retirée complètement
+  pour elles (elles n'ont jamais eu de confirmation croisée non plus,
+  option C, inchangé).
+
+### Crypto — plus de cas particulier
+
+L'exemption crypto (BTCUSD/ETHUSD pass-through sur la génération ET sur
+la confirmation croisée, ajoutée plus tôt le 23/08/2026) devient
+redondante sous ce principe : les 6 autres actifs reçoivent désormais le
+même traitement continu que la crypto recevait déjà. Retirée du code
+(`regime_confirmation.CRYPTO_ASSETS`/`confirm_regime`,
+`technical_strategy_executor._should_generate_signals`).
+
+### Application rétroactive — profit-taking uniquement, trades H2/H3 encore ouverts
+
+Écart assumé par rapport à la discipline "prospectif uniquement" déjà
+suivie pour la bascule TP1/TP2/TP3 de H2/H3 du même jour (décision
+explicite d'Ismaël, cette fois) : toute position H2/H3 encore OUVERTE au
+moment de ce déploiement (jamais les trades déjà clôturés) est basculée
+vers le mécanisme de profit-taking défini pour son hypothèse (TP1(1R)/
+TP2(2R)/reliquat trailing pour H2/H3 — H4 est déjà TP fixe depuis son
+origine, H5 déjà TP1/TP2/trailing depuis son origine, aucun des deux
+n'a de trade en `trailing_pur` à convertir). TP1/TP2 calculés à partir
+de l'entrée et du stop INITIAL déjà enregistrés pour chaque trade (jamais
+recalculés selon son évolution depuis l'ouverture) — cohérent avec
+l'invariant #7 (passer au breakeven à TP1 est un resserrement, jamais un
+élargissement) et avec les formules déjà définies (mêmes
+`TP1_R_MULTIPLE`/`TP2_R_MULTIPLE` que `hypothesis2_strategy.py`/
+`hypothesis3_strategy.py`, aucun ajustement basé sur le résultat de ces
+trades précis). Ces trades reçoivent `exit_type = "tp_partiel_
+retroactif"`, jamais fusionné avec `trailing_pur` ni avec `tp_partiel`
+classique (les trades ouverts APRÈS la bascule prospective du même jour,
+qui avaient tp1/tp2 dès l'origine). Détail par trade (id, ancien/nouveau
+exit_type, tp1/tp2 calculés) dans `docs/DECISIONS.md`.
+
+### Ce qui reste inchangé
+
+- H1 totalement intacte, exclue de toute cette couche.
+- Exécution M15/M30 pour H2/H3/H4/H5 (dépassement du plafond §2.11 pour
+  H5 toujours assumé, inchangé).
+- Confirmation par indice (réutilisation de `compute_regime`/MA200)
+  documentée pour ce qu'elle fait réellement — alignement directionnel,
+  jamais présentée comme classificateur de force de tendance.
+- Budget §2.11 : traité comme la fenêtre de session elle-même déjà
+  tranchée non comptée (précédent explicite) — un changement de
+  MÉCANISME de rafraîchissement (aux 3 ouvertures plutôt qu'à la volée)
+  n'introduit aucune variable ajustable supplémentaire, mêmes indices,
+  mêmes règles ET, mêmes constantes `SESSION_OPEN_HOURS_UTC`.
+
+Implémentation, tests (100% sur `regime_confirmation.py`), rapport par
+trade de l'application rétroactive et déploiement détaillés dans
+`docs/DECISIONS.md` (23/08/2026).
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4 ou #5 — jamais une modification de ce qui précède.*

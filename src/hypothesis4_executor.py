@@ -10,17 +10,22 @@ Détection via mean_reversion_strategy.evaluate_entry (régime MA(200) +
 toucher de bande de Bollinger(20, 2σ) opposée au régime), déclencheur
 INCHANGÉ par tout ce qui suit.
 
-**Couche session/multi-timeframe, 23/08/2026 après-midi** (décision
-explicite d'Ismaël, voir docs/DECISIONS.md/docs/HYPOTHESES.md) :
-résolution M15 (au lieu de HOUR) + génération de signaux restreinte aux
-heures d'ouverture de session (Asie 0h/Londres 8h/New York 13h UTC) +
-confirmation de régime croisée (`regime_confirmation.confirm_regime`,
-indices US30/US100 pour Londres/NY, indicateur technique seul pour
-l'Asie) : le toucher de bande Bollinger (déclencheur INCHANGÉ) ne se
-traduit en signal persisté que si ce régime confirmé "contre-tendance"
-est établi — H4 est "contre-tendance" par construction (fade d'une
-extension court terme À L'INTÉRIEUR d'un régime de fond confirmé,
-jamais contre lui, voir docs/HYPOTHESES.md).
+**Couche session/multi-timeframe, 23/08/2026, révisée en fin de
+journée** (décision explicite d'Ismaël, voir
+docs/DECISIONS.md/docs/HYPOTHESES.md) : résolution M15 (au lieu de
+HOUR) + confirmation de régime croisée (`regime_confirmation.
+compute_index_regimes`/`derive_confirmed_regime`, indices US30 ET US100
+combinés) : le toucher de bande Bollinger (déclencheur INCHANGÉ) ne se
+traduit en signal persisté que si le régime confirmé actuellement EN
+CACHE (rafraîchi aux 3 ouvertures de session UTC — 0h/8h/13h — plus une
+fois au démarrage du process, voir `technical_strategy_executor.py`)
+concorde avec la direction du trigger — H4 est "contre-tendance" par
+construction (fade d'une extension court terme À L'INTÉRIEUR d'un
+régime de fond confirmé, jamais contre lui, voir docs/HYPOTHESES.md).
+La génération de signaux elle-même tourne en CONTINU, à chaque cycle,
+tous les actifs — plus aucune fenêtre de session ne la bloque (le
+premier gate du 23/08/2026 après-midi est devenu obsolète et a été
+retiré le même jour, voir docs/DECISIONS.md).
 
 **3e mécanisme de sortie**, distinct de Station X (TP1/TP2/TP3 + trailing
 ATR) et du Flux B/H3/H2 (aucun TP, trailing Donchian perpétuel) : TP fixe
@@ -87,7 +92,6 @@ def run_hypothesis4_loop(config, db_path: str, interval_seconds: int = 60) -> No
         hypothesis_label=_HYPOTHESIS_LABEL,
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
-        session_gated=True,
         require_regime_confirmation=True,
     )
 

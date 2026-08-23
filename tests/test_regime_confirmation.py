@@ -1,14 +1,10 @@
-from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-import pytest
-
 from src.regime_confirmation import (
-    CRYPTO_ASSETS,
     MA_PERIOD,
-    _confirm_regime,
-    confirm_regime,
+    compute_index_regimes,
     confirmation_indices,
+    derive_confirmed_regime,
 )
 from src.trend_strategy import MA_PERIOD as TREND_MA_PERIOD
 
@@ -28,21 +24,17 @@ def _prices_response(n, level):
     }
 
 
-def _client_with_regime(direction):
-    """Client factice dont get_prices produit un régime MA200 donné
-    ("long"/"short") sur n'importe quel epic interrogé, quelle que soit
-    la résolution passée."""
-    client = MagicMock()
+def _regime_response(direction):
+    """Réponse get_prices produisant un régime MA200 donné ("long"/
+    "short") pour n'importe quel epic interrogé."""
     resp = _prices_response(TREND_MA_PERIOD - 1, 100.0)
+    level = 200.0 if direction == "long" else 50.0
     resp["prices"].append({
         "snapshotTimeUTC": "last",
-        "openPrice": {"bid": 200.0 if direction == "long" else 50.0, "ask": 200.0 if direction == "long" else 50.0},
-        "highPrice": {"bid": 200.0 if direction == "long" else 50.0, "ask": 200.0 if direction == "long" else 50.0},
-        "lowPrice": {"bid": 200.0 if direction == "long" else 50.0, "ask": 200.0 if direction == "long" else 50.0},
-        "closePrice": {"bid": 200.0 if direction == "long" else 50.0, "ask": 200.0 if direction == "long" else 50.0},
+        "openPrice": {"bid": level, "ask": level}, "highPrice": {"bid": level, "ask": level},
+        "lowPrice": {"bid": level, "ask": level}, "closePrice": {"bid": level, "ask": level},
     })
-    client.get_prices.return_value = resp
-    return client
+    return resp
 
 
 def test_ma_period_reexported_matches_trend_strategy():
@@ -60,113 +52,81 @@ def test_confirmation_indices_us100_confirmed_by_us30_only():
 
 
 def test_confirmation_indices_other_assets_confirmed_by_both():
+    # BTCUSD/ETHUSD y compris depuis le retrait de l'exemption crypto
+    # (23/08/2026, fin de journée) : même traitement que les 4 autres.
     for asset in ("GOLD", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD"):
         assert confirmation_indices(asset) == ("US30", "US100")
 
 
-# --- confirm_regime — session Asie : pass-through ---------------------------
+# --- compute_index_regimes ---------------------------------------------------
 
-def test_confirm_regime_asia_session_always_true_no_client_call():
+def test_compute_index_regimes_calls_both_indices_once_each():
     client = MagicMock()
-    now = datetime(2026, 8, 24, 0, 30, tzinfo=timezone.utc)
-    assert confirm_regime(client, "EURUSD", "long", "HOUR", now) is True
-    client.get_prices.assert_not_called()
-
-
-# --- confirm_regime — Londres/New York : ET strict --------------------------
-
-def test_confirm_regime_london_single_index_asset_matches():
-    # US30 confirmé par US100 seul.
-    client = _client_with_regime("long")
-    now = datetime(2026, 8, 24, 8, 15, tzinfo=timezone.utc)
-    assert confirm_regime(client, "US30", "long", "HOUR", now) is True
-    client.get_prices.assert_called_once_with("US100", resolution="HOUR", max_bars=MA_PERIOD + 20)
-
-
-def test_confirm_regime_ny_single_index_asset_mismatch():
-    client = _client_with_regime("short")
-    now = datetime(2026, 8, 24, 13, 0, tzinfo=timezone.utc)
-    assert confirm_regime(client, "US100", "long", "HOUR", now) is False
-
-
-def test_confirm_regime_other_asset_both_indices_match():
-    client = _client_with_regime("short")
-    now = datetime(2026, 8, 24, 13, 0, tzinfo=timezone.utc)
-    assert confirm_regime(client, "EURUSD", "short", "HOUR", now) is True
+    client.get_prices.side_effect = [_regime_response("long"), _regime_response("short")]
+    regimes = compute_index_regimes(client, "HOUR")
+    assert regimes == {"US30": "long", "US100": "short"}
     assert client.get_prices.call_count == 2
+    first_call, second_call = client.get_prices.call_args_list
+    assert first_call.args[0] == "US30"
+    assert second_call.args[0] == "US100"
+    assert first_call.kwargs == {"resolution": "HOUR", "max_bars": MA_PERIOD + 20}
 
 
-def test_confirm_regime_other_asset_first_index_mismatch_short_circuits():
-    client = _client_with_regime("short")
-    now = datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc)
-    assert confirm_regime(client, "GOLD", "long", "HOUR", now) is False
-    # ET court-circuite au premier désaccord (US30 en premier) : un seul appel.
-    client.get_prices.assert_called_once()
-
-
-def test_confirm_regime_other_asset_second_index_mismatch():
-    # EURUSD (pas BTCUSD : la crypto est exemptée, voir plus bas).
+def test_compute_index_regimes_per_index_fail_safe_none():
+    # Une erreur sur UN indice donne None pour cet indice seul, jamais
+    # une exception qui interromprait le calcul de l'autre.
     client = MagicMock()
-    long_resp = _client_with_regime("long").get_prices.return_value
-    short_resp = _client_with_regime("short").get_prices.return_value
-    client.get_prices.side_effect = [long_resp, short_resp]  # US30 concorde, US100 non
-    now = datetime(2026, 8, 24, 13, 0, tzinfo=timezone.utc)
-    assert confirm_regime(client, "EURUSD", "long", "HOUR", now) is False
-    assert client.get_prices.call_count == 2
+    client.get_prices.side_effect = [RuntimeError("panne broker"), _regime_response("long")]
+    regimes = compute_index_regimes(client, "HOUR")
+    assert regimes == {"US30": None, "US100": "long"}
 
 
-# --- fail-safe ---------------------------------------------------------------
-
-def test_confirm_regime_naive_datetime_is_fail_safe_false():
-    client = MagicMock()
-    naive_now = datetime(2026, 8, 24, 8, 0)  # pas de tzinfo
-    assert confirm_regime(client, "EURUSD", "long", "HOUR", naive_now) is False
-
-
-def test_underscore_confirm_regime_raises_on_naive_datetime():
-    client = MagicMock()
-    naive_now = datetime(2026, 8, 24, 8, 0)
-    with pytest.raises(ValueError):
-        _confirm_regime(client, "EURUSD", "long", "HOUR", naive_now)
-
-
-def test_confirm_regime_unreachable_hour_is_fail_safe_false():
-    # Défensif : n'arrive jamais via le gate de session en production,
-    # mais _confirm_regime elle-même doit échouer fermé si jamais atteinte.
-    client = MagicMock()
-    now = datetime(2026, 8, 24, 5, 0, tzinfo=timezone.utc)
-    assert confirm_regime(client, "EURUSD", "long", "HOUR", now) is False
-    client.get_prices.assert_not_called()
-
-
-def test_confirm_regime_internal_exception_is_fail_safe_false():
+def test_compute_index_regimes_both_fail_safe_none():
     client = MagicMock()
     client.get_prices.side_effect = RuntimeError("panne broker")
-    now = datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc)
-    assert confirm_regime(client, "EURUSD", "long", "HOUR", now) is False
+    regimes = compute_index_regimes(client, "HOUR")
+    assert regimes == {"US30": None, "US100": None}
 
 
-# --- crypto (BTCUSD/ETHUSD) — exemption, analyse continue (23/08/2026) ------
+# --- derive_confirmed_regime --------------------------------------------------
 
-def test_crypto_assets_are_btcusd_ethusd():
-    assert CRYPTO_ASSETS == ("BTCUSD", "ETHUSD")
-
-
-def test_confirm_regime_crypto_always_true_no_client_call():
-    client = MagicMock()
-    for asset in CRYPTO_ASSETS:
-        # Heure de session ET heure hors-session : toujours True, jamais
-        # d'appel réseau — la crypto n'a pas d'indice à interroger.
-        for hour in (0, 8, 13, 5, 17, 23):
-            now = datetime(2026, 8, 24, hour, 0, tzinfo=timezone.utc)
-            assert confirm_regime(client, asset, "long", "HOUR", now) is True
-    client.get_prices.assert_not_called()
+def test_derive_confirmed_regime_us30_from_us100_alone():
+    assert derive_confirmed_regime("US30", {"US100": "long", "US30": "short"}) == "long"
 
 
-def test_confirm_regime_crypto_true_even_on_naive_datetime_hour_branch():
-    # La vérification de l'actif crypto passe AVANT l'accès à `now.hour`
-    # mais APRÈS la garde `tzinfo`, qui reste stricte pour tous les
-    # actifs (invariant #7 — jamais assoupli pour la crypto).
-    client = MagicMock()
-    naive_now = datetime(2026, 8, 24, 8, 0)
-    assert confirm_regime(client, "BTCUSD", "long", "HOUR", naive_now) is False
+def test_derive_confirmed_regime_us100_from_us30_alone():
+    assert derive_confirmed_regime("US100", {"US100": "long", "US30": "short"}) == "short"
+
+
+def test_derive_confirmed_regime_other_asset_both_agree():
+    assert derive_confirmed_regime("EURUSD", {"US30": "short", "US100": "short"}) == "short"
+
+
+def test_derive_confirmed_regime_other_asset_disagree_none():
+    assert derive_confirmed_regime("GOLD", {"US30": "long", "US100": "short"}) is None
+
+
+def test_derive_confirmed_regime_missing_index_none():
+    assert derive_confirmed_regime("EURUSD", {"US30": "long"}) is None
+    assert derive_confirmed_regime("EURUSD", {}) is None
+
+
+def test_derive_confirmed_regime_index_none_value_none():
+    # compute_index_regimes peut écrire explicitement None (échec fail-safe).
+    assert derive_confirmed_regime("EURUSD", {"US30": "long", "US100": None}) is None
+
+
+def test_derive_confirmed_regime_indeterminate_index_regime_none():
+    # compute_regime peut lui-même renvoyer None (historique insuffisant,
+    # égalité stricte) — traité comme tout autre régime manquant.
+    assert derive_confirmed_regime("US30", {"US100": None}) is None
+
+
+def test_derive_confirmed_regime_crypto_same_rule_as_other_assets():
+    # Retrait de l'exemption crypto (23/08/2026, fin de journée, voir
+    # docs/DECISIONS.md) : BTCUSD/ETHUSD suivent désormais exactement la
+    # même règle ET que les 4 autres actifs "génériques" — aucun
+    # traitement spécial dans ce module.
+    for asset in ("BTCUSD", "ETHUSD"):
+        assert derive_confirmed_regime(asset, {"US30": "long", "US100": "long"}) == "long"
+        assert derive_confirmed_regime(asset, {"US30": "long", "US100": "short"}) is None

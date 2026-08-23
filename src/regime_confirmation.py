@@ -6,11 +6,25 @@ session/multi-timeframe), décision explicite d'Ismaël le 23/08/2026
 exigence de couverture que risk_engine.py — gate une vraie décision
 d'entrée).
 
+**RÉVISION MAJEURE du 23/08/2026, fin de journée** (conception corrigée
+d'Ismaël, voir docs/HYPOTHESES.md/docs/DECISIONS.md) : la fenêtre de
+session (0h/8h/13h UTC) n'est plus une PORTE sur la génération de
+signaux — pour AUCUN actif, y compris crypto. C'est désormais un point
+de RECALIBRATION PÉRIODIQUE du contexte de régime confirmé, rien de
+plus. Conséquence directe : **l'exemption crypto (BTCUSD/ETHUSD,
+`CRYPTO_ASSETS`/`confirm_regime`/`_confirm_regime`) ajoutée plus tôt le
+23/08/2026 est devenue OBSOLÈTE et a été retirée de ce module** — les 6
+autres actifs reçoivent désormais le même traitement continu que la
+crypto recevait déjà, donc plus besoin de cas particulier. Ce retrait
+est documenté dans docs/DECISIONS.md comme remplacé par cette
+correction générale, pas supprimé silencieusement de l'historique (voir
+aussi la révision d'HYPOTHESES.md du même jour).
+
 **Ce que c'est** : réutilise `trend_strategy.compute_regime` tel quel
-(MA200), appliqué à un ou deux indices de confirmation au lieu d'un
-nouvel indicateur — le régime de l'indice concorde-t-il avec celui de
-l'actif ? Aucune nouvelle logique de calcul, uniquement une seconde
-application de la même fonction à un second instrument.
+(MA200), appliqué aux deux indices de confirmation (US30, US100) au lieu
+d'un nouvel indicateur — le régime de l'indice concorde-t-il avec celui
+de l'actif ? Aucune nouvelle logique de calcul, uniquement une seconde
+application de la même fonction à ces deux instruments.
 
 **Ce que ce n'EST PAS** : PAS un classificateur de force de tendance
 (un ADX ou équivalent mesurerait autre chose — l'intensité d'une
@@ -23,43 +37,31 @@ couche (déclencheur intact, aucun nouveau champ), H2/H5 déjà couvertes
 par leur régime structurel BOS/CHoCH (option C, voir docs/HYPOTHESES.md
 du 23/08/2026), une confirmation supplémentaire serait redondante.
 
-Sessions et indices (fixés a priori, voir docs/HYPOTHESES.md) :
-- Asie (0h UTC) : indicateur technique seul (le régime déjà calculé par
-  l'entrée elle-même) suffit — cette fonction retourne toujours True
-  pour cette session, un pass-through, pas un second filtrage.
-- Londres (8h)/New York (13h) : ET strict entre le régime de l'actif et
-  le(s) indice(s) de confirmation. US30 et US100 confirmés l'un par
-  l'autre (jamais par eux-mêmes, un instrument ne peut pas confirmer son
-  propre régime) ; les 6 autres actifs de la liste blanche confirmés par
-  US30 ET US100 combinés — les deux doivent concorder, extension directe
-  du ET déjà retenu pour toute la couche, jamais une règle différente
-  pour ce cas. "Moyenne des régimes" écartée : un régime long/short/
-  aucun est catégoriel, une moyenne n'a pas de sens dessus.
+**Ce module ne connaît plus aucune notion d'heure ni d'état** — pure
+fonction de calcul, appelée par l'appelant (`technical_strategy_
+executor.py`) au moment où CELUI-CI décide de rafraîchir le contexte
+(aux 3 ouvertures de session UTC, plus une fois au démarrage du process
+— voir sa docstring). Le résultat du calcul est mis en cache par
+l'appelant et réutilisé pour CHAQUE trigger produit entre deux
+rafraîchissements, quelle que soit l'heure à laquelle ce trigger se
+déclenche — le déclencheur propre à chaque hypothèse (Donchian pour H3,
+Bollinger pour H4) est évalué à chaque cycle (~60s), toute la journée,
+sur les 8 actifs, jamais bloqué par ce module.
 
-**Crypto (BTCUSD/ETHUSD) — exemption ajoutée le 23/08/2026** (voir
-docs/DECISIONS.md, docs/HYPOTHESES.md) : `CRYPTO_ASSETS` court-circuite
-`_confirm_regime` en pass-through (True), quelle que soit l'heure —
-même traitement que la session Asie, mais déclenché par l'actif, pas
-par l'heure. Raisonnement : la couche session/multi-timeframe exempte
-désormais la crypto de la fenêtre de session (analyse continue,
-`technical_strategy_executor._should_generate_signals`), donc `now`
-tombe la plupart du temps hors {0, 8, 13} pour la crypto ; sans cette
-exemption, la branche défensive "hors session" (fail-closed) aurait
-rejeté silencieusement la quasi-totalité des signaux crypto d'H3/H4,
-annulant de fait l'analyse continue demandée. Par ailleurs, US30/US100
-sont des indices actions, structurellement liés à leurs propres heures
-de marché — les associer à une confirmation crypto 24/7 n'a pas de
-rationnel de session à faire correspondre, contrairement au forex/GOLD/
-indices qui partagent bien la même horloge de session que les indices
-de confirmation.
+Indices de confirmation (fixés a priori, voir docs/HYPOTHESES.md) : US30
+et US100 confirmés l'un par l'autre (jamais par eux-mêmes, un instrument
+ne peut pas confirmer son propre régime) ; les 6 autres actifs de la
+liste blanche (dont BTCUSD/ETHUSD depuis ce retrait de l'exemption
+crypto) confirmés par US30 ET US100 combinés — les deux doivent
+concorder, ET strict. "Moyenne des régimes" écartée : un régime
+long/short/aucun est catégoriel, une moyenne n'a pas de sens dessus.
 
 Aucun LLM (invariant #1) : comparaisons déterministes, fail-safe
-(invariant #7 — toute erreur interne devient un ÉCHEC de confirmation,
-jamais un signal laissé passer sur une confirmation indéterminée).
+(invariant #7 — toute erreur ou donnée manquante devient un régime NON
+confirmé, jamais un signal laissé passer sur un état indéterminé).
 """
 
-from datetime import datetime, timezone
-from typing import Tuple
+from typing import Dict, Optional, Tuple
 
 from src.capital_client import CapitalClient
 from src.market_data import get_candles
@@ -71,15 +73,7 @@ from src.trend_strategy import MA_PERIOD, compute_regime
 # nécessaire au calcul du régime, même convention que le reste du projet).
 _CANDLE_COUNT = MA_PERIOD + 20
 
-_ASIA_HOUR = 0
-_LONDON_HOUR = 8
-_NY_HOUR = 13
-
-# Actifs exemptés de la fenêtre de session (analyse continue, 23/08/2026
-# — voir docstring du module). Dupliquée dans technical_strategy_executor.py
-# par import (source unique ici) plutôt que recopiée, pour éviter toute
-# divergence entre les deux points où la crypto doit être reconnue.
-CRYPTO_ASSETS: Tuple[str, ...] = ("BTCUSD", "ETHUSD")
+_CONFIRMATION_INDICES: Tuple[str, ...] = ("US30", "US100")
 
 
 def confirmation_indices(asset: str) -> Tuple[str, ...]:
@@ -90,44 +84,43 @@ def confirmation_indices(asset: str) -> Tuple[str, ...]:
         return ("US100",)
     if asset == "US100":
         return ("US30",)
-    return ("US30", "US100")
+    return _CONFIRMATION_INDICES
 
 
-def confirm_regime(client: CapitalClient, asset: str, direction: str, resolution: str, now: datetime) -> bool:
-    """Point d'entrée unique. Ne lève jamais d'exception : toute erreur
-    interne (indice illisible, historique insuffisant, réponse broker
-    incomplète) devient un ÉCHEC de confirmation (fail-safe, invariant
-    #7) — jamais un signal laissé passer sur un état indéterminé."""
-    try:
-        return _confirm_regime(client, asset, direction, resolution, now)
-    except Exception:
-        return False
+def compute_index_regimes(client: CapitalClient, resolution: str) -> Dict[str, Optional[str]]:
+    """Calcule le régime MA200 (`trend_strategy.compute_regime`) de US30
+    et US100 UNE SEULE FOIS — réutilisé ensuite pour dériver le régime
+    confirmé de tous les actifs qui en dépendent (`derive_confirmed_
+    regime`), au lieu d'un appel réseau par actif comme dans l'ancienne
+    conception (jusqu'à 8 appels par rafraîchissement, un par signal
+    généré). Seulement 2 appels au total par rafraîchissement, quel que
+    soit le nombre d'actifs de l'appelant.
+
+    Fail-safe PAR INDICE (invariant #7) : une erreur sur un indice donne
+    None pour cet indice seul (jamais une exception qui remonterait et
+    interromprait le rafraîchissement de l'autre) — `derive_confirmed_
+    regime` traite déjà None comme "non confirmé"."""
+    regimes: Dict[str, Optional[str]] = {}
+    for index_epic in _CONFIRMATION_INDICES:
+        try:
+            candles = get_candles(client, index_epic, resolution=resolution, count=_CANDLE_COUNT)
+            regimes[index_epic] = compute_regime(candles)
+        except Exception:
+            regimes[index_epic] = None
+    return regimes
 
 
-def _confirm_regime(client: CapitalClient, asset: str, direction: str, resolution: str, now: datetime) -> bool:
-    if now.tzinfo is None:
-        raise ValueError("`now` doit être timezone-aware (UTC)")
-
-    if asset in CRYPTO_ASSETS:
-        # Analyse continue (23/08/2026) : pas de session à faire
-        # correspondre à un indice actions, pass-through comme l'Asie.
-        return True
-
-    hour = now.astimezone(timezone.utc).hour
-
-    if hour == _ASIA_HOUR:
-        return True
-
-    if hour not in (_LONDON_HOUR, _NY_HOUR):
-        # Défensif : n'arrive jamais en usage normal, le gate de session
-        # de technical_strategy_executor.py restreint déjà l'appel à
-        # {0, 8, 13}. Fail-safe (invariant #7) si jamais atteint malgré
-        # tout — un état hors session inattendu bloque, ne laisse jamais
-        # passer silencieusement.
-        return False
-
-    for index_epic in confirmation_indices(asset):
-        candles = get_candles(client, index_epic, resolution=resolution, count=_CANDLE_COUNT)
-        if compute_regime(candles) != direction:
-            return False
-    return True
+def derive_confirmed_regime(asset: str, index_regimes: Dict[str, Optional[str]]) -> Optional[str]:
+    """À partir des régimes déjà calculés des indices (`compute_index_
+    regimes`), dérive le régime confirmé pour `asset` : "long"/"short" si
+    l'ensemble des indices requis (voir `confirmation_indices`)
+    concordent, None sinon (indice manquant, régime indéterminé, ou
+    désaccord — fail-safe, invariant #7, jamais un régime confirmé sur
+    une base incertaine). Pure, aucun appel réseau, aucune exception
+    possible (accès dict via `.get`, jamais un accès direct)."""
+    required = [index_regimes.get(index_epic) for index_epic in confirmation_indices(asset)]
+    if any(regime not in ("long", "short") for regime in required):
+        return None
+    if len(set(required)) == 1:
+        return required[0]
+    return None

@@ -49,7 +49,7 @@ def test_run_hypothesis5_loop_forwards_h5_credentials_and_resolution():
     _, kwargs = mock_loop.call_args
     assert kwargs["source"] == "hypothesis5"
     assert kwargs["resolution"] == "MINUTE_15"
-    assert kwargs["session_gated"] is True
+    assert "session_gated" not in kwargs  # paramètre retiré, voir docs/DECISIONS.md
     assert kwargs.get("require_regime_confirmation", False) is False
     assert kwargs["api_key"] == "key5"
     assert kwargs["identifier"] == "id5"

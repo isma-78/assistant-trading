@@ -1,33 +1,58 @@
 """
 technical_strategy_executor.py — Moteur générique de boucle autonome
 pour toute "stratégie technique complémentaire" (§2.11 du CDC) :
-Hypothèse #1 (`trend_executor.py`), #3 et #2 (nouveaux, 21/08/2026,
-voir docs/HYPOTHESES.md) en sont trois instances, chacune un simple jeu
-de paramètres passés à `run_technical_strategy_loop` ci-dessous.
+Hypothèse #1 (`trend_executor.py`), #2, #3, #4, #5 en sont des instances,
+chacune un simple jeu de paramètres passés à `run_technical_strategy_loop`
+ci-dessous.
 
 Extrait de `trend_executor.py` le 21/08/2026 (voir docs/DECISIONS.md) :
 avant cette date, la boucle de l'Hypothèse #1 était codée en dur dans ce
 fichier (résolution HOUR, source "hypothesis", 8 actifs...) — construire
-l'Hypothèse #3 (résolution M15) et #2 (détection différente) en copiant
-ce fichier trois fois aurait dupliqué ~150 lignes de logique de boucle
-identique (gestion des ordres, coupe-circuits, /stop_urgence, enveloppes)
-pour un seul vrai point de variation par hypothèse : quelle fonction de
-détection appeler, sur quelle résolution de bougie, avec quels
-identifiants/compte, quel jeu d'actifs. Centralisé ici une seule fois ;
-`trend_executor.py` (Hypothèse #1), `hypothesis3_executor.py` et
-`hypothesis2_executor.py` ne contiennent plus que leurs propres
-paramètres — un bug corrigé ici (ex: la gestion /stop_urgence) est
-corrigé pour les trois à la fois, jamais à re-corriger trois fois.
+les autres hypothèses en copiant ce fichier plusieurs fois aurait dupliqué
+~150 lignes de logique de boucle identique (gestion des ordres,
+coupe-circuits, /stop_urgence, enveloppes) pour un seul vrai point de
+variation par hypothèse : quelle fonction de détection appeler, sur
+quelle résolution de bougie, avec quels identifiants/compte, quel jeu
+d'actifs. Centralisé ici une seule fois ; `trend_executor.py` (Hypothèse
+#1) et les 4 `hypothesisN_executor.py` ne contiennent plus que leurs
+propres paramètres — un bug corrigé ici est corrigé pour toutes à la
+fois, jamais à re-corriger plusieurs fois.
 
 Comportement de l'Hypothèse #1 volontairement inchangé par cette
 extraction (mêmes appels, mêmes paramètres, testé par régression via
 tests/test_trend_executor.py, toujours vert après refactor) — TOUJOURS
-vrai après l'ajout de la couche session/multi-timeframe du 23/08/2026
-(`session_gated`/`require_regime_confirmation`, voir
+vrai après la couche session/multi-timeframe du 23/08/2026 et sa
+révision du même jour (`require_regime_confirmation`, voir
 docs/DECISIONS.md) : H1 n'appelle jamais `run_technical_strategy_loop`
-avec ces deux paramètres, ils restent à leur valeur par défaut (False),
-son comportement est donc inchangé par construction, pas seulement par
+avec ce paramètre, il reste à sa valeur par défaut (False), son
+comportement est donc inchangé par construction, pas seulement par
 absence de régression constatée.
+
+**RÉVISION MAJEURE du 23/08/2026, fin de journée** (conception corrigée
+d'Ismaël, voir docs/HYPOTHESES.md/docs/DECISIONS.md) — remplace la
+première version de la couche session/multi-timeframe du même jour :
+- La génération de NOUVEAUX SIGNAUX n'est plus gatée par la fenêtre de
+  session pour AUCUN actif, AUCUNE hypothèse. Le paramètre `session_
+  gated` et la fonction `_should_generate_signals` (avec l'exemption
+  crypto qui allait avec) sont retirés — devenus obsolètes puisque plus
+  aucune hypothèse n'a besoin de bloquer la génération. Chaque actif de
+  `assets` est évalué à CHAQUE cycle (~60s), toute la journée.
+- Pour H3/H4 (`require_regime_confirmation=True`), la confirmation de
+  régime croisée n'est plus recalculée à la volée pour chaque signal
+  individuel (ancien coût : jusqu'à 8 appels réseau par cycle, un par
+  signal généré) — elle est désormais un CONTEXTE mis en cache,
+  rafraîchi aux 3 ouvertures de session UTC (`SESSION_OPEN_HOURS_UTC`,
+  qui change donc de rôle : d'une porte sur la génération à une cadence
+  de rafraîchissement) PLUS une fois au démarrage du process (évite un
+  trou de plusieurs heures de confirmation absente après un
+  redémarrage/déploiement — écart mineur assumé par rapport à "calculée
+  aux 3 ouvertures" au sens strict, documenté dans docs/DECISIONS.md).
+  Entre deux rafraîchissements, le contexte en cache reste actif — un
+  trigger produit à N'IMPORTE QUELLE heure est comparé à ce contexte,
+  jamais recalculé pour lui seul. Avant le tout premier rafraîchissement
+  (aucun cache), le contexte est vide -> aucune confirmation possible ->
+  tout trigger H3/H4 est rejeté (fail-safe, invariant #7), jamais un
+  état indéterminé traité comme confirmé.
 
 Aucun LLM dans la décision d'entrée (invariant #1) — `entry_fn` est
 toujours une fonction déterministe pure (trend_strategy.evaluate_entry,
@@ -38,7 +63,7 @@ trade_analyzer.analyze_closed_trade (narratif post-trade uniquement).
 
 import logging
 from datetime import datetime, timezone
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import requests
 
@@ -55,42 +80,21 @@ from src.executor import (
 )
 from src.go_nogo import GoNoGoStatus
 from src.market_data import Candle, get_candles
-from src.regime_confirmation import CRYPTO_ASSETS, confirm_regime
+from src.regime_confirmation import compute_index_regimes, derive_confirmed_regime
 from src.risk_engine import RiskCaps, RiskEngine
 from src.trend_strategy import MA_PERIOD
 
-# Heures UTC d'ouverture de session (Asie/Londres/New York), couche
-# session/multi-timeframe du 23/08/2026 (voir docs/DECISIONS.md,
-# docs/HYPOTHESES.md) — H2/H3/H4/H5 UNIQUEMENT, jamais H1 (exclue de
-# toute cette couche, trend_executor.py n'appelle jamais
-# run_technical_strategy_loop avec session_gated=True). Bornes fixes,
-# faits calendaires au même titre que les fenêtres macro fixes du §2.9
-# — ne comptent pas dans le budget de paramètres §2.11 (décision
-# explicite d'Ismaël). Fenêtre = l'heure UTC pleine suivant chaque
-# ouverture (ex: 00h00-00h59 pour l'Asie), pas une largeur réglable
-# séparée — évite d'introduire un second paramètre non demandé.
+# Heures UTC d'ouverture de session (Asie/Londres/New York) — H2/H3/H4/H5
+# UNIQUEMENT, jamais H1. Depuis la révision du 23/08/2026 (voir docstring
+# du module), ce ne sont PLUS des bornes de génération de signaux : elles
+# fixent uniquement la cadence de rafraîchissement du contexte de régime
+# confirmé (`require_regime_confirmation`, H3/H4 seules). Bornes fixes,
+# faits calendaires au même titre que les fenêtres macro fixes du §2.9 —
+# ne comptent pas dans le budget de paramètres §2.11 (décision explicite
+# d'Ismaël, réaffirmée lors de cette révision).
 SESSION_OPEN_HOURS_UTC = (0, 8, 13)
 
 logger = logging.getLogger(__name__)
-
-
-def _should_generate_signals(session_gated: bool, hour_utc: int, asset: str) -> bool:
-    """Fonction pure, extraite pour être testable indépendamment de la
-    boucle infinie de `run_technical_strategy_loop`. `session_gated=
-    False` (cas de H1, jamais appelée avec ce paramètre) : toujours
-    True, comportement strictement inchangé.
-
-    Exemption crypto (23/08/2026, voir docs/DECISIONS.md) : BTCUSD/ETHUSD
-    (`regime_confirmation.CRYPTO_ASSETS`) ne sont jamais gatés par la
-    fenêtre de session — le marché crypto ne ferme jamais (contrairement
-    au forex/indices/GOLD, fermés hors session), une fenêtre calquée sur
-    les heures d'ouverture Asie/Londres/New York n'a pas de sens dessus.
-    Vérifiée avant `session_gated` : même pour H1 (jamais gatée de toute
-    façon) le résultat est identique, mais l'ordre documente clairement
-    que la crypto est un cas à part, pas un sous-cas du gate de session."""
-    if asset in CRYPTO_ASSETS:
-        return True
-    return not session_gated or hour_utc in SESSION_OPEN_HOURS_UTC
 
 # Marge au-delà de MA_PERIOD pour garantir un historique suffisant même
 # si quelques bougies manquent côté broker — indépendant de la
@@ -148,6 +152,7 @@ def _generate_and_queue_signal(
     channel: str, hypothesis_label: str,
     describe_signal: Optional[Callable[[str, str, object], str]] = None,
     require_regime_confirmation: bool = False,
+    confirmed_regime: Optional[str] = None,
 ) -> None:
     """Évalue `entry_fn` sur `asset` et, si un signal se déclenche et
     qu'aucun signal/trade de cette source n'est déjà actif dessus,
@@ -165,30 +170,28 @@ def _generate_and_queue_signal(
     mean_reversion_strategy.MeanReversionSignal) est écrit dans la
     colonne dédiée `signals.take_profit` si présente sur l'objet signal
     (`getattr`, jamais un accès direct — TrendSignal/ICT n'ont pas ce
-    champ) ; `signal.tp1`/`signal.tp2` (Hypothèse #5 UNIQUEMENT, voir
-    hypothesis5_strategy.Hypothesis5Signal — ajout du 23/08/2026, même
-    patron `getattr`) sont écrits dans les colonnes `signals.tp1`/`tp2`.
-    Un signal ne porte JAMAIS les deux à la fois (`take_profit` et
+    champ) ; `signal.tp1`/`signal.tp2` (Hypothèses #2/#3/#5, voir
+    hypothesis2_strategy.py/hypothesis3_strategy.py/hypothesis5_strategy.py
+    — même patron `getattr`) sont écrits dans les colonnes `signals.tp1`/
+    `tp2`. Un signal ne porte JAMAIS les deux à la fois (`take_profit` et
     `tp1`/`tp2` ciblent des dispatches de gestion de position mutuellement
     exclusifs dans `executor._evaluate_position_management`, voir
-    docs/DECISIONS.md, 21/08/2026 puis 23/08/2026) — pour H1/H2/H3
-    (TrendSignal/ICT, ni l'un ni l'autre champ), les trois colonnes
-    restent NULL, comme avant.
+    docs/DECISIONS.md) — pour H1 (TrendSignal nu, ni l'un ni l'autre
+    champ), les trois colonnes restent NULL, comme avant.
 
-    `require_regime_confirmation` (H3/H4 UNIQUEMENT, couche session/
-    multi-timeframe du 23/08/2026, voir docs/DECISIONS.md) : si True,
-    le signal produit par `entry_fn` est REJETÉ (jamais persisté) si
-    `regime_confirmation.confirm_regime` ne confirme pas — le
-    déclencheur propre à l'hypothèse (Donchian, Bollinger...) reste
-    inchangé, cette confirmation s'ajoute PAR-DESSUS, elle ne le
-    remplace jamais. False par défaut : H1 (jamais appelée avec ce
-    paramètre) et H2/H5 (option C, voir docs/HYPOTHESES.md — déjà
-    couvertes par leur régime structurel) ne sont jamais affectées.
-    Crypto (BTCUSD/ETHUSD) : `confirm_regime` retourne toujours True
-    pour ces deux actifs, quelle que soit l'heure (voir
-    `regime_confirmation.CRYPTO_ASSETS`) — géré à l'intérieur de
-    `confirm_regime`, pas ici, ce module reste agnostique de la liste
-    des actifs crypto."""
+    `require_regime_confirmation`/`confirmed_regime` (H3/H4 UNIQUEMENT,
+    révision du 23/08/2026 de la couche session/multi-timeframe, voir
+    docs/DECISIONS.md) : si `require_regime_confirmation` est True, le
+    signal produit par `entry_fn` est REJETÉ (jamais persisté) si sa
+    direction ne correspond pas à `confirmed_regime` — le contexte de
+    régime actuellement en cache, calculé et rafraîchi par l'appelant
+    (`run_technical_strategy_loop`, voir sa docstring), jamais recalculé
+    ici. Le déclencheur propre à l'hypothèse (Donchian, Bollinger...)
+    reste inchangé, cette confirmation s'ajoute PAR-DESSUS, elle ne le
+    remplace jamais. `require_regime_confirmation=False` par défaut : H1
+    (jamais appelée avec ce paramètre) et H2/H5 (option C, voir
+    docs/HYPOTHESES.md — déjà couvertes par leur régime structurel) ne
+    sont jamais affectées."""
     if _has_active_signal_or_trade(db_path, asset, source):
         return
 
@@ -197,14 +200,12 @@ def _generate_and_queue_signal(
     if signal is None:
         return
 
-    if require_regime_confirmation:
-        confirmed = confirm_regime(client, asset, signal.direction, resolution, datetime.now(timezone.utc))
-        if not confirmed:
-            logger.info(
-                "%s : signal %s sur %s rejeté par la confirmation de régime croisée (indice non aligné)",
-                hypothesis_label, signal.direction, asset,
-            )
-            return
+    if require_regime_confirmation and signal.direction != confirmed_regime:
+        logger.info(
+            "%s : signal %s sur %s rejeté — contexte de régime actuellement actif : %s",
+            hypothesis_label, signal.direction, asset, confirmed_regime,
+        )
+        return
 
     now = datetime.now(timezone.utc).isoformat()
     describe = describe_signal or _default_describe_signal
@@ -234,6 +235,19 @@ def _generate_and_queue_signal(
     )
 
 
+def _should_refresh_regime_context(last_refresh_hour: Optional[int], hour_utc: int) -> bool:
+    """Fonction pure, extraite pour être testable indépendamment de la
+    boucle infinie. True : au tout premier appel (`last_refresh_hour is
+    None` — pas de trou de plusieurs heures après un redémarrage) OU à
+    l'entrée dans une nouvelle heure d'ouverture de session
+    (`SESSION_OPEN_HOURS_UTC`) différente de la dernière déjà
+    rafraîchie — jamais deux fois pour la même heure (évite de marteler
+    l'API à chaque cycle de 60s pendant toute l'heure de session)."""
+    if last_refresh_hour is None:
+        return True
+    return hour_utc in SESSION_OPEN_HOURS_UTC and hour_utc != last_refresh_hour
+
+
 def run_technical_strategy_loop(
     config, db_path: str, *,
     source: str,
@@ -249,7 +263,6 @@ def run_technical_strategy_loop(
     hypothesis_label: str,
     describe_signal: Optional[Callable[[str, str, object], str]] = None,
     interval_seconds: int = 60,
-    session_gated: bool = False,
     require_regime_confirmation: bool = False,
 ) -> None:
     """Boucle continue générique d'une stratégie technique complémentaire
@@ -264,23 +277,24 @@ def run_technical_strategy_loop(
     §4.1, fail-safe par itération, invariant #7) — voir sa docstring pour
     le raisonnement détaillé, non dupliqué ici.
 
-    `session_gated`/`require_regime_confirmation` (couche session/
-    multi-timeframe du 23/08/2026, voir docs/DECISIONS.md) : False par
-    défaut — `trend_executor.py` (Hypothèse #1) n'appelle jamais cette
-    fonction avec l'un ou l'autre, donc H1 est byte pour byte inchangée
-    par cet ajout (aucun test de régression H1 ne peut échouer à cause
-    de ces deux paramètres, ils n'existent tout simplement pas dans son
-    appel). `session_gated=True` restreint la GÉNÉRATION DE NOUVEAUX
-    SIGNAUX aux heures UTC pleines suivant chaque ouverture de session
-    (`SESSION_OPEN_HOURS_UTC`) — la gestion des positions déjà ouvertes
-    (remplissages, annulations, trailing, coupe-circuits) continue à
-    CHAQUE itération, jamais gatée : geler la gestion du risque en
-    dehors des heures de session serait dangereux, pas juste
-    conservateur. Exemption crypto (23/08/2026, voir docs/DECISIONS.md) :
-    BTCUSD/ETHUSD ignorent `session_gated` (analyse continue, voir
-    `_should_generate_signals`) et `require_regime_confirmation`
-    (pass-through, voir `regime_confirmation.CRYPTO_ASSETS`) — le reste
-    des actifs de `assets` n'est pas affecté par cette exemption."""
+    `require_regime_confirmation` (H3/H4 UNIQUEMENT, révision du
+    23/08/2026 de la couche session/multi-timeframe, voir
+    docs/DECISIONS.md) : False par défaut — `trend_executor.py`
+    (Hypothèse #1) et H2/H5 n'appellent jamais cette fonction avec ce
+    paramètre, donc leur comportement est inchangé par construction.
+    Quand True, un CONTEXTE de régime confirmé (`{actif: "long"|"short"|
+    None}`) est maintenu en mémoire pour toute la durée du process,
+    rafraîchi via `regime_confirmation.compute_index_regimes` +
+    `derive_confirmed_regime` (`_should_refresh_regime_context` décide
+    quand) — jamais recalculé pour chaque signal individuel. La
+    génération de nouveaux signaux (`_generate_and_queue_signal`) tourne
+    à CHAQUE itération pour TOUS les actifs de `assets`, plus aucune
+    fenêtre de session ne la bloque (retiré le 23/08/2026, voir
+    docs/DECISIONS.md — l'ancien paramètre `session_gated` n'existe
+    plus). La gestion des positions déjà ouvertes (remplissages,
+    annulations, trailing, coupe-circuits) continue elle aussi à CHAQUE
+    itération, comme avant cette révision : geler la gestion du risque
+    serait dangereux, pas juste conservateur."""
     import time
 
     import anthropic
@@ -327,6 +341,14 @@ def run_technical_strategy_loop(
         key = (asset, source)
         envelope_ids[key], envelope_managers[key] = envelope_id, manager
 
+    # Contexte de régime confirmé (H3/H4 uniquement, voir docstring) —
+    # vide au démarrage : tant qu'aucun rafraîchissement n'a eu lieu,
+    # `regime_context.get(asset)` renvoie None pour tout actif, donc
+    # `_generate_and_queue_signal` rejette tout trigger (fail-safe,
+    # invariant #7) jusqu'au premier rafraîchissement.
+    regime_context: Dict[str, Optional[str]] = {}
+    last_regime_refresh_hour: Optional[int] = None
+
     logger.info(
         "Démarrage de la boucle %s (source=%s, résolution=%s, intervalle=%ds, %d actifs)",
         hypothesis_label, source, resolution, interval_seconds, len(assets),
@@ -363,15 +385,20 @@ def run_technical_strategy_loop(
                 time.sleep(interval_seconds)
                 continue
 
+            if require_regime_confirmation and _should_refresh_regime_context(last_regime_refresh_hour, now.hour):
+                index_regimes = compute_index_regimes(client, resolution)
+                regime_context = {asset: derive_confirmed_regime(asset, index_regimes) for asset in assets}
+                last_regime_refresh_hour = now.hour
+                logger.info("%s : contexte de régime rafraîchi -> %s", hypothesis_label, regime_context)
+
             for asset in assets:
-                if not _should_generate_signals(session_gated, now.hour, asset):
-                    continue
                 _generate_and_queue_signal(
                     db_path, client, asset,
                     source=source, resolution=resolution, entry_fn=entry_fn,
                     channel=channel, hypothesis_label=hypothesis_label,
                     describe_signal=describe_signal,
                     require_regime_confirmation=require_regime_confirmation,
+                    confirmed_regime=regime_context.get(asset),
                 )
 
             check_pending_fills(

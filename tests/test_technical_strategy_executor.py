@@ -11,7 +11,7 @@ test_trend_executor.py (dont l'existence, avant le refactor du
 """
 
 from dataclasses import dataclass
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -23,7 +23,7 @@ from src.technical_strategy_executor import (
     _default_describe_signal,
     _generate_and_queue_signal,
     _has_active_signal_or_trade,
-    _should_generate_signals,
+    _should_refresh_regime_context,
     run_technical_strategy_loop,
 )
 
@@ -212,8 +212,10 @@ def test_generate_and_queue_signal_persists_tp1_tp2_never_take_profit(tmp_path):
 
 
 def test_generate_and_queue_signal_regime_confirmed_persists(tmp_path):
-    # H3/H4 (require_regime_confirmation=True) : signal persisté si la
-    # confirmation croisée passe.
+    # H3/H4 (require_regime_confirmation=True) : signal persisté si le
+    # contexte de régime EN CACHE (fourni par l'appelant, plus recalculé
+    # ici) concorde avec la direction du trigger — révision du
+    # 23/08/2026, voir docs/DECISIONS.md.
     db_path = str(tmp_path / "t.db")
     init_db(db_path)
     client = MagicMock()
@@ -224,19 +226,12 @@ def test_generate_and_queue_signal_regime_confirmed_persists(tmp_path):
             "lowPrice": {"bid": 1.2, "ask": 1.2}, "closePrice": {"bid": 1.2, "ask": 1.2},
         }]
     }
-    with patch("src.technical_strategy_executor.confirm_regime", return_value=True) as mock_confirm:
-        _generate_and_queue_signal(
-            db_path, client, "EURUSD",
-            source="hypothesis3", resolution="MINUTE_15", entry_fn=_fake_entry_fn,
-            channel="hypothesis3_channel", hypothesis_label="Hypothèse #3",
-            require_regime_confirmation=True,
-        )
-    mock_confirm.assert_called_once()
-    args = mock_confirm.call_args[0]
-    assert args[0] is client
-    assert args[1] == "EURUSD"
-    assert args[2] == "long"
-    assert args[3] == "MINUTE_15"
+    _generate_and_queue_signal(
+        db_path, client, "EURUSD",
+        source="hypothesis3", resolution="MINUTE_15", entry_fn=_fake_entry_fn,
+        channel="hypothesis3_channel", hypothesis_label="Hypothèse #3",
+        require_regime_confirmation=True, confirmed_regime="long",
+    )
     conn = get_connection(db_path)
     try:
         assert conn.execute("SELECT COUNT(*) AS n FROM signals").fetchone()["n"] == 1
@@ -255,13 +250,12 @@ def test_generate_and_queue_signal_regime_not_confirmed_rejected(tmp_path):
             "lowPrice": {"bid": 1.2, "ask": 1.2}, "closePrice": {"bid": 1.2, "ask": 1.2},
         }]
     }
-    with patch("src.technical_strategy_executor.confirm_regime", return_value=False):
-        _generate_and_queue_signal(
-            db_path, client, "EURUSD",
-            source="hypothesis4", resolution="MINUTE_15", entry_fn=_fake_entry_fn,
-            channel="hypothesis4_channel", hypothesis_label="Hypothèse #4",
-            require_regime_confirmation=True,
-        )
+    _generate_and_queue_signal(
+        db_path, client, "EURUSD",
+        source="hypothesis4", resolution="MINUTE_15", entry_fn=_fake_entry_fn,
+        channel="hypothesis4_channel", hypothesis_label="Hypothèse #4",
+        require_regime_confirmation=True, confirmed_regime="short",
+    )
     conn = get_connection(db_path)
     try:
         assert conn.execute("SELECT COUNT(*) AS n FROM signals").fetchone()["n"] == 0
@@ -269,9 +263,10 @@ def test_generate_and_queue_signal_regime_not_confirmed_rejected(tmp_path):
         conn.close()
 
 
-def test_generate_and_queue_signal_no_confirmation_check_when_not_required(tmp_path):
-    # H2/H5 (require_regime_confirmation=False, défaut) : confirm_regime
-    # n'est jamais appelée — option C, voir docs/HYPOTHESES.md.
+def test_generate_and_queue_signal_regime_none_in_cache_rejected(tmp_path):
+    # Avant tout rafraîchissement (cache vide) ou indices en désaccord :
+    # confirmed_regime=None -> rejeté, fail-safe (invariant #7), jamais
+    # un régime confirmé sur un état indéterminé.
     db_path = str(tmp_path / "t.db")
     init_db(db_path)
     client = MagicMock()
@@ -282,13 +277,39 @@ def test_generate_and_queue_signal_no_confirmation_check_when_not_required(tmp_p
             "lowPrice": {"bid": 1.2, "ask": 1.2}, "closePrice": {"bid": 1.2, "ask": 1.2},
         }]
     }
-    with patch("src.technical_strategy_executor.confirm_regime") as mock_confirm:
-        _generate_and_queue_signal(
-            db_path, client, "EURUSD",
-            source="hypothesis2", resolution="MINUTE_15", entry_fn=_fake_entry_fn,
-            channel="hypothesis2_channel", hypothesis_label="Hypothèse #2",
-        )
-    mock_confirm.assert_not_called()
+    _generate_and_queue_signal(
+        db_path, client, "EURUSD",
+        source="hypothesis3", resolution="MINUTE_15", entry_fn=_fake_entry_fn,
+        channel="hypothesis3_channel", hypothesis_label="Hypothèse #3",
+        require_regime_confirmation=True, confirmed_regime=None,
+    )
+    conn = get_connection(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) AS n FROM signals").fetchone()["n"] == 0
+    finally:
+        conn.close()
+
+
+def test_generate_and_queue_signal_no_confirmation_check_when_not_required(tmp_path):
+    # H2/H5 (require_regime_confirmation=False, défaut) : le signal est
+    # persisté même si confirmed_regime ne concorde pas (ou est absent)
+    # — la comparaison n'est faite que si require_regime_confirmation
+    # est True. Option C, voir docs/HYPOTHESES.md.
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.return_value = {
+        "prices": [{
+            "snapshotTimeUTC": "2026-08-23T08:00:00Z",
+            "openPrice": {"bid": 1.2, "ask": 1.2}, "highPrice": {"bid": 1.2, "ask": 1.2},
+            "lowPrice": {"bid": 1.2, "ask": 1.2}, "closePrice": {"bid": 1.2, "ask": 1.2},
+        }]
+    }
+    _generate_and_queue_signal(
+        db_path, client, "EURUSD",
+        source="hypothesis2", resolution="MINUTE_15", entry_fn=_fake_entry_fn,
+        channel="hypothesis2_channel", hypothesis_label="Hypothèse #2",
+    )
     conn = get_connection(db_path)
     try:
         assert conn.execute("SELECT COUNT(*) AS n FROM signals").fetchone()["n"] == 1
@@ -296,45 +317,33 @@ def test_generate_and_queue_signal_no_confirmation_check_when_not_required(tmp_p
         conn.close()
 
 
-# --- _should_generate_signals (gate de session, 23/08/2026) -----------------
+# --- _should_refresh_regime_context (23/08/2026, révision fin de journée) ---
 
-def test_should_generate_signals_not_gated_always_true():
-    # H1 : jamais appelée avec session_gated=True, toujours True.
+def test_should_refresh_regime_context_true_on_first_call_any_hour():
+    # Pas de trou de plusieurs heures après un redémarrage — rafraîchi
+    # dès le premier appel, quelle que soit l'heure.
     for hour in range(24):
-        assert _should_generate_signals(session_gated=False, hour_utc=hour, asset="EURUSD") is True
+        assert _should_refresh_regime_context(last_refresh_hour=None, hour_utc=hour) is True
 
 
-def test_should_generate_signals_gated_true_on_session_open_hours():
+def test_should_refresh_regime_context_true_on_new_session_open_hour():
+    assert _should_refresh_regime_context(last_refresh_hour=0, hour_utc=8) is True
+    assert _should_refresh_regime_context(last_refresh_hour=8, hour_utc=13) is True
+
+
+def test_should_refresh_regime_context_false_same_hour_already_refreshed():
     for hour in SESSION_OPEN_HOURS_UTC:
-        assert _should_generate_signals(session_gated=True, hour_utc=hour, asset="EURUSD") is True
+        assert _should_refresh_regime_context(last_refresh_hour=hour, hour_utc=hour) is False
 
 
-def test_should_generate_signals_gated_false_outside_session_open_hours():
+def test_should_refresh_regime_context_false_outside_session_open_hours():
     for hour in range(24):
         if hour not in SESSION_OPEN_HOURS_UTC:
-            assert _should_generate_signals(session_gated=True, hour_utc=hour, asset="EURUSD") is False
+            assert _should_refresh_regime_context(last_refresh_hour=0, hour_utc=hour) is False
 
 
 def test_session_open_hours_are_asia_london_ny():
     assert SESSION_OPEN_HOURS_UTC == (0, 8, 13)
-
-
-# --- _should_generate_signals — exemption crypto (23/08/2026) ---------------
-
-def test_should_generate_signals_crypto_always_true_gated_any_hour():
-    # BTCUSD/ETHUSD : analyse continue, jamais gatée par la session,
-    # quelle que soit l'heure UTC.
-    for asset in ("BTCUSD", "ETHUSD"):
-        for hour in range(24):
-            assert _should_generate_signals(session_gated=True, hour_utc=hour, asset=asset) is True
-
-
-def test_should_generate_signals_non_crypto_unaffected_by_crypto_exemption():
-    # Garde-fou de non-régression : l'exemption crypto ne change rien
-    # pour les 6 autres actifs de la liste blanche.
-    for asset in ("GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY"):
-        assert _should_generate_signals(session_gated=True, hour_utc=5, asset=asset) is False
-        assert _should_generate_signals(session_gated=True, hour_utc=8, asset=asset) is True
 
 
 def test_generate_and_queue_signal_uses_custom_describe_signal(tmp_path):
