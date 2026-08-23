@@ -1502,5 +1502,152 @@ de la validation d'Ismaël avant toute implémentation.
 
 ---
 
+## 2026-08-23 — Couche session/multi-timeframe : les 4 points tranchés par Ismaël, conception finale — TOUJOURS AUCUN CODE, en attente de validation finale
+
+Les 4 décisions d'Ismaël sur l'entrée précédente :
+1. **Périmètre** : H2/H3/H4/H5 uniquement — **H1 exclue intégralement**,
+   inchangée (`trend_executor.py` non touché).
+2. **H2/H5** : option C — pas de confirmation tendance/contre-tendance
+   (déjà couvertes par leur régime structurel BOS/CHoCH). Reçoivent
+   uniquement la fenêtre de session et l'exécution M15/M30.
+3. **Indice boursier** : US30/US100 (déjà liste blanche) pour
+   Londres/New York ; aucun indice pour la session Asie, indicateur
+   technique seul.
+4. **Budget §2.11** : les bornes de session fixes (00h/08h/13h UTC) ne
+   comptent pas dans le budget 2-3 paramètres — faits calendaires,
+   même principe que les fenêtres macro fixes du §2.9.
+
+Sur cette base, conception complète ci-dessous — **une ambiguïté
+subsiste et est signalée, pas résolue silencieusement** (voir "Point
+restant" plus bas).
+
+### Mécanique de la fenêtre de session (précision, découle de la décision #4)
+
+Gate binaire sur l'heure UTC courante de la boucle : évaluation d'entrée
+autorisée uniquement si `heure_utc ∈ {0, 8, 13}` (l'heure pleine
+suivant chaque ouverture — 00h00-00h59, 08h00-08h59, 13h00-13h59), pas
+une fenêtre à largeur réglable séparée — cohérent avec la décision #4
+(fait calendaire fixe), évite d'introduire un second paramètre de
+largeur non demandé.
+
+### Régime de fond commun H3/H4 — mécanisme proposé pour résoudre "quel indicateur technique"
+
+Ni la demande initiale ni les 4 décisions ne précisent QUEL indicateur
+technique sert de confirmation — un nouvel indicateur (ex. ADX) exigerait
+sa propre justification théorique a priori (invariant #10) avant d'être
+seulement envisagé. **Proposition pour éviter d'en introduire un** :
+réutiliser `trend_strategy.compute_regime` (déjà niveau 1 commun à
+H1/H3/H4, MA200) tel quel, appliqué à l'indice de confirmation au lieu
+d'un nouvel indicateur — combiné en ET avec le régime déjà calculé sur
+l'actif (§2.10 de la proposition précédente). Zéro nouvelle logique de
+calcul, zéro nouveau type d'indicateur : uniquement une seconde
+application de la même fonction, à un second instrument.
+
+- **Session Asie (0h)** : régime MA200 de l'actif seul (déjà existant,
+  niveau 1 — aucun changement, la confirmation "technique seule" de la
+  décision #3 est donc un pass-through, sans filtrage additionnel pour
+  cette session).
+- **Sessions Londres/NY (8h/13h)** : régime MA200 de l'actif ET régime
+  MA200 de l'indice (US30 ET US100, les deux — pas un choix entre les
+  deux, cohérent avec le ET déjà retenu pour la règle de combinaison,
+  jamais une règle différente pour un cas particulier) doivent
+  concorder.
+- **Mécanisme partagé entre H3 et H4**, pas deux calculs séparés : les
+  deux utilisent déjà `compute_regime` comme niveau 1 (H4 : "identique à
+  H1/H3", voir son entrée d'origine) — la confirmation par indice est la
+  MÊME extension pour les deux, jamais un second choix indépendant.
+- **H3 (tendance)** : la rupture de canal Donchian ne se déclenche que
+  si ce régime confirmé (actif + indice) est établi.
+- **H4 (contre-tendance)** : le toucher de bande Bollinger ne se
+  déclenche que sous le même régime confirmé — H4 fade une extension
+  COURT TERME à l'intérieur d'un régime de fond LONG TERME toujours
+  confirmé, jamais le régime lui-même (cohérent avec son garde-fou
+  d'origine : "ne fade jamais contre le régime de fond").
+
+**Point restant, pas tranché par les 4 décisions** : cette lecture
+(réutiliser `compute_regime` plutôt qu'un nouvel indicateur) est ma
+proposition pour éviter d'introduire une variable non justifiée a
+priori — à confirmer explicitement avant tout code, ce n'est pas
+automatiquement ce qu'"indicateur technique" désignait dans la demande
+d'origine.
+
+### M15/M30 — exécution de l'entrée
+
+Choix entre les deux non tranché par la demande d'origine. Proposition :
+**M15**, pas M30 — déjà la résolution de H3 (aucun troisième palier de
+temps à maintenir dans le projet), écart minimal. M30 écarté comme
+alternative (pas de raison théorique de préférer un troisième palier
+inédit à une valeur déjà éprouvée en production).
+
+- **H2, H4** : passent de HOUR à M15 pour l'évaluation d'entrée (leur
+  résolution actuelle, HOUR, est remplacée).
+- **H3** : déjà M15 — **aucun changement**, ce point est un no-op pour
+  elle.
+- **H5** : voir "Blocage budget" ci-dessous — pas appliqué en l'état.
+
+### Budget de variables final, par hypothèse
+
+| Hypothèse | Budget existant | Nouveau(x) paramètre(s) | Total | Statut |
+|---|---|---|---|---|
+| H1 | 1/3 (Donchian N=20) | — (exclue) | 1/3 | inchangée |
+| H2 | 1/3 (K=2) | +1 (timeframe M15, HOUR→M15) | 2/3 | dans le budget |
+| H3 | 1/3 (Donchian N=20) | +1 (indices de confirmation US30+US100, partagé avec H4, compté une seule fois) | 2/3 | dans le budget |
+| H4 | 2/3 (config bandes + multiplicateur stop) | +0 (indices, déjà comptés côté H3) +1 (timeframe M15) | 3/3 | **au plafond, zéro marge** |
+| H5 | 3/3 (config RSI + TP1 R + TP2 R, déjà au plafond) | +1 (timeframe M15) | **4/3** | **DÉPASSE LE PLAFOND** |
+
+Le partage du paramètre "indices de confirmation" entre H3 et H4 (compté
+une seule fois, comme la réutilisation MA200/Donchian(20) de H3 vis-à-vis
+de H1) est un jugement de ma part, pas un précédent identique — à
+confirmer : la valeur ET le mécanisme sont strictement identiques pour
+les deux, mais c'est la première fois que DEUX hypothèses INTRODUISENT
+un même paramètre simultanément plutôt que l'une réutilisant l'acquis de
+l'autre.
+
+### Blocage budget non résolu par les 4 décisions : H5 dépasse le plafond
+
+Même après l'option C (aucune confirmation de régime pour H5) et la
+gratuité des bornes de session (décision #4), **le seul ajout du
+changement de timeframe (HOUR→M15) fait passer H5 de 3/3 à 4/3** —
+au-delà du plafond 2-3 de §2.11. La fenêtre de session, elle, ne coûte
+rien (décision #4) et peut s'appliquer à H5 sans problème.
+
+**Deux options, je ne tranche pas** :
+- **Option 1** : H5 exclue du changement de timeframe (reste HOUR),
+  comme H1 est exclue de toute la couche — H5 reçoit alors UNIQUEMENT la
+  fenêtre de session, reste à 3/3, aucun dépassement.
+- **Option 2** : le plafond est explicitement dépassé pour H5 par
+  décision assumée d'Ismaël (comme le §3.9 "3 hypothèses par cycle" a
+  déjà été explicitement dépassé en démo pour H4/H5, voir l'entrée du
+  21/08/2026) — dans ce cas, le journaliser comme un écart assumé, pas
+  un oubli.
+
+### Résumé de la conception finale par hypothèse
+
+- **H1** : totalement inchangée.
+- **H2** : confluence ICT inchangée (entrée) ; ajoute fenêtre de session
+  (0h/8h/13h, gratuite) + exécution M15 (HOUR→M15, 1 nouveau paramètre).
+  Aucune confirmation de régime (option C). Budget 2/3.
+- **H3** : rupture Donchian inchangée (entrée) ; ajoute fenêtre de
+  session (gratuite) + confirmation de régime actif+indice (US30 ET
+  US100 pour Londres/NY, technique seul pour Asie — 1 nouveau paramètre
+  partagé avec H4). Timeframe déjà M15, aucun changement. Budget 2/3.
+- **H4** : Bollinger/contre-tendance inchangé (entrée) ; ajoute fenêtre
+  de session (gratuite) + même confirmation de régime que H3 (partagée,
+  déjà comptée) + exécution M15 (HOUR→M15, 1 nouveau paramètre). Budget
+  3/3, au plafond.
+- **H5** : ICT+RSI inchangé (entrée) ; ajoute fenêtre de session
+  (gratuite) uniquement. Exécution M15 **en attente de la décision
+  Option 1/2 ci-dessus** avant d'être confirmée ou écartée.
+
+### Discipline inchangée
+
+Trades existants gardent leurs `regime_type`/`exit_type` d'origine,
+jamais mélangés. Aucun code, aucun test, aucune migration DB — en
+attente de la validation finale d'Ismaël (incluant le point restant sur
+l'indicateur technique et le blocage budget H5 ci-dessus) avant toute
+construction.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4 ou #5 — jamais une modification de ce qui précède.*
