@@ -166,11 +166,39 @@ simultanées, jamais 4. Aucun changement de code (`hypothesis_engine` du
 ### 5. Déploiement réel — H2 (bascule) et H5 (nouveau déploiement)
 
 Autorisation explicite d'Ismaël ("déploiement réel autorisé dès que la
-construction est terminée, pas d'attente cette fois"). Détail de la
-vérification en direct effectuée avant/après déploiement (VPS, logs,
-requêtes réelles — même niveau que l'audit des 4 flux du 21/08/2026) :
-voir l'entrée séparée ci-dessous, écrite après coup avec les résultats
-constatés, pas avant.
+construction est terminée, pas d'attente cette fois"). Vérification en
+direct effectuée AVANT et APRÈS déploiement (VPS, logs, requêtes
+réelles — même niveau que l'audit des 4 flux du 21/08/2026), résultats
+constatés ci-dessous, pas seulement une relecture de code :
+
+- `git pull` sur le VPS (fast-forward propre), suite complète (633
+  tests) rejouée SUR LE VPS (pas seulement en local) : verte.
+- `hypothesis2_executor` redémarré (nouvelle session tmux — l'ancienne
+  s'est fermée d'elle-même après l'arrêt du process, aucune perte : les
+  autres process n'ont jamais été touchés, `tmux ls` vérifié avant/
+  après). Migration confirmée par une requête SQL réelle sur la base de
+  production : les 3 trades H2 déjà en base (pas 2 comme initialement
+  estimé) sont bien `regime_type='ma200'`, colonne créée.
+- Process surveillé en direct (~10 minutes, boucle de sondage dédiée
+  jusqu'à extinction ou trace d'erreur) : aucune exception, aucun
+  redémarrage, même PID du début à la fin.
+- Les 6 autres process (`executor_loop`, `trend_executor`,
+  `hypothesis3_executor`, `hypothesis4_executor`, `control_bot`,
+  `telegram_listener`) vérifiés vivants et inchangés (mêmes PID/horaires
+  de création) avant et après — jamais touchés, comme prévu (leur code
+  décisionnel propre n'a pas changé).
+- Isolation des sources vérifiée par requête réelle sur `envelopes` :
+  40 lignes (8 actifs × 5 sources : `hypothesis`/`hypothesis2`/
+  `hypothesis3`/`hypothesis4`/`stationx`), soldes tous distincts et
+  cohérents avec l'historique de chaque flux — aucune fuite croisée.
+- `hypothesis5_executor.run_hypothesis5_loop` exécuté manuellement sur
+  le VPS (dry-run, sans toucher au broker) avec la config RÉELLE :
+  lève bien `ConfigError` ("identifiants Capital.com manquants pour la
+  source 'hypothesis5'"), confirmant que le fail-safe fonctionne
+  correctement avec l'état réel (incomplet) du `.env` — voir ci-dessous.
+- `logs/watchdog_cron.log` vérifié sur la fenêtre du redémarrage H2 :
+  aucune alerte "process manquant" déclenchée (la coupure était plus
+  courte que l'intervalle de sondage de 5 minutes du watchdog).
 
 **Identifiants H5 — écart trouvé entre la demande et l'état réel du
 VPS, signalé plutôt que contourné** : la demande indiquait "les
