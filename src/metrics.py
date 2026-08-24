@@ -54,7 +54,20 @@ HYPOTHESIS3_SOURCE = "hypothesis3"  # Hypothèse #3
 HYPOTHESIS2_SOURCE = "hypothesis2"  # Hypothèse #2
 HYPOTHESIS4_SOURCE = "hypothesis4"  # Hypothèse #4 (21/08/2026 — validée en démo, non déployée)
 HYPOTHESIS5_SOURCE = "hypothesis5"  # Hypothèse #5 (23/08/2026 — non déployée)
-_KNOWN_HYPOTHESIS_SOURCES = {HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE, HYPOTHESIS4_SOURCE, HYPOTHESIS5_SOURCE}
+# Backtest rétrospectif (24/08/2026, voir docs/HYPOTHESES.md) : sources
+# TOUJOURS distinctes des sources live ci-dessus — jamais mélangées dans
+# le même calcul de métriques (backtest_engine.py, scripts/run_
+# retrospective_backtest.py).
+HYPOTHESIS_BACKTEST_SOURCE = "hypothesis_backtest"
+HYPOTHESIS2_BACKTEST_SOURCE = "hypothesis2_backtest"
+HYPOTHESIS3_BACKTEST_SOURCE = "hypothesis3_backtest"
+HYPOTHESIS4_BACKTEST_SOURCE = "hypothesis4_backtest"
+HYPOTHESIS5_BACKTEST_SOURCE = "hypothesis5_backtest"
+_KNOWN_HYPOTHESIS_SOURCES = {
+    HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE, HYPOTHESIS4_SOURCE, HYPOTHESIS5_SOURCE,
+    HYPOTHESIS_BACKTEST_SOURCE, HYPOTHESIS2_BACKTEST_SOURCE, HYPOTHESIS3_BACKTEST_SOURCE,
+    HYPOTHESIS4_BACKTEST_SOURCE, HYPOTHESIS5_BACKTEST_SOURCE,
+}
 
 
 def _normalize_source(source: str) -> str:

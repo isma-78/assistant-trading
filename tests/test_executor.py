@@ -18,9 +18,11 @@ from src.capital_client import CapitalApiError
 from src.capital_manager import CapitalManager
 from src.db import connection_scope, get_connection, init_db
 from src.envelope_store import load_or_create_envelope
+from src.confidence_scorer import PHASE_A_MIN_TRADES_BACKTEST
 from src.executor import (
     ManagementActionType,
     OpenTradeState,
+    _check_backtest_confidence_gate,
     _compute_guaranteed_stop_adjustment,
     _is_stationx_source,
     cancel_stale_working_orders,
@@ -1832,6 +1834,152 @@ def test_open_signal_within_exposure_cap_still_approved(tmp_path):
         confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
     )
 
+    assert result == "deal-new"
+
+
+# --- _check_backtest_confidence_gate / open_signal (Option B, 24/08/2026) -
+
+def _insert_closed_backtest_trades(db_path, actif, source, n, r_multiple, spread=0.1, stop_distance=3.0):
+    for i in range(n):
+        signal_row = _insert_signal(db_path, actif=actif, source=source, telegram_msg_id=1000 + i)
+        with connection_scope(db_path) as conn:
+            conn.execute(
+                "INSERT INTO trades (signal_id, source, actif, mode, direction, taille_initiale, "
+                "prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
+                "pourcentage_risque_applique, ouvert_at, ferme_at, r_multiple_total, statut) "
+                "VALUES (?, ?, ?, 'demo', 'long', 0.01, 100.0, ?, 100.0, 10.0, 2.0, "
+                "'2026-08-01T00:00:00Z', ?, ?, 'ferme')",
+                (signal_row["id"], source, actif, 100.0 - stop_distance,
+                 f"2026-08-{(i % 27) + 1:02d}T00:00:00Z", r_multiple),
+            )
+            conn.execute(
+                "INSERT INTO market_snapshots (signal_id, bid, ask, spread, captured_at) "
+                "VALUES (?, 1.0, 1.0, ?, '2026-08-01T00:00:00Z')",
+                (signal_row["id"], spread),
+            )
+
+
+def test_check_backtest_confidence_gate_noop_for_stationx(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
+    _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", PHASE_A_MIN_TRADES_BACKTEST, r_multiple=-0.5)
+    assert _check_backtest_confidence_gate(db_path, "GOLD", "stationx", 2.0) is None
+    assert _check_backtest_confidence_gate(db_path, "GOLD", "station_x", 2.0) is None
+
+
+def test_check_backtest_confidence_gate_noop_when_not_eligible(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
+    # Pas assez de trades backtest (< PHASE_A_MIN_TRADES_BACKTEST) -> jamais éligible.
+    _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", 10, r_multiple=-0.5)
+    assert _check_backtest_confidence_gate(db_path, "GOLD", "hypothesis5", 2.0) is None
+
+
+def test_check_backtest_confidence_gate_noop_when_expectancy_positive(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
+    _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", PHASE_A_MIN_TRADES_BACKTEST, r_multiple=0.5)
+    assert _check_backtest_confidence_gate(db_path, "GOLD", "hypothesis5", 2.0) is None
+
+
+def test_check_backtest_confidence_gate_blocks_when_expectancy_negative(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
+    _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", PHASE_A_MIN_TRADES_BACKTEST, r_multiple=-0.5)
+    detail = _check_backtest_confidence_gate(db_path, "GOLD", "hypothesis5", 2.0)
+    assert detail is not None
+    assert "hypothesis5_backtest" in detail
+    assert "espérance" in detail.lower()
+
+
+def test_open_signal_rejected_by_backtest_confidence_gate(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
+    _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", PHASE_A_MIN_TRADES_BACKTEST, r_multiple=-0.5)
+    signal_row = _insert_signal(db_path, source="hypothesis5", confiance=1.0)
+
+    client = MagicMock()
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result is None
+    client.get_market_snapshot.assert_not_called()  # court-circuité avant tout appel broker
+    conn = get_connection(db_path)
+    try:
+        decision = conn.execute(
+            "SELECT * FROM risk_decisions WHERE signal_id = ?", (signal_row["id"],)
+        ).fetchone()
+        assert decision["reason"] == "backtest_confidence_gate"
+        assert conn.execute("SELECT COUNT(*) AS n FROM trades WHERE source = 'hypothesis5'").fetchone()["n"] == 0
+    finally:
+        conn.close()
+
+
+def test_open_signal_not_blocked_when_backtest_data_insufficient(tmp_path):
+    # Aucune donnée backtest pour ce couple -> le garde-fou ne fait rien,
+    # comportement inchangé (approuvé normalement).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, source="hypothesis5", confiance=1.0)
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-new", "level": 100.0}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+    assert result == "deal-new"
+
+
+def test_open_signal_not_blocked_when_backtest_expectancy_positive(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
+    _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", PHASE_A_MIN_TRADES_BACKTEST, r_multiple=0.5)
+    signal_row = _insert_signal(db_path, source="hypothesis5", confiance=1.0)
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-new", "level": 100.0}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+    assert result == "deal-new"
+
+
+def test_open_signal_never_gated_for_stationx_even_with_negative_backtest_data(tmp_path):
+    # Le garde-fou Option B ne concerne jamais Station X — vérifié même
+    # en présence de données backtest négatives sous un nom de source
+    # backtest qui, par erreur, ressemblerait à Station X (défense en
+    # profondeur : _BACKTEST_SOURCE_BY_LIVE_SOURCE ne contient pas
+    # "stationx"/"station_x" comme clé).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, source="station_x", confiance=1.0)
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-new", "level": 100.0}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
     assert result == "deal-new"
 
 

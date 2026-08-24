@@ -54,7 +54,7 @@ from typing import Callable, List, Optional, Tuple
 
 import requests
 
-from src import circuit_breaker_store
+from src import circuit_breaker_store, confidence_scorer
 from src.audit_notifier import (
     format_trade_closed_notification,
     format_trade_opened_notification,
@@ -117,7 +117,31 @@ HYPOTHESIS3_SOURCE = "hypothesis3"  # Hypothèse #3 (docs/HYPOTHESES.md, 21/08/2
 HYPOTHESIS2_SOURCE = "hypothesis2"  # Hypothèse #2 (docs/HYPOTHESES.md, 21/08/2026)
 HYPOTHESIS4_SOURCE = "hypothesis4"  # Hypothèse #4 (docs/HYPOTHESES.md, 21/08/2026 — validée en démo, non déployée)
 HYPOTHESIS5_SOURCE = "hypothesis5"  # Hypothèse #5 (docs/HYPOTHESES.md, 23/08/2026 — sortie §2.10 sur l'entrée ICT de H2, non déployée)
-_KNOWN_HYPOTHESIS_SOURCES = {HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE, HYPOTHESIS4_SOURCE, HYPOTHESIS5_SOURCE}
+# Backtest rétrospectif (24/08/2026, voir docs/HYPOTHESES.md) : sources
+# TOUJOURS distinctes des sources live ci-dessus — jamais mélangées dans
+# le même calcul de métriques (backtest_engine.py, scripts/run_
+# retrospective_backtest.py).
+HYPOTHESIS_BACKTEST_SOURCE = "hypothesis_backtest"
+HYPOTHESIS2_BACKTEST_SOURCE = "hypothesis2_backtest"
+HYPOTHESIS3_BACKTEST_SOURCE = "hypothesis3_backtest"
+HYPOTHESIS4_BACKTEST_SOURCE = "hypothesis4_backtest"
+HYPOTHESIS5_BACKTEST_SOURCE = "hypothesis5_backtest"
+_KNOWN_HYPOTHESIS_SOURCES = {
+    HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE, HYPOTHESIS4_SOURCE, HYPOTHESIS5_SOURCE,
+    HYPOTHESIS_BACKTEST_SOURCE, HYPOTHESIS2_BACKTEST_SOURCE, HYPOTHESIS3_BACKTEST_SOURCE,
+    HYPOTHESIS4_BACKTEST_SOURCE, HYPOTHESIS5_BACKTEST_SOURCE,
+}
+
+# Correspondance source live -> source backtest, pour le garde-fou Option
+# B (voir open_signal ci-dessous et docs/HYPOTHESES.md, 24/08/2026) —
+# jamais Station X (hors périmètre de cette demande).
+_BACKTEST_SOURCE_BY_LIVE_SOURCE = {
+    HYPOTHESIS_SOURCE: HYPOTHESIS_BACKTEST_SOURCE,
+    HYPOTHESIS2_SOURCE: HYPOTHESIS2_BACKTEST_SOURCE,
+    HYPOTHESIS3_SOURCE: HYPOTHESIS3_BACKTEST_SOURCE,
+    HYPOTHESIS4_SOURCE: HYPOTHESIS4_BACKTEST_SOURCE,
+    HYPOTHESIS5_SOURCE: HYPOTHESIS5_BACKTEST_SOURCE,
+}
 
 # Résolution de bougie utilisée pour recalculer le canal de Donchian du
 # trailing (§2.11) de chaque hypothèse — Station X n'y figure jamais
@@ -587,6 +611,53 @@ def _compute_guaranteed_stop_adjustment(
     return GuaranteedStopAdjustment(stop_price=widened_stop_price, stop_distance=min_distance, guaranteed_required=True, widened=True)
 
 
+def _check_backtest_confidence_gate(db_path: str, asset: str, source: str, risk_percent: float) -> Optional[str]:
+    """Garde-fou Option B (24/08/2026, voir docs/HYPOTHESES.md) : rejette
+    un signal AVANT tout calcul de sizing si le backtest rétrospectif du
+    couple (actif, hypothèse) est ÉLIGIBLE (seuils backtest, plus stricts
+    que le live — `confidence_scorer.PHASE_A_MIN_TRADES_BACKTEST`/
+    `PHASE_B_MIN_TRADES_BACKTEST`) ET que son espérance nette est ≤ 0.
+    Ne s'applique JAMAIS à Station X (source absente de `_BACKTEST_
+    SOURCE_BY_LIVE_SOURCE`). Retourne le détail du rejet, ou None si le
+    signal doit continuer son chemin normal (source non concernée,
+    couple backtest pas encore éligible, ou espérance positive) — dans
+    TOUS ces cas "None", ce garde-fou est un pur no-op, comportement live
+    strictement inchangé (vrai par construction tant qu'aucun backtest
+    n'a été exécuté pour ce couple : `eligible` reste alors False).
+
+    N'augmente jamais le risque (ne fait que refuser, jamais moduler à
+    la hausse) — `risk_engine.py` n'est pas modifié par ce garde-fou.
+
+    Corrigé pendant les tests (24/08/2026, voir docs/DECISIONS.md) :
+    n'utilise PAS `ConfidenceScore.eligible` comme critère "assez de
+    données" — `evaluate_confidence` (§2.4) exige une espérance nette
+    STRICTEMENT POSITIVE parmi ses conditions éliminatoires (c'est un
+    score de PROMOTION vers le réel), donc `eligible` est TOUJOURS False
+    dès que l'espérance est ≤ 0 : utiliser `eligible` ici aurait rendu ce
+    garde-fou définitivement inatteignable, exactement le cas qu'il doit
+    détecter. La suffisance d'échantillon est vérifiée séparément via
+    `check_min_trades` (mêmes seuils backtest), découplée du signe de
+    l'espérance."""
+    backtest_source = _BACKTEST_SOURCE_BY_LIVE_SOURCE.get(source)
+    if backtest_source is None:
+        return None
+    score = confidence_scorer.compute_confidence_score(
+        db_path, asset, backtest_source, risk_percent,
+        phase_a_min_trades=confidence_scorer.PHASE_A_MIN_TRADES_BACKTEST,
+        phase_b_min_trades=confidence_scorer.PHASE_B_MIN_TRADES_BACKTEST,
+    )
+    enough_data, _, phase = confidence_scorer.check_min_trades(
+        score.nb_trades, confidence_scorer.PHASE_A_MIN_TRADES_BACKTEST, confidence_scorer.PHASE_B_MIN_TRADES_BACKTEST,
+    )
+    if not enough_data or score.esperance_r is None or score.esperance_r > 0:
+        return None
+    return (
+        f"Backtest rétrospectif ({backtest_source}) : {score.nb_trades} trades (phase {phase}) "
+        f"avec une espérance nette ≤ 0 ({score.esperance_r:.4f}R) — "
+        "signal rejeté avant sizing (garde-fou Option B, docs/HYPOTHESES.md 24/08/2026)"
+    )
+
+
 def open_signal(
     db_path: str, client: CapitalClient, signal_row, risk_engine: RiskEngine, whitelist: dict,
     envelope_manager: CapitalManager, envelope_id: int, confidence_threshold: float, go_nogo_status: GoNoGoStatus,
@@ -634,6 +705,20 @@ def open_signal(
             )
             conn.execute("UPDATE signals SET statut = 'rejete' WHERE id = ?", (signal_row["id"],))
         logger.info("Signal %s rejeté : coupe-circuit actif (%s)", signal_row["id"], block_reason)
+        return None
+
+    backtest_gate_detail = _check_backtest_confidence_gate(
+        db_path, asset, signal_row["source"], risk_engine.caps.risk_percent_default,
+    )
+    if backtest_gate_detail is not None:
+        with connection_scope(db_path) as conn:
+            conn.execute(
+                "INSERT INTO risk_decisions (signal_id, decided_at, approved, reason, detail, units, risk_amount_eur) "
+                "VALUES (?, ?, 0, 'backtest_confidence_gate', ?, NULL, NULL)",
+                (signal_row["id"], now, backtest_gate_detail),
+            )
+            conn.execute("UPDATE signals SET statut = 'rejete' WHERE id = ?", (signal_row["id"],))
+        logger.info("Signal %s rejeté : %s", signal_row["id"], backtest_gate_detail)
         return None
 
     snapshot = get_price_snapshot(client, epic)

@@ -12,6 +12,132 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-24 (soir) — Backtest rétrospectif (§2.11) : implémentation, correctif trouvé pendant les tests, déploiement
+
+Suite au pré-enregistrement complet dans `docs/HYPOTHESES.md` (24/08/2026
+soir, à lire en premier pour la méthodologie — pas répétée ici) et aux
+deux vérifications empiriques préalables (profondeur d'historique ~2 ans,
+plafond `max=1000`, rate-limit partagé entre clés API — voir cette même
+entrée HYPOTHESES.md). Ce qui suit couvre l'implémentation.
+
+### Bug réel trouvé en écrivant les tests : `ConfidenceScore.eligible` ne peut jamais coexister avec une espérance ≤ 0
+
+Le garde-fou Option B tel que pré-enregistré utilisait `score.eligible`
+comme critère "assez de données backtest". En écrivant
+`tests/test_executor.py::test_check_backtest_confidence_gate_blocks_when_expectancy_negative`,
+premier test réel avec une espérance négative, le garde-fou ne se
+déclenchait JAMAIS — `confidence_scorer.evaluate_confidence` (§2.4)
+inclut "espérance nette > 0" parmi ses 4 conditions ÉLIMINATOIRES : par
+construction, `eligible` est TOUJOURS `False` dès que l'espérance est
+≤ 0. `evaluate_confidence` est un score de PROMOTION vers le réel (jamais
+conçu pour détecter une espérance négative), le garde-fou Option B a le
+besoin inverse. Corrigé (`src/executor._check_backtest_confidence_gate`) :
+la suffisance d'échantillon est désormais vérifiée séparément via
+`confidence_scorer.check_min_trades(nb_trades, seuils_backtest)`
+(fonction déjà publique, réutilisée telle quelle), découplée du signe de
+l'espérance — celui-ci reste la seule chose lue sur `score.esperance_r`
+directement. Aucun changement à `confidence_scorer.evaluate_confidence`
+elle-même (comportement §2.4 littéral intact pour son usage réel :
+sélection des actifs pour le passage en réel).
+
+### Modules construits/modifiés
+
+- **`src/backtest_engine.py`** (nouveau, MODULE CRITIQUE, 100% couvert) :
+  `HistoricalBar` (bid/ask conservés) + `bar_from_raw` (parse un point
+  brut Capital.com) ; modèle de coûts (`entry_execution_price`/
+  `exit_execution_price`/`financing_adjusted_exit_price`, constantes
+  `SLIPPAGE_SPREAD_MULTIPLIER=1.0`/`FINANCING_BPS_PER_DAY=1.0`) ;
+  `replay_hypothesis` (boucle générique un actif/une hypothèse à la
+  fois, réutilise `executor.decide_entry`/`evaluate_position_management`,
+  `risk_engine.compute_r_multiple`/`compute_weighted_r_multiple`,
+  `capital_manager.CapitalManager`/`apply_trade_result`,
+  `technical_strategy_executor._should_refresh_regime_context` — AUCUNE
+  logique de décision réimplémentée, uniquement pilotée par de
+  l'historique au lieu d'appels broker). 32 tests, 100% de couverture
+  (branches stop/TP1/TP2/trailing/take-profit-fixe/régime croisé/aucune
+  bougie suivante/decide_entry-rejette/un-trade-à-la-fois toutes
+  couvertes séparément).
+- **`src/confidence_scorer.py`** : `PHASE_A_MIN_TRADES_BACKTEST=60`/
+  `PHASE_B_MIN_TRADES_BACKTEST=150` (~×3 les seuils live) ; `check_min_
+  trades`/`evaluate_confidence`/`compute_confidence_score` gagnent des
+  paramètres `phase_a_min_trades`/`phase_b_min_trades` optionnels,
+  défaut = constantes live existantes (comportement live inchangé par
+  construction sans argument explicite, vérifié par régression — tous
+  les tests existants passent sans modification). 5 nouvelles constantes
+  `HYPOTHESIS*_BACKTEST_SOURCE` + `_KNOWN_HYPOTHESIS_SOURCES` étendu.
+- **`_normalize_source`** étendue de façon identique dans les 4 copies
+  (`metrics.py`, `circuit_breaker_store.py`, `executor.py` — alias
+  `_envelope_source_key`, `confidence_scorer.py`) — vérifié par
+  `tests/test_source_normalization_consistency.py` (étendu, checklist
+  déjà en place depuis le bug du 21/08/2026 sur ce même point).
+- **`src/executor.py`** : `_BACKTEST_SOURCE_BY_LIVE_SOURCE` (mapping
+  source live -> source backtest, jamais Station X) ;
+  `_check_backtest_confidence_gate` (voir correctif ci-dessus) câblée
+  dans `open_signal` juste après le blocage coupe-circuit (même position
+  que le pré-enregistrement décrit), AVANT `get_price_snapshot` — un
+  rejet par ce garde-fou économise aussi un appel broker (bénéfice
+  secondaire pour le rate-limit, pas la motivation première). Raison
+  dédiée `backtest_confidence_gate` dans `risk_decisions`. 8 tests
+  (no-op Station X, no-op données insuffisantes, no-op espérance
+  positive, blocage espérance négative, intégration `open_signal`
+  complète y compris "aucun appel broker" et "comportement inchangé
+  sans donnée backtest").
+- **`scripts/download_historical_data.py`** (nouveau) : téléchargement
+  en masse, pagination `from`/`to` par fenêtres de 1000 bougies (plafond
+  mesuré), throttle 8s/requête (large sous le seuil de 429 mesuré à 16
+  requêtes rapprochées), `src/retry.py` par page, écrit sur disque après
+  CHAQUE page (résilience à une interruption). S'arrête sur le premier
+  `error.prices.not-found` réel (jamais une profondeur figée en dur) ou
+  `SAFETY_MAX_DAYS_BACK=800`. 16 cibles (8 actifs × HOUR/MINUTE_15) —
+  US30/US100 déjà inclus dans les 8, aucun téléchargement supplémentaire
+  nécessaire pour la confirmation de régime H3/H4 (résolution unique,
+  voir correction du 24/08/2026 après-midi dans `docs/HYPOTHESES.md`).
+- **`scripts/run_retrospective_backtest.py`** (nouveau) : rejoue les 5
+  hypothèses sur l'historique local (AUCUN appel réseau), persiste
+  `signals`/`trades`/`market_snapshots` sous les sources `*_backtest`,
+  puis écrit `envelopes.capital_courant` directement (**jamais** via
+  `envelope_store.persist_trade_result`, qui écrirait aussi dans
+  `reserve_ledger` — la réserve globale RÉELLE, jamais touchée par le
+  backtest, voir docs/HYPOTHESES.md). `envelope_ledger` (mouvement par
+  trade) n'est délibérément pas alimenté pour les sources backtest — seul
+  `metrics.get_trade_pnl_movements` (dashboard "gains par période") en
+  dépendrait, `confidence_scorer` lit `trades`/`envelopes.capital_
+  courant` directement, non affecté. Compteur monotone dédié pour
+  `raw_messages.telegram_msg_id` (bug trouvé au smoke test : un
+  horodatage seul se répète à la microseconde près sur des insertions en
+  boucle serrée, violant `UNIQUE(channel, telegram_msg_id)`).
+  Non-idempotent par choix : ré-exécuter AJOUTE des trades, ne remplace
+  rien — purge manuelle documentée dans le docstring si besoin de
+  recommencer.
+
+### Tests, non-régression, smoke test
+
+- 760 tests passent au total (712 avant ce lot), 100% de couverture
+  vérifié sur `risk_engine`/`capital_manager`/`go_nogo`/`validator`/
+  `trend_strategy`/`circuit_breaker`/`ict_strategy`/
+  `mean_reversion_strategy`/`confidence_scorer`/`hypothesis2_strategy`/
+  `hypothesis3_strategy`/`hypothesis5_strategy`/`regime_confirmation`/
+  `backtest_engine`.
+- **Smoke test local** (données synthétiques générées, jamais commitées,
+  supprimées après coup) : les deux scripts exécutés de bout en bout
+  contre une base SQLite temporaire (`DB_PATH` redirigé, jamais la base
+  réelle) — H1/H2/H3/H4/H5 tournent sans exception, trades persistés
+  cohérents (R-multiples plausibles, enveloppes créditées/débitées
+  correctement après le correctif ci-dessus), régime croisé H3/H4
+  fonctionnel (0 trade produit sur données aléatoires, cohérent avec sa
+  sévérité déjà documentée).
+- Aucune modification de `risk_engine.py` (vérifié : aucun diff sur ce
+  fichier dans ce lot).
+
+### Déploiement et vérification en direct
+
+Voir la suite de cette entrée (à compléter après exécution sur le VPS :
+git pull, tests, lancement du téléchargement en heures creuses,
+vérification de l'impact — ou l'absence d'impact — sur le taux de succès
+des 6 process live, puis exécution du backtest).
+
+---
+
 ## 2026-08-24 — Rate-limiting Capital.com (429) : échelonnement des 6 process + retry/backoff ciblé ; Hypothèse #5 V3 (retrait de la confluence ICT)
 
 Demande explicite d'Ismaël, suite à une investigation (ce jour) sur

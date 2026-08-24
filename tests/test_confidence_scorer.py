@@ -2,7 +2,9 @@ import pytest
 
 from src.confidence_scorer import (
     PHASE_A_MIN_TRADES,
+    PHASE_A_MIN_TRADES_BACKTEST,
     PHASE_B_MIN_TRADES,
+    PHASE_B_MIN_TRADES_BACKTEST,
     SPREAD_MEDIAN_MAX_RATIO,
     ConfidenceScore,
     EligibilityCheck,
@@ -90,6 +92,35 @@ def test_check_min_trades_phase_b():
     ok, detail, phase = check_min_trades(PHASE_B_MIN_TRADES)
     assert ok
     assert phase == "B"
+
+
+# --- seuils backtest (24/08/2026) : passés explicitement, jamais par défaut ---
+
+def test_check_min_trades_backtest_thresholds_higher_than_live():
+    assert PHASE_A_MIN_TRADES_BACKTEST > PHASE_A_MIN_TRADES
+    assert PHASE_B_MIN_TRADES_BACKTEST > PHASE_B_MIN_TRADES
+
+
+def test_check_min_trades_default_thresholds_unchanged_when_not_overridden():
+    # Comportement live inchangé : sans argument explicite, les seuils
+    # restent PHASE_A_MIN_TRADES/PHASE_B_MIN_TRADES.
+    assert check_min_trades(PHASE_A_MIN_TRADES) == check_min_trades(PHASE_A_MIN_TRADES, PHASE_A_MIN_TRADES, PHASE_B_MIN_TRADES)
+
+
+def test_check_min_trades_backtest_override_insufficient_below_backtest_phase_a():
+    # 25 trades suffirait en live (phase A, seuil 20) mais pas au seuil
+    # backtest (60) — la même valeur nb_trades doit devenir "insuffisant"
+    # une fois les seuils backtest passés explicitement.
+    ok, _, phase = check_min_trades(25, PHASE_A_MIN_TRADES_BACKTEST, PHASE_B_MIN_TRADES_BACKTEST)
+    assert not ok
+    assert phase == "insuffisant"
+
+
+def test_check_min_trades_backtest_override_phase_a_and_b():
+    ok_a, _, phase_a = check_min_trades(PHASE_A_MIN_TRADES_BACKTEST, PHASE_A_MIN_TRADES_BACKTEST, PHASE_B_MIN_TRADES_BACKTEST)
+    assert ok_a and phase_a == "A"
+    ok_b, _, phase_b = check_min_trades(PHASE_B_MIN_TRADES_BACKTEST, PHASE_A_MIN_TRADES_BACKTEST, PHASE_B_MIN_TRADES_BACKTEST)
+    assert ok_b and phase_b == "B"
 
 
 def test_check_esperance_positive_none():
@@ -197,6 +228,31 @@ def test_evaluate_confidence_eligible_with_score():
     sample_factor = compute_sample_factor(60)
     stability_factor = compute_stability_factor(-2.0, 2.0)
     assert result.score == pytest.approx(compute_score(0.4, sample_factor, stability_factor))
+
+
+def test_evaluate_confidence_backtest_thresholds_reject_what_live_would_accept():
+    # 60 trades = phase B en live (seuil 50), mais seulement phase A avec
+    # les seuils backtest (60/150) — même échantillon, éligibilité
+    # différente selon les seuils passés explicitement.
+    m = _metrics(60, 0.4, -2.0)
+    live = evaluate_confidence(m, 500.0, 3.0, 0.05, GOLD_SPEC, risk_percent=2.0)
+    backtest = evaluate_confidence(
+        m, 500.0, 3.0, 0.05, GOLD_SPEC, risk_percent=2.0,
+        phase_a_min_trades=PHASE_A_MIN_TRADES_BACKTEST, phase_b_min_trades=PHASE_B_MIN_TRADES_BACKTEST,
+    )
+    assert live.eligible and live.phase == "B"
+    assert backtest.eligible and backtest.phase == "A"
+
+
+def test_evaluate_confidence_backtest_thresholds_insufficient_below_backtest_phase_a():
+    m = _metrics(55, 0.4, -2.0)  # phase B en live, insuffisant en backtest (< 60)
+    result = evaluate_confidence(
+        m, 500.0, 3.0, 0.05, GOLD_SPEC,
+        phase_a_min_trades=PHASE_A_MIN_TRADES_BACKTEST, phase_b_min_trades=PHASE_B_MIN_TRADES_BACKTEST,
+    )
+    assert not result.eligible
+    assert result.phase == "insuffisant"
+    assert result.score is None
 
 
 def test_evaluate_confidence_missing_spread_blocks_eligibility_even_with_good_metrics():
@@ -361,6 +417,34 @@ def test_compute_confidence_score_end_to_end_missing_data_stays_ineligible(tmp_p
     # espérance > 0 et taille compatible, mais spread jamais alimenté -> non éligible
     assert not result.eligible
     assert result.score is None
+
+
+def test_compute_confidence_score_backtest_thresholds_end_to_end(tmp_path):
+    # Source backtest dédiée (24/08/2026, voir docs/HYPOTHESES.md) —
+    # 55 trades : phase B en live (>= 50) mais insuffisant avec les
+    # seuils backtest passés explicitement (< 60).
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
+    for i in range(55):
+        sig = _insert_signal(db_path, "GOLD", "hypothesis5_backtest")
+        _insert_market_snapshot(db_path, sig, spread=0.1)
+        _insert_closed_trade(
+            db_path, "GOLD", "hypothesis5_backtest", 0.5, f"2026-08-{(i % 27) + 1:02d}T00:00:00+00:00",
+            prix_entree_reel=100.0, stop_loss_initial=97.0, signal_id=sig,
+        )
+
+    live_thresholds = compute_confidence_score(db_path, "GOLD", "hypothesis5_backtest")
+    assert live_thresholds.phase == "B"
+    assert live_thresholds.eligible  # espérance>0, taille ok, spread ok (0.1/3.0 = 3.3% < 15%)
+
+    backtest_thresholds = compute_confidence_score(
+        db_path, "GOLD", "hypothesis5_backtest",
+        phase_a_min_trades=PHASE_A_MIN_TRADES_BACKTEST, phase_b_min_trades=PHASE_B_MIN_TRADES_BACKTEST,
+    )
+    assert backtest_thresholds.phase == "insuffisant"
+    assert not backtest_thresholds.eligible
+    assert backtest_thresholds.score is None
 
 
 def test_compute_all_confidence_scores_orders_eligible_first_by_score(tmp_path):

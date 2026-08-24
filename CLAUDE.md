@@ -699,6 +699,51 @@ du 24/08/2026.
   rejets "régime : None", premier signal H5 V3 le cas échéant) — voir
   `docs/DECISIONS.md` pour le suivi.
 
+## Palier P3 — Backtest rétrospectif (§2.11, 24/08/2026, soir)
+
+Pré-enregistré dans `docs/HYPOTHESES.md` avant tout code/donnée, deux
+vérifications empiriques préalables (profondeur d'historique démo ~2 ans,
+plafond `max=1000`/requête, rate-limit partagé entre clés API — pas
+isolable par clé dédiée). Détail complet (méthodologie, modèle de coûts,
+bug réel trouvé pendant les tests) dans `docs/HYPOTHESES.md`/
+`docs/DECISIONS.md` du 24/08/2026 (soir).
+
+- `src/backtest_engine.py` (nouveau, **module critique, 100% couvert**) :
+  rejoue les 5 hypothèses sur historique local, fenêtre glissante stricte
+  (jamais de bougie future), réutilise `executor.decide_entry`/
+  `evaluate_position_management`/`risk_engine`/`capital_manager` SANS
+  AUCUNE modification — modèle de coûts (spread bid/ask réel + slippage
+  forfaitaire 100% du spread + financement 1bp/jour, constantes a priori)
+  appliqué autour de ces appels, jamais dedans.
+- `scripts/download_historical_data.py`/`scripts/run_retrospective_
+  backtest.py` (nouveaux) : téléchargement en masse ponctuel (throttlé,
+  jamais depuis les boucles live) puis rejeu 100% local (aucun appel
+  réseau), persistance sous des sources dédiées `*_backtest` (jamais les
+  sources live) via les tables existantes.
+- `src/confidence_scorer.py` : seuils d'éligibilité backtest distincts et
+  plus élevés (`PHASE_A_MIN_TRADES_BACKTEST=60`/`PHASE_B_MIN_TRADES_
+  BACKTEST=150` vs 20/50 en live), passés en paramètres optionnels —
+  défaut live inchangé par construction.
+- `executor.open_signal` : nouveau garde-fou Option B
+  (`_check_backtest_confidence_gate`) — rejette un signal live AVANT
+  sizing si son backtest est éligible ET d'espérance nette ≤ 0. Jamais
+  Station X. Ne module jamais le risque à la hausse, `risk_engine.py`
+  non modifié. **Sans effet tant qu'aucun backtest n'a tourné pour un
+  couple donné** (comportement live inchangé par construction).
+- **Bug réel trouvé pendant les tests** : le garde-fou utilisait d'abord
+  `ConfidenceScore.eligible`, qui exige déjà une espérance > 0 (§2.4) —
+  rendait le garde-fou structurellement inatteignable pour son propre cas
+  d'usage. Corrigé (suffisance d'échantillon vérifiée séparément de
+  l'espérance) — voir `docs/DECISIONS.md`.
+- 760 tests passent au total (712 avant ce lot), 100% toujours vérifié
+  sur `risk_engine`/`capital_manager`/`go_nogo`/`validator`/
+  `trend_strategy`/`circuit_breaker`/`ict_strategy`/
+  `mean_reversion_strategy`/`confidence_scorer`/`hypothesis2_strategy`/
+  `hypothesis3_strategy`/`hypothesis5_strategy`/`regime_confirmation`/
+  `backtest_engine`. `risk_engine.py` non modifié (vérifié).
+- Déploiement/exécution en direct : voir `docs/DECISIONS.md` pour l'état
+  à jour (téléchargement + rejeu à exécuter/vérifier sur le VPS).
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou

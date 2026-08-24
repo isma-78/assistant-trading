@@ -97,7 +97,20 @@ HYPOTHESIS3_SOURCE = "hypothesis3"  # Hypothèse #3
 HYPOTHESIS2_SOURCE = "hypothesis2"  # Hypothèse #2
 HYPOTHESIS4_SOURCE = "hypothesis4"  # Hypothèse #4 (21/08/2026 — validée en démo, non déployée)
 HYPOTHESIS5_SOURCE = "hypothesis5"  # Hypothèse #5 (23/08/2026 — non déployée)
-_KNOWN_HYPOTHESIS_SOURCES = {HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE, HYPOTHESIS4_SOURCE, HYPOTHESIS5_SOURCE}
+# Backtest rétrospectif (24/08/2026, voir docs/HYPOTHESES.md) : sources
+# TOUJOURS distinctes des sources live ci-dessus — jamais mélangées dans
+# le même calcul de métriques (backtest_engine.py, scripts/run_
+# retrospective_backtest.py).
+HYPOTHESIS_BACKTEST_SOURCE = "hypothesis_backtest"
+HYPOTHESIS2_BACKTEST_SOURCE = "hypothesis2_backtest"
+HYPOTHESIS3_BACKTEST_SOURCE = "hypothesis3_backtest"
+HYPOTHESIS4_BACKTEST_SOURCE = "hypothesis4_backtest"
+HYPOTHESIS5_BACKTEST_SOURCE = "hypothesis5_backtest"
+_KNOWN_HYPOTHESIS_SOURCES = {
+    HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE, HYPOTHESIS4_SOURCE, HYPOTHESIS5_SOURCE,
+    HYPOTHESIS_BACKTEST_SOURCE, HYPOTHESIS2_BACKTEST_SOURCE, HYPOTHESIS3_BACKTEST_SOURCE,
+    HYPOTHESIS4_BACKTEST_SOURCE, HYPOTHESIS5_BACKTEST_SOURCE,
+}
 
 
 def _normalize_source(source: str) -> str:
@@ -106,6 +119,15 @@ def _normalize_source(source: str) -> str:
 
 PHASE_A_MIN_TRADES = 20
 PHASE_B_MIN_TRADES = 50
+# Seuils backtest (24/08/2026, voir docs/HYPOTHESES.md) : distincts et
+# plus élevés (~×3) que les seuils live ci-dessus — un fill simulé n'a
+# pas la fiabilité d'un fill réel (ni slippage mesuré au tick, ni
+# confirmation broker). Jamais utilisés par défaut : uniquement passés
+# explicitement par l'appelant pour une source `*_backtest` (voir
+# executor._check_backtest_confidence_gate) — le comportement live
+# (sources non-backtest) est inchangé par construction.
+PHASE_A_MIN_TRADES_BACKTEST = 60
+PHASE_B_MIN_TRADES_BACKTEST = 150
 SPREAD_MEDIAN_MAX_RATIO = 0.15
 STABILITY_DRAWDOWN_CAP_PCT = 20.0
 DEFAULT_RISK_PERCENT = 2.0  # cohérent avec RISK_PERCENT_DEFAULT de .env.example
@@ -165,13 +187,19 @@ def compute_score(esperance_r: float, sample_factor: float, stability_factor: fl
     return round(esperance_r * sample_factor * stability_factor, 6)
 
 
-def check_min_trades(nb_trades: int) -> Tuple[bool, str, str]:
-    """(satisfait, détail, phase) — phase in {"A", "B", "insuffisant"}."""
-    if nb_trades >= PHASE_B_MIN_TRADES:
-        return True, f"{nb_trades} trades ≥ {PHASE_B_MIN_TRADES} (phase B)", "B"
-    if nb_trades >= PHASE_A_MIN_TRADES:
-        return True, f"{nb_trades} trades ≥ {PHASE_A_MIN_TRADES} (phase A)", "A"
-    return False, f"{nb_trades} trades < {PHASE_A_MIN_TRADES} (seuil phase A)", "insuffisant"
+def check_min_trades(
+    nb_trades: int, phase_a_min: int = PHASE_A_MIN_TRADES, phase_b_min: int = PHASE_B_MIN_TRADES,
+) -> Tuple[bool, str, str]:
+    """(satisfait, détail, phase) — phase in {"A", "B", "insuffisant"}.
+    `phase_a_min`/`phase_b_min` : seuils par défaut = live (§2.4) ;
+    l'appelant backtest passe `PHASE_A_MIN_TRADES_BACKTEST`/
+    `PHASE_B_MIN_TRADES_BACKTEST` explicitement (voir docstring du
+    module) — comportement live inchangé par défaut."""
+    if nb_trades >= phase_b_min:
+        return True, f"{nb_trades} trades ≥ {phase_b_min} (phase B)", "B"
+    if nb_trades >= phase_a_min:
+        return True, f"{nb_trades} trades ≥ {phase_a_min} (phase A)", "A"
+    return False, f"{nb_trades} trades < {phase_a_min} (seuil phase A)", "insuffisant"
 
 
 def check_esperance_positive(esperance_r: Optional[float]) -> Tuple[bool, str]:
@@ -221,8 +249,14 @@ def evaluate_confidence(
     median_spread_ratio: Optional[float],
     asset_spec: Optional[AssetSpec],
     risk_percent: float = DEFAULT_RISK_PERCENT,
+    phase_a_min_trades: int = PHASE_A_MIN_TRADES,
+    phase_b_min_trades: int = PHASE_B_MIN_TRADES,
 ) -> ConfidenceScore:
-    trades_ok, trades_detail, phase = check_min_trades(metrics.nb_trades)
+    """`phase_a_min_trades`/`phase_b_min_trades` : défaut = seuils live
+    (§2.4). L'appelant backtest passe `PHASE_A_MIN_TRADES_BACKTEST`/
+    `PHASE_B_MIN_TRADES_BACKTEST` explicitement — comportement live
+    inchangé par défaut (voir docs/HYPOTHESES.md, 24/08/2026)."""
+    trades_ok, trades_detail, phase = check_min_trades(metrics.nb_trades, phase_a_min_trades, phase_b_min_trades)
     esperance_ok, esperance_detail = check_esperance_positive(metrics.esperance_r)
     size_ok, size_detail = check_min_size_compatible(capital_courant, stop_distance_typical, asset_spec, risk_percent)
     spread_ok, spread_detail = check_spread_condition(median_spread_ratio)
@@ -329,15 +363,19 @@ def get_median_spread_ratio(db_path: str, actif: str, source: str) -> Optional[f
 
 
 def compute_confidence_score(
-    db_path: str, actif: str, source: str, risk_percent: float = DEFAULT_RISK_PERCENT
+    db_path: str, actif: str, source: str, risk_percent: float = DEFAULT_RISK_PERCENT,
+    phase_a_min_trades: int = PHASE_A_MIN_TRADES, phase_b_min_trades: int = PHASE_B_MIN_TRADES,
 ) -> ConfidenceScore:
+    """`phase_a_min_trades`/`phase_b_min_trades` : voir evaluate_confidence
+    — défaut live, l'appelant backtest passe les seuils `*_BACKTEST`."""
     metrics = get_asset_metrics(db_path, actif, source)
     capital_courant = get_capital_courant(db_path, actif, metrics.source)
     stop_distance_typical = get_median_stop_distance(db_path, actif, metrics.source)
     median_spread_ratio = get_median_spread_ratio(db_path, actif, metrics.source)
     asset_spec = ASSET_WHITELIST.get(actif)
     return evaluate_confidence(
-        metrics, capital_courant, stop_distance_typical, median_spread_ratio, asset_spec, risk_percent
+        metrics, capital_courant, stop_distance_typical, median_spread_ratio, asset_spec, risk_percent,
+        phase_a_min_trades, phase_b_min_trades,
     )
 
 

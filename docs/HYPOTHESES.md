@@ -1997,5 +1997,269 @@ détaillés dans `docs/DECISIONS.md` (24/08/2026).
 
 ---
 
+## 2026-08-24 (soir) — Backtest rétrospectif (§2.11) : PRÉ-ENREGISTREMENT, écrit avant toute donnée backtest générée
+
+Décidé par Ismaël après proposition présentée et discutée le même jour
+(voir `docs/DECISIONS.md` pour l'historique complet de la discussion,
+les deux vérifications empiriques préalables et les options écartées).
+Écrit et daté **avant de lancer le téléchargement d'historique ou tout
+calcul de backtest** — aucune donnée backtest n'existe encore au moment
+où cette entrée est écrite, conformément à la règle de ce fichier.
+
+### Objet
+
+Rejouer, sur historique Capital.com, la mécanique EXACTE (régime/
+déclencheur/sortie) de chacune des 5 hypothèses telles qu'actuellement
+déployées — **aucune modification de leur logique** :
+- H1 : `trend_strategy.evaluate_entry` (MA200 + Donchian(20), HOUR)
+- H2 : `ict_strategy.evaluate_entry` (structurel + confluence ICT, M15)
+- H3 : `hypothesis3_strategy` (= H1 + TP1/TP2, régime croisé requis, M15)
+- H4 : `mean_reversion_strategy.evaluate_entry` (MA200+Bollinger, régime
+  croisé requis, M15)
+- H5 : `hypothesis5_strategy.evaluate_entry` V3 (structurel + RSI, M15)
+
+Objectif : accumuler des données statistiques supplémentaires par
+(actif, hypothèse) pour alimenter `confidence_scorer.py`, avec un
+mécanisme d'influence sur le live limité et à sens unique (voir
+"Mécanisme d'influence" ci-dessous) — jamais un remplacement de
+l'apprentissage sur trades réels/démo, un complément.
+
+### Vérifications empiriques préalables (résultats factuels, 24/08/2026)
+
+Effectuées avant toute décision de conception, sur le compte démo
+principal, lecture seule, aucun ordre :
+- **Profondeur d'historique disponible** : recherche dichotomique sur
+  `/prices/EURUSD` (paramètres `from`/`to`) entre 365 jours (disponible)
+  et 1825 jours/5 ans (indisponible, `error.prices.not-found`).
+  Limite trouvée entre **718 et 730 jours en arrière** (~2 ans tout
+  juste, précision ~12 jours, jugée suffisante) — le compte **démo**
+  Capital.com ne conserve donc qu'environ **2 ans** d'historique, pas
+  "des années" au sens large envisagé par le §2.11 du CDC (qui prévoyait
+  d'ailleurs des bougies OANDA, broker devenu inutilisable pour ce
+  projet, voir CLAUDE.md).
+- **Plafond de `max` par requête** : confirmé à **1000 bougies**
+  (`max=1500` -> `error.invalid.max`, HTTP 400).
+- **`from`/`to` fonctionnent** sur `/prices/{epic}` — non exposés par
+  `capital_client.get_prices` aujourd'hui (ajout nécessaire, voir
+  `docs/DECISIONS.md`), mais acceptés par l'API brute.
+- **Bid/ask disponibles séparément** à chaque point OHLC de l'historique
+  (`openPrice.bid`/`openPrice.ask`, etc.) — pas seulement un prix médian
+  comme le retourne `market_data.get_candles` aujourd'hui. Permet un
+  spread réellement observé pour le §2.6, pas une approximation
+  forfaitaire.
+- **Portée du rate-limit (429)** : rafale de 16 requêtes rapprochées sur
+  le compte principal -> 429. Requête immédiate suivante sur le compte
+  "hypothèse 2" (clé API distincte, même identifiant de connexion
+  probable) -> 429 également. **La limite n'est pas isolée par clé
+  API** — un téléchargement en masse partage le même budget que les 6
+  process live, quelle que soit la clé utilisée.
+
+### Résolution historique par hypothèse (corrige une hypothèse initiale erronée)
+
+Vérifié dans le code réel avant de concevoir quoi que ce soit (voir
+`docs/DECISIONS.md`, session du 24/08/2026, aprem) : **aucune hypothèse
+n'utilise aujourd'hui deux résolutions de bougies différentes** — la
+couche "session/multi-timeframe" du 23/08/2026 ne fait cohabiter que
+deux CADENCES de rafraîchissement sur une résolution UNIQUE (le contexte
+de régime croisé H3/H4 est recalculé sur les mêmes bougies M15 que le
+déclencheur, juste avec un cache rafraîchi seulement 3x/jour au lieu de
+chaque cycle). En conséquence, le backtest a besoin, par hypothèse :
+
+| Hypothèse | Historique nécessaire |
+|---|---|
+| H1 | HOUR de l'actif uniquement |
+| H2, H5 | M15 de l'actif uniquement |
+| H3, H4 | M15 de l'actif **+** M15 de US30 **+** M15 de US100 (mêmes bougies M15, deux instruments de plus, jamais une résolution différente) |
+
+`CANDLE_COUNT` (=220, `technical_strategy_executor.py`) réutilisée telle
+quelle comme fenêtre glissante fournie à `entry_fn` — **exactement** ce
+que le live fournit à chaque cycle (`get_candles(..., count=CANDLE_COUNT)`),
+jamais plus, jamais moins : fidélité au comportement live, pas seulement
+absence d'anticipation.
+
+### Téléchargement en masse (`scripts/download_historical_data.py`)
+
+- Script séparé, ponctuel, manuel — **jamais appelé depuis les 6
+  boucles live**. Persiste sur disque (`data/historical/`, format JSON
+  par `(epic, résolution)`) — un calcul de backtest ultérieur ne refait
+  aucun appel réseau.
+- Pagination `from`/`to` par fenêtres de ≤1000 bougies (plafond dur
+  mesuré ci-dessus), en remontant depuis aujourd'hui jusqu'à la limite
+  de profondeur mesurée (~2 ans, ou jusqu'au premier `error.prices.
+  not-found` rencontré, ce qui vient en premier — pas de valeur figée en
+  dur, le script s'arrête sur le signal réel du broker).
+- Réutilise `src/retry.py` (`retry_with_backoff`) par page. **Throttle
+  explicite en plus du retry** : 1 requête toutes les 7-10s (rafale à
+  429 mesurée à 16 requêtes rapprochées — reste très large en dessous),
+  le retry absorbe l'échec ponctuel, le throttle évite de le provoquer.
+  Aucune isolation par clé API dédiée (le rate-limit est partagé, voir
+  vérification ci-dessus) — le compte principal suffit, une clé
+  "dédiée" n'aurait rien isolé.
+- Conserve bid/ask (pas seulement le prix médian) pour permettre le
+  spread réellement observé au §2.6.
+- **Vérification en direct obligatoire après exécution** : comparer le
+  taux de 429/cycles sautés des 6 process live sur la fenêtre du
+  téléchargement à une fenêtre de référence sans téléchargement — pas
+  supposé, mesuré (voir `docs/DECISIONS.md` pour le résultat).
+
+### Prévention du biais d'anticipation
+
+- Fenêtre glissante stricte : `entry_fn` n'est jamais appelée qu'avec
+  les `CANDLE_COUNT` dernières bougies dont la clôture est ≤ l'instant
+  simulé T — jamais une bougie postérieure, y compris pour les indices
+  de confirmation US30/US100 (H3/H4), toujours évalués au même instant
+  T que l'actif, jamais une bougie plus récente qu'eux.
+- Cadence de rafraîchissement du régime croisé (H3/H4) répliquée à
+  l'identique via `technical_strategy_executor._should_refresh_regime_
+  context` (réutilisée telle quelle, pure, déjà testée) — le cache n'est
+  recalculé qu'aux mêmes 3 heures UTC fixes (0h/8h/13h) que le live,
+  jamais à chaque bougie.
+- **Prix d'exécution simulé = ouverture de la bougie SUIVANT celle qui
+  déclenche le signal** (pas la clôture de la bougie déclenchante) —
+  approximation standard, cohérente avec le délai structurel réel de
+  10-60s du §2.8 ("ce qui rend le scalping impossible"). Si le signal se
+  déclenche sur la dernière bougie disponible de l'historique (aucune
+  bougie suivante), aucun trade simulé n'est généré — jamais une
+  approximation sur une bougie qui n'existe pas.
+- `decide_entry` (validator + risk_engine, **inchangée**, réutilisée
+  telle quelle) reste l'unique porte d'entrée — la tolérance de
+  péremption du §2.8 (déjà codée dans `validator.py`) s'applique donc
+  naturellement à l'écart entre le prix du signal et le prix d'ouverture
+  de la bougie suivante, sans nouvelle logique de péremption spécifique
+  au backtest.
+
+### Convention de résolution intra-bougie (ambiguïté stop/cible dans la même bougie)
+
+Une bougie OHLC ne dit pas dans quel ordre le prix a touché un niveau
+donné pendant l'intervalle. Convention retenue, **pessimiste par
+construction** (cohérent avec le principe du §2.6, "métriques
+délibérément pessimistes") : pour chaque bougie de gestion d'une
+position ouverte, le stop est testé EN PREMIER (avec le point le plus
+défavorable de la bougie — bas pour un long, haut pour un short) ; s'il
+n'est pas touché, la cible/le trailing sont testés ensuite (avec le
+point le plus favorable — haut pour un long, bas pour un short). Si les
+deux étaient plausibles dans la même bougie, le stop l'emporte toujours
+dans cette simulation — jamais l'inverse.
+
+### Coûts réalistes (§2.6)
+
+- **Spread** : bid/ask réellement observés dans l'historique (pas de
+  spread forfaitaire, disponible et plus fidèle — voir vérification
+  empirique ci-dessus). Entrée long = payé à l'ask ; sortie long = reçu
+  au bid (symétrique en short) — au moment (bougie) exact de l'exécution
+  simulée, jamais une moyenne ou une valeur d'un autre instant.
+- **Slippage forfaitaire pénalisant** : fixé a priori à **100% du
+  spread observé au même instant** (jamais calibré sur un résultat de
+  backtest) — double le coût de franchissement réel par rapport au
+  spread seul, choix délibérément pessimiste et simple à justifier
+  (pas de table de constantes arbitraires par actif). Appliqué dans le
+  même sens défavorable que le spread, à l'entrée ET à la sortie.
+- **Financement overnight** : fixé a priori à **1 point de base
+  (0,01%) du prix d'entrée par jour civil complet** au-delà du jour
+  d'ouverture, TOUJOURS un coût (jamais un crédit, même quand le
+  financement réel pourrait favoriser une direction — encore plus
+  pessimiste que la réalité, volontaire). Appliqué comme un décalage de
+  prix défavorable supplémentaire au moment de la sortie.
+- Ces trois constantes (multiplicateur de slippage, taux de financement)
+  sont des choix d'ingénieur a priori, pas des mesures — documentées
+  comme telles, jamais ajustées après avoir vu un résultat de backtest
+  (invariant #10).
+
+### Séparation stricte (mode + source + seuils d'éligibilité)
+
+- **Source dédiée par hypothèse**, jamais la source live réutilisée :
+  `hypothesis_backtest` (H1), `hypothesis2_backtest`, `hypothesis3_backtest`,
+  `hypothesis4_backtest`, `hypothesis5_backtest`. Ajoutées aux 4 copies
+  de `_normalize_source` (`metrics.py`, `circuit_breaker_store.py`,
+  `executor.py`, `confidence_scorer.py`), vérifié par
+  `tests/test_source_normalization_consistency.py` (existant, étendu).
+- **Enveloppe séparée** par `(actif, source_backtest)`, via
+  `envelope_store.load_or_create_envelope` réutilisée telle quelle,
+  démarrée au même `envelope_initial` que le live.
+- **Réserve globale JAMAIS touchée par le backtest** : `capital_manager.
+  apply_trade_result` est réutilisée pour la règle des 50% (fidélité de
+  l'évolution de l'enveloppe backtest elle-même), mais la part "réserve"
+  qu'elle retourne est accumulée dans un total **simulé, local au run de
+  backtest, jamais écrit dans `reserve_ledger`** — `reserve_ledger` est
+  globale et partagée entre tous les actifs (§2.3), la polluer avec un
+  montant simulé serait irréversible et fausserait la vraie réserve.
+  Écart assumé, documenté ici explicitement.
+- `market_snapshots` (bid/ask/spread) rempli pour chaque signal backtest
+  généré — ferme, pour les seules sources backtest, le gap documenté
+  dans `confidence_scorer.py` (spread médian toujours indéterminé faute
+  de données) ; **le live n'est pas touché**, le gap y reste ouvert.
+- **Seuils d'éligibilité backtest distincts et plus élevés** que le
+  live : `PHASE_A_MIN_TRADES_BACKTEST = 60` (vs 20 en live),
+  `PHASE_B_MIN_TRADES_BACKTEST = 150` (vs 50 en live) — facteur ~3,
+  choisi a priori (un fill simulé n'a pas la fiabilité d'un fill réel :
+  ni slippage réellement mesuré au tick, ni confirmation broker, ni
+  cohérence de session garantie au-delà de ce que l'historique
+  fournit). Ajoutés à `confidence_scorer.py` comme paramètres optionnels
+  de `evaluate_confidence`/`compute_confidence_score`/`check_min_trades`
+  (défaut = constantes live existantes, comportement live inchangé par
+  construction quand ils ne sont pas fournis explicitement).
+
+### Mécanisme d'influence sur le live — Option B, retenue par Ismaël
+
+Nouveau garde-fou dans `executor.open_signal`, **avant** `decide_entry`,
+à la même position que le blocage coupe-circuit déjà présent (avant
+tout calcul de sizing) :
+- Pour un signal sur une des 5 sources hypothèse (`hypothesis`,
+  `hypothesis2`, `hypothesis3`, `hypothesis4`, `hypothesis5` — jamais
+  `stationx`, hors périmètre de cette demande), on calcule le score
+  backtest de confiance du couple `(actif, source_backtest correspondante)`
+  via `confidence_scorer.compute_confidence_score` avec les seuils
+  BACKTEST (plus élevés, voir ci-dessus).
+- **Couple sans assez de données backtest** (`eligible=False`, quelle
+  qu'en soit la raison — trop peu de trades, spread indisponible,
+  taille incompatible) : le garde-fou ne fait **rien**, aucun blocage,
+  comportement actuel strictement inchangé. C'est le cas de TOUS les
+  couples tant qu'aucun backtest n'a encore été exécuté — le
+  déploiement de ce mécanisme n'a donc, par construction, **aucun
+  impact tant que `scripts/run_retrospective_backtest.py` n'a pas
+  tourné**.
+- **Couple éligible ET espérance nette backtest ≤ 0** : le signal live
+  est rejeté, journalisé dans `risk_decisions` (raison dédiée,
+  `backtest_confidence_gate`), **avant** tout calcul de sizing —
+  `decide_entry` n'est jamais appelé. Aucune augmentation de risque
+  possible par ce mécanisme (il ne fait que refuser, jamais moduler à
+  la hausse) ; `risk_engine.py` n'est pas modifié.
+- **Couple éligible ET espérance nette backtest > 0** : aucun effet,
+  le signal continue son chemin normal vers `decide_entry`.
+- Seuil retenu : **espérance nette ≤ 0 R**, pas un seuil positif plus
+  exigeant — un backtest qui confirme une espérance négative est un
+  signal fort (même mécanique, échantillon plus large) ; un seuil plus
+  strict resterait à documenter séparément s'il devait être introduit
+  plus tard (pas fait ici, hors périmètre de cette demande).
+
+### Ce que ce mécanisme NE fait PAS
+
+- Ne module jamais le sizing à la hausse (`boosted`/Option A explicitement
+  écartée par Ismaël pour cette phase).
+- Ne modifie jamais `risk_engine.py`.
+- N'affecte jamais Station X.
+- Ne s'applique qu'aux signaux qui atteignent déjà `open_signal` — ne
+  change rien au déclencheur des stratégies elles-mêmes.
+- Ne mélange jamais les statistiques backtest et live dans le même
+  calcul de `confidence_scorer` (sources strictement séparées).
+
+### Budget de variables (invariant #10)
+
+Deux nouvelles constantes a priori pour le backtest lui-même
+(multiplicateur de slippage = 1.0, taux de financement = 1bp/jour) et
+deux seuils d'éligibilité backtest (60/150 trades) — aucun de ces
+chiffres n'est un paramètre de DÉCLENCHEMENT d'une hypothèse (le budget
+§2.11 de chaque hypothèse reste inchangé, ces constantes vivent dans
+l'infrastructure de backtest, pas dans `trend_strategy.py`/
+`ict_strategy.py`/etc.), documentées ici comme choix d'ingénieur a
+priori, jamais ajustées sur un résultat.
+
+Implémentation, tests, déploiement et vérification en direct (y compris
+l'impact du téléchargement sur le taux de succès live) rapportés dans
+`docs/DECISIONS.md` une fois le code construit.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
-#2, #3, #4 ou #5 — jamais une modification de ce qui précède.*
+#2, #3, #4, #5, ou du backtest rétrospectif — jamais une modification de
+ce qui précède.*
