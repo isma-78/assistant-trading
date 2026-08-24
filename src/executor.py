@@ -723,6 +723,26 @@ def open_signal(
 
     snapshot = get_price_snapshot(client, epic)
 
+    # Spread réellement observé au moment du signal (§2.6, 24/08/2026,
+    # voir docs/DECISIONS.md) — AVANT toute exécution, jamais reconstruit
+    # après coup depuis un fill. Ferme le gap déjà documenté dans
+    # confidence_scorer.py (market_snapshots.spread jamais alimenté pour
+    # le live) : capturé pour CHAQUE signal qui atteint ce point,
+    # approuvé ou non — un signal rejeté a quand même un spread réel au
+    # moment où il a été évalué, utile pour l'éligibilité future du
+    # couple (actif, source) même si ce signal précis ne devient jamais
+    # un trade. Best-effort : un échec ici ne doit jamais empêcher
+    # l'ouverture déjà en cours (même patron que record_align_matinale_
+    # for_trade plus bas dans cette fonction).
+    try:
+        with connection_scope(db_path) as conn:
+            conn.execute(
+                "INSERT INTO market_snapshots (signal_id, bid, ask, spread, captured_at) VALUES (?, ?, ?, ?, ?)",
+                (signal_row["id"], snapshot.bid, snapshot.ask, round(snapshot.ask - snapshot.bid, 8), now),
+            )
+    except Exception:
+        logger.exception("Échec de la capture du spread pour le signal %s — sans impact sur la suite", signal_row["id"])
+
     adjustment = _compute_guaranteed_stop_adjustment(
         client, epic, signal_row["sens"], signal_row["entree_min"], signal_row["stop_loss"],
     )

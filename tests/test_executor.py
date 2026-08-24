@@ -18,7 +18,7 @@ from src.capital_client import CapitalApiError
 from src.capital_manager import CapitalManager
 from src.db import connection_scope, get_connection, init_db
 from src.envelope_store import load_or_create_envelope
-from src.confidence_scorer import PHASE_A_MIN_TRADES_BACKTEST
+from src.confidence_scorer import PHASE_A_MIN_TRADES_BACKTEST, check_spread_condition, get_median_spread_ratio
 from src.executor import (
     ManagementActionType,
     OpenTradeState,
@@ -583,6 +583,150 @@ def test_open_signal_approved_places_limit_order_and_records_trade(tmp_path):
         assert trade["statut"] == "en_attente"
     finally:
         conn.close()
+
+
+def test_open_signal_captures_spread_at_signal(tmp_path):
+    # §2.6, 24/08/2026 (voir docs/DECISIONS.md) : ferme le gap de
+    # market_snapshots.spread jamais alimenté pour le live.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-xyz", "level": 100.0}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    conn = get_connection(db_path)
+    try:
+        snap = conn.execute("SELECT * FROM market_snapshots WHERE signal_id = ?", (signal_row["id"],)).fetchone()
+        assert snap is not None
+        assert snap["bid"] == pytest.approx(100.0)
+        assert snap["ask"] == pytest.approx(100.2)
+        assert snap["spread"] == pytest.approx(0.2)
+    finally:
+        conn.close()
+
+
+def test_open_signal_captures_spread_even_when_rejected(tmp_path):
+    # Un signal rejeté a quand même un spread réel au moment de
+    # l'évaluation — capturé pour l'éligibilité future du couple, même
+    # si CE signal ne devient jamais un trade.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=0.1)  # sous le seuil -> rejeté par decide_entry
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result is None
+    conn = get_connection(db_path)
+    try:
+        snap = conn.execute("SELECT * FROM market_snapshots WHERE signal_id = ?", (signal_row["id"],)).fetchone()
+        assert snap is not None
+        assert snap["spread"] == pytest.approx(0.2)
+    finally:
+        conn.close()
+
+
+def test_open_signal_spread_capture_failure_does_not_block_opening(tmp_path):
+    # Best-effort (voir docstring de open_signal) : simule un objet
+    # connexion qui échoue UNIQUEMENT sur l'INSERT market_snapshots
+    # (première fois) et se comporte normalement ensuite — prouve que
+    # l'exception est absorbée sans empêcher l'ouverture du trade.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-xyz", "level": 100.0}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+
+    class _FailingConnWrapper:
+        def __init__(self, real_conn):
+            self._real_conn = real_conn
+            self._first_insert_done = False
+
+        def execute(self, query, params=()):
+            if "INSERT INTO market_snapshots" in query and not self._first_insert_done:
+                self._first_insert_done = True
+                raise RuntimeError("panne DB spread")
+            return self._real_conn.execute(query, params)
+
+        def __getattr__(self, name):
+            return getattr(self._real_conn, name)
+
+    from contextlib import contextmanager
+
+    from src.db import connection_scope as real_connection_scope
+
+    @contextmanager
+    def _flaky_connection_scope(path):
+        with real_connection_scope(path) as conn:
+            yield _FailingConnWrapper(conn)
+
+    with patch("src.executor.connection_scope", _flaky_connection_scope):
+        result = open_signal(
+            db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+            confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+        )
+
+    assert result == "deal-xyz"  # l'ouverture a quand meme reussi malgre l'echec de capture du spread
+    conn = get_connection(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) AS n FROM market_snapshots").fetchone()["n"] == 0
+        trade = conn.execute("SELECT * FROM trades").fetchone()
+        assert trade["deal_id"] == "deal-xyz"
+    finally:
+        conn.close()
+
+
+def test_open_signal_spread_capture_unblocks_confidence_scorer_eligibility(tmp_path):
+    # Bout en bout demandé explicitement (24/08/2026) : une fois le
+    # spread réellement capturé par open_signal, la condition
+    # d'éligibilité spread de confidence_scorer.py doit se comporter
+    # normalement (accepter un spread étroit, rejeter un spread large)
+    # pour une source LIVE — jusqu'ici toujours indisponible (gap
+    # documenté depuis le 20/08/2026).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0, stop=101.0)  # entree=100, stop=101 -> distance 1.0
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.05, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-xyz", "level": 100.0}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+    # Simule la clôture du trade (hors périmètre d'open_signal lui-même) —
+    # seul le point testé ici est la lecture confidence_scorer une fois
+    # le spread réellement capturé.
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "UPDATE trades SET statut = 'ferme', prix_entree_reel = 100.0, stop_loss_initial = 101.0 "
+            "WHERE signal_id = ?", (signal_row["id"],),
+        )
+
+    ratio = get_median_spread_ratio(db_path, "GOLD", "station_x")
+    assert ratio == pytest.approx(0.05)  # spread 0.05 / distance de stop 1.0
+    satisfied, _ = check_spread_condition(ratio)
+    assert satisfied is True  # 5% < seuil 15%
 
 
 def test_open_signal_records_regime_type_and_exit_type_per_source(tmp_path):

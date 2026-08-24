@@ -25,6 +25,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
+from src import causal_analyzer
 from src.audit_notifier import send_notification
 from src.circuit_breaker import (
     evaluate_api_error_streak,
@@ -279,6 +280,21 @@ def is_asset_blocked(
             f"Seuil {breaker_type} franchi (R={status.r_stats})",
             bot_token, chat_id, triggered_at=now.isoformat(),
         )
+        # Moteur d'analyse causale (§3.11, 24/08/2026, voir docs/DECISIONS.md) :
+        # lecture seule + journalisation, AUCUN effet sur la décision de
+        # blocage ci-dessus (déjà entièrement déterminée par status.blocked).
+        # record_causal_analysis est déjà fail-safe en interne, mais ce
+        # point d'appel est sur le chemin critique de TOUTE tentative
+        # d'ouverture (is_asset_blocked) — défense en profondeur
+        # supplémentaire ici, jamais un second endroit qui déciderait du
+        # blocage lui-même.
+        try:
+            causal_analyzer.record_causal_analysis(db_path, asset, normalized, breaker_type, now, bot_token, chat_id)
+        except Exception:
+            logger.exception(
+                "Échec inattendu de l'analyse causale (asset=%s source=%s breaker_type=%s) — "
+                "décision de blocage inchangée", asset, normalized, breaker_type,
+            )
         _maybe_trigger_breadth_pause(db_path, now, bot_token, chat_id)
 
     if status.blocked:

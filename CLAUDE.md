@@ -744,6 +744,42 @@ bug réel trouvé pendant les tests) dans `docs/HYPOTHESES.md`/
 - Déploiement/exécution en direct : voir `docs/DECISIONS.md` pour l'état
   à jour (téléchargement + rejeu à exécuter/vérifier sur le VPS).
 
+## Palier P3 (suite) — Moteur d'analyse causale (§3.11) + capture réelle du spread (§2.6, 24/08/2026 soir)
+
+Deux prérequis identifiés lors de la proposition du cycle autonome
+(§3.9, palier séparé, non construit dans cette session), construits
+dans cet ordre : spread d'abord (le moteur causal en dépend pour son
+contexte), moteur causal ensuite. Détail complet dans
+`docs/DECISIONS.md`.
+
+- `executor.open_signal` capture désormais le spread bid/ask réellement
+  observé (`market_snapshots`) pour CHAQUE signal évalué, approuvé ou
+  non — ferme le gap qui bloquait la condition d'éligibilité spread de
+  `confidence_scorer.py` pour toute source live, vérifié bout en bout.
+- `src/causal_analyzer.py` (nouveau, **module critique, 100% couvert**) :
+  §3.11 relu en entier avant construction. Déclenché automatiquement à
+  chaque coupe-circuit R (jamais les déclencheurs administratifs),
+  câblé dans `circuit_breaker_store.is_asset_blocked` sans toucher à sa
+  décision de blocage (double filet de sécurité, testé). Classification
+  100% déterministe en 3 catégories (anomalie_technique/
+  evenement_marche/hypothese_pattern, texte du CDC), `analyse_texte`
+  en gabarit déterministe (jamais un LLM, écart assumé vs
+  `trade_analyzer.py`). Ne propose et n'applique jamais rien — écrit
+  uniquement `causal_analysis_log`, la promotion en proposition reste
+  la charge du cycle autonome séparé.
+- Gap identifié mais non comblé (hors périmètre) : `macro_events`
+  toujours vide, §2.9 calendrier macro non construit — la branche
+  "événement macro" du classificateur est correcte mais sans donnée.
+- 811 tests passent au total (760 avant ce lot), 100% toujours vérifié
+  sur `risk_engine`/`capital_manager`/`go_nogo`/`validator`/
+  `trend_strategy`/`circuit_breaker`/`ict_strategy`/
+  `mean_reversion_strategy`/`confidence_scorer`/`hypothesis2_strategy`/
+  `hypothesis3_strategy`/`hypothesis5_strategy`/`regime_confirmation`/
+  `backtest_engine`/`causal_analyzer`. Aucune régression sur
+  `confidence_scorer.py`/`circuit_breaker_store.py` (logique de
+  décision intacte, vérifié par leurs suites de tests existantes).
+- Déploiement/vérification en direct : voir `docs/DECISIONS.md`.
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou

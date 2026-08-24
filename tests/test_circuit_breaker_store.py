@@ -120,6 +120,41 @@ def test_is_asset_blocked_true_on_new_day_breaker_and_persists_event(mock_notify
     mock_notify.assert_called_once()  # pas de deuxième notification
 
 
+@patch("src.circuit_breaker_store.send_notification", return_value=True)
+def test_is_asset_blocked_new_day_breaker_records_causal_analysis(mock_notify, tmp_path):
+    # Moteur d'analyse causale (§3.11, 24/08/2026) : câblé en lecture
+    # seule après record_trigger, ne doit jamais changer la décision de
+    # blocage (déjà vérifiée par le test ci-dessus) — vérifie ici
+    # uniquement l'effet de bord : une ligne causal_analysis_log créée.
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    _insert_closed_trade(db_path, "EURUSD", "stationx", NOW.isoformat(), -2.5)
+
+    is_asset_blocked(db_path, "EURUSD", "stationx", NOW, bot_token="t", chat_id="c")
+
+    with connection_scope(db_path) as conn:
+        rows = conn.execute("SELECT * FROM causal_analysis_log").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["declencheur"] == "day_r:EURUSD:stationx"
+
+
+def test_is_asset_blocked_decision_unaffected_if_causal_analysis_fails(tmp_path):
+    # Défense en profondeur : même si l'analyse causale levait une
+    # exception non interceptée en interne (record_causal_analysis est
+    # déjà fail-safe, voir test_causal_analyzer.py — ce test simule le
+    # cas où ce filet manquerait), le point d'appel dans
+    # is_asset_blocked absorbe l'erreur — la décision de blocage
+    # (déjà déterminée par circuit_breaker.py) n'en dépend jamais.
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    _insert_closed_trade(db_path, "EURUSD", "stationx", NOW.isoformat(), -2.5)
+
+    with patch("src.circuit_breaker_store.causal_analyzer.record_causal_analysis", side_effect=RuntimeError("panne")):
+        blocked, reason = is_asset_blocked(db_path, "EURUSD", "stationx", NOW)
+    assert blocked is True
+    assert "day_r" in reason
+
+
 def test_is_asset_blocked_true_when_global_block_active(tmp_path):
     db_path = str(tmp_path / "t.db")
     init_db(db_path)

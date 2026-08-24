@@ -12,6 +12,133 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-24 (soir, suite) — Moteur d'analyse causale (§3.11) + capture réelle du spread (§2.6)
+
+Deux chantiers demandés en parallèle par Ismaël, construits dans cet
+ordre (documenté comme demandé) : **spread d'abord, moteur causal
+ensuite** — le moteur causal lit `market_snapshots`/`confidence_scorer`
+pour son contexte, autant qu'il dispose de données réelles dès son
+premier déclenchement plutôt que d'un gap qu'il faudrait re-signaler
+immédiatement après coup. Les deux alimentent directement le cycle
+autonome déjà validé (paliers observation/génération séparés, non
+construits dans cette session).
+
+### `market_snapshots.spread` — capture réelle (§2.6)
+
+- `executor.open_signal` : juste après `get_price_snapshot` (déjà
+  appelé pour la décision elle-même, aucun appel réseau supplémentaire),
+  insertion `market_snapshots(signal_id, bid, ask, spread, captured_at)`
+  — AVANT toute exécution, pour CHAQUE signal qui atteint ce point
+  (approuvé ou rejeté ensuite par `decide_entry` : un signal rejeté a
+  quand même un spread réel au moment de l'évaluation, utile pour
+  l'éligibilité future du couple). Best-effort (try/except dédié, même
+  patron que `record_align_matinale_for_trade`) : un échec de capture
+  ne bloque jamais l'ouverture déjà en cours.
+- Portée : uniquement `bid`/`ask`/`spread` (les colonnes demandées) —
+  `atr`/`ma_longue`/`tendance_fond` de `market_snapshots` restent hors
+  périmètre, non alimentées, pas demandé.
+- **Vérifié bout en bout** (`tests/test_executor.py::
+  test_open_signal_spread_capture_unblocks_confidence_scorer_eligibility`) :
+  `confidence_scorer.get_median_spread_ratio`/`check_spread_condition`
+  se comportent normalement pour une source LIVE une fois la donnée
+  réellement disponible — gap fermé, pas seulement supposé fermé.
+- 4 nouveaux tests sur `executor.py` (capture réussie, capture même sur
+  signal rejeté, échec de capture n'empêche pas l'ouverture, bout en
+  bout confidence_scorer) + 92 tests existants toujours verts (aucune
+  régression).
+
+### Moteur d'analyse causale (§3.11) — `src/causal_analyzer.py`, nouveau, MODULE CRITIQUE
+
+Texte complet du §3.11 relu avant construction (demande explicite
+d'Ismaël, pas deviné) — trois catégories confirmées dans le CDC :
+anomalie_technique (corrigée immédiatement, seuil de volume non
+applicable), evenement_marche (aucune action), hypothese_pattern
+(journalisée en attente, ne devient proposition qu'au seuil de volume).
+Garde-fou littéral repris : "une mauvaise journée, même parfaitement
+comprise, ne prouve jamais un pattern."
+
+- **Déclenchement** : câblé dans `circuit_breaker_store.is_asset_
+  blocked`, juste après `record_trigger`, UNIQUEMENT pour les
+  coupe-circuits R (`day_r`/`week_r`/`drawdown_r`) — jamais pause
+  manuelle/stop_urgence/api_errors/breadth/canal inactif (cause déjà
+  connue au moment de ces déclencheurs administratifs, § pas de valeur
+  ajoutée par une analyse). Double filet de sécurité : `record_causal_
+  analysis` est fail-safe en interne (try/except propre, retourne -1),
+  ET le point d'appel dans `circuit_breaker_store.py` absorbe aussi
+  toute exception inattendue — la décision de blocage (déjà entièrement
+  déterminée par `circuit_breaker.py`, non modifié) ne dépend jamais de
+  ce module, testé explicitement (mock de `record_causal_analysis`
+  levant une exception, décision de blocage inchangée).
+- **Classification 100% déterministe** (invariant #1/#9 — aucun LLM ne
+  classe) :
+  - anomalie_technique : série d'erreurs API dans la fenêtre
+    (`circuit_breaker_events.breaker_type='api_errors'`, déjà
+    tracké) OU slippage à l'entrée > 5x le spread observé au signal
+    (constante a priori `SLIPPAGE_ANOMALY_SPREAD_MULTIPLIER`, jamais
+    calibrée sur un résultat).
+  - evenement_marche : ≥2 autres actifs déclenchés le même jour civil
+    UTC (`CORRELATED_MARKET_EVENT_MIN_OTHER_ASSETS`, volontairement
+    plus sensible que `circuit_breaker.BREADTH_PAUSE_THRESHOLD_ASSETS`
+    (5) — ce module classe une observation, il ne bloque rien, un seuil
+    plus bas n'a aucune conséquence de risque) OU un événement macro
+    "fort" dans la fenêtre (`macro_events` — table jamais alimentée à
+    ce jour, gap documenté ci-dessous, le code est correct mais
+    n'aura jamais de données tant que ce gap n'est pas comblé).
+  - hypothese_pattern : résiduelle, jamais un défaut silencieux — c'est
+    ce qui reste après avoir écarté les deux causes connues.
+- **`analyse_texte` (colonne NOT NULL) est un gabarit déterministe,
+  jamais un LLM** — écart assumé par rapport au patron `trade_
+  analyzer.py` (narratif LLM sur des faits déterministes) : un log
+  d'audit/conformité privilégie reproductibilité et absence de
+  coût/latence API à chaque déclenchement plutôt que la prose. Discuté
+  explicitement dans le module, pas un oubli.
+- **Fenêtre temporelle par type** (`window_start`) : réutilise
+  EXACTEMENT la sémantique jour/semaine UTC de
+  `circuit_breaker.compute_r_stats` (pas une nouvelle convention) —
+  day_r = minuit UTC, week_r = lundi 00:00 UTC, drawdown_r = aucune
+  borne (toujours "depuis le plus haut", comme le §2.7 le définit déjà).
+- **Ce module ne propose ni n'applique jamais rien** — écrit
+  uniquement dans `causal_analysis_log` (`action_prise` toujours NULL).
+  Le seuil de volume et la promotion `hypothese_pattern` -> proposition
+  sont explicitement la charge du cycle autonome (§3.9, palier séparé,
+  voir docs/HYPOTHESES.md), jamais ce module.
+- **Gap documenté, pas comblé ici** (hors périmètre de cette demande,
+  qui portait sur `market_snapshots.spread`, pas `macro_events`) :
+  `macro_events` reste vide, aucun code ne l'alimente (§2.9 calendrier
+  macro non construit) — la branche "événement macro fort" de
+  `classify_category` est correcte et testée, mais n'a structurellement
+  aucune donnée à évaluer tant que ce gap séparé n'est pas comblé.
+- 45 tests sur `causal_analyzer.py` (100% de couverture : fenêtres
+  temporelles, exposition corrélée, anomalie de slippage, les 3
+  catégories et leur ordre de priorité, gabarits de texte par
+  catégorie, orchestration I/O complète — lecture trades/circuit_
+  breaker_events/macro_events, écriture causal_analysis_log,
+  notification immédiate sur anomalie_technique uniquement, fail-safe)
+  + 2 nouveaux tests sur `circuit_breaker_store.py` (ligne créée au
+  déclenchement, décision de blocage inchangée si l'analyse causale
+  échoue) + 17 tests existants toujours verts (aucune régression, aucun
+  changement à la logique de décision de `circuit_breaker.py`/
+  `circuit_breaker_store.py` au-delà de l'ajout du point d'appel).
+
+### Tests, couverture, non-régression
+
+811 tests passent au total (760 avant ce lot), 100% de couverture
+vérifié sur `risk_engine`/`capital_manager`/`go_nogo`/`validator`/
+`trend_strategy`/`circuit_breaker`/`ict_strategy`/
+`mean_reversion_strategy`/`confidence_scorer`/`hypothesis2_strategy`/
+`hypothesis3_strategy`/`hypothesis5_strategy`/`regime_confirmation`/
+`backtest_engine`/`causal_analyzer`. Aucune modification de la logique
+de décision de `confidence_scorer.py` ni `circuit_breaker_store.py` —
+uniquement des fonctions/appels lecture seule ajoutés, vérifié par
+l'absence de régression sur leurs suites de tests existantes.
+
+### Déploiement et vérification en direct
+
+Voir la suite de cette entrée (à compléter après déploiement VPS et
+premier déclenchement réel observé, le cas échéant).
+
+---
+
 ## 2026-08-24 (soir) — Backtest rétrospectif (§2.11) : implémentation, correctif trouvé pendant les tests, déploiement
 
 Suite au pré-enregistrement complet dans `docs/HYPOTHESES.md` (24/08/2026
