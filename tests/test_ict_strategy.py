@@ -5,6 +5,7 @@ from src.ict_strategy import (
     RECENT_WINDOW,
     classify_structure_break,
     compute_fibonacci_zone,
+    compute_structural_entry,
     compute_structural_regime,
     evaluate_entry,
     find_confirmed_swings,
@@ -357,3 +358,81 @@ def test_evaluate_entry_never_raises_on_malformed_input():
 def test_recent_window_and_fractal_k_constants():
     assert RECENT_WINDOW == 20
     assert FRACTAL_K == 2
+
+
+# ---------------------------------------------------------------------------
+# compute_structural_entry — extraite le 24/08/2026 (voir docs/DECISIONS.md)
+# pour l'Hypothèse #5 (V3) : régime + jambe SANS confluence Fibonacci/FVG.
+# ---------------------------------------------------------------------------
+
+def test_compute_structural_entry_long_matches_full_confluence_case():
+    # Même fenêtre que test_evaluate_entry_long_full_confluence — la
+    # confluence Fibonacci/FVG y est satisfaite, donc compute_structural_
+    # entry et evaluate_entry doivent produire le même résultat ici.
+    candles = _build_candles(_RECENT_LONG)
+    signal = compute_structural_entry("EURUSD", candles)
+    assert signal is not None
+    assert signal.direction == "long"
+    assert signal.entry_price == pytest.approx(105.0)
+    assert signal.stop_price == pytest.approx(90.0)
+
+
+def test_compute_structural_entry_short_matches_full_confluence_case():
+    mirrored = [(200 - low, 200 - high, 200 - close) for (high, low, close) in _RECENT_LONG]
+    candles = _build_candles(mirrored)
+    signal = compute_structural_entry("EURUSD", candles)
+    assert signal is not None
+    assert signal.direction == "short"
+    assert signal.stop_price == pytest.approx(110.0)
+
+
+def test_compute_structural_entry_ignores_fibonacci_zone():
+    # Différence clé avec evaluate_entry (H2) : une clôture hors de la
+    # zone de Fibonacci ne bloque plus rien ici — seuls régime + jambe
+    # comptent. evaluate_entry renvoie None sur cette même fenêtre (voir
+    # test_evaluate_entry_price_outside_zone_returns_none) ;
+    # compute_structural_entry, non.
+    recent = list(_RECENT_LONG)
+    recent[-1] = (145, 138, 138)  # clôture bien au-dessus de la zone [100.7, 109.1]
+    candles = _build_candles(recent)
+    assert evaluate_entry("EURUSD", candles) is None
+    signal = compute_structural_entry("EURUSD", candles)
+    assert signal is not None
+    assert signal.direction == "long"
+    assert signal.entry_price == pytest.approx(138.0)
+    assert signal.stop_price == pytest.approx(90.0)
+
+
+def test_compute_structural_entry_ignores_missing_fvg():
+    # Différence clé avec evaluate_entry (H2) : l'absence de FVG ne
+    # bloque plus rien ici. evaluate_entry renvoie None sur cette même
+    # fenêtre (voir test_evaluate_entry_no_fvg_overlap_returns_none) ;
+    # compute_structural_entry, non.
+    recent = list(_RECENT_LONG)
+    recent[24] = (109, 85, 105)
+    candles = _build_candles(recent)
+    assert evaluate_entry("EURUSD", candles) is None
+    signal = compute_structural_entry("EURUSD", candles)
+    assert signal is not None
+    assert signal.direction == "long"
+    assert signal.stop_price == pytest.approx(90.0)
+
+
+def test_compute_structural_entry_none_when_no_regime():
+    candles = _build_candles([(100, 100, 100)] * 25)
+    assert compute_structural_entry("EURUSD", candles) is None
+
+
+def test_compute_structural_entry_none_when_no_valid_leg():
+    recent = [(105 + i * 0.1, 100 + i * 0.1, 102 + i * 0.1) for i in range(25)]
+    candles = _build_candles(recent)
+    assert compute_structural_entry("EURUSD", candles) is None
+
+
+def test_compute_structural_entry_insufficient_history():
+    candles = _build_candles(_RECENT_LONG[:10], baseline_n=0)
+    assert compute_structural_entry("EURUSD", candles) is None
+
+
+def test_compute_structural_entry_never_raises_on_malformed_input():
+    assert compute_structural_entry("EURUSD", None) is None

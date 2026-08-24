@@ -12,6 +12,181 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-24 — Rate-limiting Capital.com (429) : échelonnement des 6 process + retry/backoff ciblé ; Hypothèse #5 V3 (retrait de la confluence ICT)
+
+Demande explicite d'Ismaël, suite à une investigation (ce jour) sur
+pourquoi plusieurs mouvements de marché favorables de la journée
+n'avaient produit aucun trade, et pourquoi H5 n'avait rien produit du
+tout depuis son déploiement.
+
+### Diagnostic (avant tout correctif)
+
+Depuis le déploiement simultané de H2-H5 le 23/08/2026 après-midi, 6
+process (`executor_loop`, `trend_executor`, `hypothesis2_executor`,
+`hypothesis3_executor`, `hypothesis4_executor`, `hypothesis5_executor`)
+pollent l'API Capital.com concurremment depuis la même IP VPS, chacun
+toutes les ~60s. Constaté en lisant les logs du 24/08/2026 (`journalctl`/
+fichiers `logs/*.log` sur le VPS) :
+- 62 (`executor_loop`) à 2196 (`hypothesis2_executor`) erreurs 429
+  (`error.too-many.requests`) sur la seule journée du 24/08.
+- La sonde de connectivité générale en début de cycle
+  (`client.get_account_balance()`, `technical_strategy_executor.
+  run_technical_strategy_loop`/`executor.run_executor_loop`) saute TOUT
+  le cycle (aucune entrée, aucune gestion des positions ouvertes) au
+  moindre 429 — logué "itération sautée".
+- Pour H3/H4 (`require_regime_confirmation=True`), le rafraîchissement
+  du contexte de régime croisé (`regime_confirmation.
+  compute_index_regimes`, aux 3 ouvertures de session UTC + une fois au
+  démarrage seulement) échouait la plupart du temps observé — H4 a
+  rejeté 361 signaux ce jour-là avec la raison "contexte de régime
+  actuellement actif : None", dont 307 dus au cache vide/périmé, PAS à
+  un désaccord réel entre indices. Cas concret : un signal BTCUSD long
+  H3 validé une fois (07:10 UTC), ordre limite jamais rempli à temps
+  (péremption), puis la même cassure re-déclenchée plusieurs fois mais
+  systématiquement rejetée par ce cache vide.
+- H5 spécifiquement : 0 ligne dans `signals`/`trades` pour
+  `source='hypothesis5'` depuis son déploiement (23/08 après-midi), pas
+  seulement le 24/08 — cause principale identifiée comme la rareté de
+  la triple confluence (régime + ICT complet + RSI), le rate-limiting
+  n'expliquant qu'une fraction des cycles manqués (153 cycles avortés
+  sur ~1500, ~10%).
+
+### Correctif 1 — échelonnement fixe des 6 process
+
+`run_technical_strategy_loop`/`run_executor_loop` gagnent un paramètre
+`startup_offset_seconds` (défaut 0) : pause fixe unique, un seul
+`time.sleep()`, juste avant le premier appel réseau du process (après
+validation de la config, avant `login()`) — pas un mécanisme dynamique,
+un simple décalage constant choisi une fois pour toutes. Valeurs
+retenues, décalage de 10s entre process, motivé uniquement par le
+nombre de process à répartir sur une fenêtre de cycle de 60s (aucune
+donnée regardée pour ce choix) :
+
+| Process | `startup_offset_seconds` |
+|---|---|
+| `executor.run_executor_loop` (Station X) | 0 |
+| `trend_executor.run_trend_loop` (H1) | 10 |
+| `hypothesis2_executor.run_hypothesis2_loop` | 20 |
+| `hypothesis3_executor.run_hypothesis3_loop` | 30 |
+| `hypothesis4_executor.run_hypothesis4_loop` | 40 |
+| `hypothesis5_executor.run_hypothesis5_loop` | 50 |
+
+Ne corrige que le PIC de départ (tous les process partaient
+simultanément après un redéploiement/reboot commun) — un décalage
+constant peut dériver avec le temps (durées de cycle variables selon la
+charge), accepté comme une amélioration significative, pas une garantie
+parfaite de non-collision permanente.
+
+### Correctif 2 — retry avec backoff court, ciblé sur deux points de défaillance précis
+
+Nouveau module `src/retry.py` (`retry_with_backoff`, 3 tentatives par
+défaut, pauses 1s/2s) — délibérément PAS un décorateur générique
+appliqué à tous les appels API : n'enveloppe que des appels de LECTURE
+déjà existants, jamais un ordre (`open_position`/`place_limit_order`/
+`close_position`/... ne l'utilisent jamais), pour ne jamais risquer un
+double envoi d'ordre sur un simple timeout retenté. Deux points
+d'application choisis parce qu'identifiés comme les plus coûteux au
+diagnostic :
+1. `regime_confirmation.compute_index_regimes` — la boucle
+   `for index_epic in _CONFIRMATION_INDICES` enveloppe désormais
+   `get_candles(...)` d'un `retry_with_backoff` avant de retomber sur le
+   `except Exception: regimes[index_epic] = None` déjà existant
+   (fail-safe inchangé, juste moins souvent atteint). Testé : un 429
+   transitoire sur le premier essai n'aboutit plus systématiquement à
+   None ; 429 persistant sur 3 tentatives retombe sur le même
+   comportement qu'avant (None) ; une erreur non réseau (`RuntimeError`)
+   n'est toujours PAS retentée (comportement fail-safe immédiat
+   préservé pour tout ce qui n'est pas un 429/panne réseau).
+2. La sonde de connectivité générale en début de cycle
+   (`client.get_account_balance()`) dans `run_technical_strategy_loop`
+   ET `run_executor_loop` (code dupliqué entre les deux, comme avant) —
+   enveloppée de la même façon avant le `except (CapitalApiError,
+   requests.exceptions.RequestException): ... itération sautée`
+   existant.
+
+Aucun retry sur les appels par-actif de génération de signal
+(`_generate_and_queue_signal`/`get_candles` par actif dans la boucle
+principale) — volontairement hors périmètre de cette demande : un échec
+isolé sur UN actif n'aborte que ce cycle pour cet actif (fail-safe déjà
+en place via le `except Exception` de fin de boucle), moins coûteux que
+les deux points ciblés ci-dessus.
+
+### Correctif 3 — Hypothèse #5, V3 : retrait de la confluence ICT
+
+Voir `docs/HYPOTHESES.md` (24/08/2026) pour l'entrée complète
+(rationale, tableau de paramètres, estimation de fréquence). Résumé
+technique de l'implémentation :
+
+- `ict_strategy.py` : `evaluate_entry`/`_evaluate_entry` (Hypothèse #2)
+  refactorées SANS changement de comportement — extraction d'un cœur
+  partagé `_find_regime_and_leg` (régime structurel + jambe
+  d'impulsion, retourne `(régime, swing_low, swing_high,
+  clôture_courante)` ou `None`), réutilisé par la nouvelle fonction
+  publique `compute_structural_entry` (régime+jambe SANS confluence
+  Fibonacci/FVG) ET par `_evaluate_entry` (qui ajoute la confluence
+  Fibonacci/FVG par-dessus, exactement comme avant). Vérifié par
+  régression stricte : toute la suite `tests/test_ict_strategy.py`
+  existante (14 tests bout-en-bout sur `evaluate_entry`) passe sans
+  modification après le refactor — comportement de H2 inchangé bit
+  pour bit.
+- `hypothesis5_strategy.py` : `_evaluate_entry` délègue désormais à
+  `ict_strategy.compute_structural_entry` au lieu de `ict_strategy.
+  evaluate_entry` — seul changement fonctionnel. Le filtre RSI
+  (`_rsi_just_crossed_threshold`, comparaison stricte des deux
+  dernières bougies) est INCHANGÉ — voir `docs/HYPOTHESES.md` pour la
+  correction apportée à la demande d'origine sur ce point ("fenêtre de
+  3 bougies" : n'existe pas, ni avant ni après cette révision).
+- `hypothesis5_executor.py` : `_describe_signal` (texte d'audit) mis à
+  jour pour ne plus mentionner la confluence Fibonacci/FVG (n'est plus
+  une condition d'entrée) — sinon le texte d'audit Telegram aurait
+  décrit une condition qui n'est plus vérifiée.
+- Aucun changement de budget de variables (invariant #10) : la
+  confluence ICT était héritée de H2, jamais comptée dans le budget
+  propre de H5 (3/3 : config RSI, TP1 R, TP2 R) — son retrait ne change
+  donc pas le compte. Le dépassement 4/3 déjà assumé pour la résolution
+  M15 (entrée du 23/08/2026) reste inchangé, toujours accepté en
+  connaissance de cause.
+
+### Tests
+
+Nouveaux : `tests/test_retry.py` (7 tests, couverture complète de
+`retry_with_backoff` — succès direct, retry puis succès, délais
+successifs, épuisement des tentatives, exceptions non listées jamais
+retentées). `tests/test_ict_strategy.py` étendu (`compute_structural_entry`
+: cas long/short identiques aux cas de confluence complète, ignore la
+zone de Fibonacci, ignore l'absence de FVG, None sur régime/jambe
+absents, fail-safe sur entrée malformée). `tests/test_regime_confirmation.py`
+étendu (retry sur 429 transitoire puis succès, épuisement des tentatives
+retombant sur None, erreur non réseau jamais retentée). `tests/
+test_hypothesis5_strategy.py` : tous les doubles sur `_ict_evaluate_entry`
+renommés vers `_compute_structural_entry` (comportement testé
+inchangé) + nouveau test prouvant qu'un régime structurel valide SANS
+confluence Fibonacci/FVG produit désormais un signal (différence de
+comportement délibérée vs H2). `tests/test_hypothesis{2,3,4,5}_executor.py`
+et `tests/test_trend_executor.py` étendus (valeur par défaut de
+`startup_offset_seconds` forwardée correctement à `run_technical_
+strategy_loop`). Aucune modification des tests `run_executor_loop`/
+`run_technical_strategy_loop` eux-mêmes au-delà de ce qui précède —
+ces boucles restent testées comme avant (orchestration I/O, pas
+d'exigence de couverture totale, même régime que `telegram_listener.
+run_listener`).
+
+100% de couverture toujours vérifié sur `risk_engine`/`capital_manager`/
+`go_nogo`/`validator`/`trend_strategy`/`circuit_breaker`/`ict_strategy`/
+`mean_reversion_strategy`/`confidence_scorer`/`hypothesis2_strategy`/
+`hypothesis3_strategy`/`hypothesis5_strategy`/`regime_confirmation`.
+
+### Déploiement
+
+VPS : `git pull` puis redémarrage des 6 process (nouvelles valeurs de
+`startup_offset_seconds` prises en compte uniquement au redémarrage,
+`tmux kill-session`/relance pour chacun — pas un redémarrage à chaud).
+Vérification en direct prévue sur plusieurs heures après redémarrage :
+taux de 429 avant/après, fréquence des rejets "contexte de régime :
+None" avant/après, premier signal H5 (V3) le cas échéant.
+
+---
+
 ## 2026-08-23 — Correction de la couche session/multi-timeframe : recalibration, pas porte — remplace l'exemption crypto
 
 **Remplace l'entrée précédente** (« Exemption crypto (BTCUSD/ETHUSD) de

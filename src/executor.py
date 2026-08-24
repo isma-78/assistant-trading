@@ -68,6 +68,7 @@ from src.db import connection_scope
 from src.envelope_store import load_or_create_envelope, load_reserve_total, persist_trade_result
 from src.go_nogo import GoNoGoStatus
 from src.market_data import Candle, compute_atr, get_candles, get_price_snapshot
+from src.retry import retry_with_backoff
 from src.session_marker import compute_market_session
 from src.risk_engine import (
     ExistingPosition,
@@ -1349,7 +1350,7 @@ def force_close_all_open_trades(
 _DEMO_BASE_URL = "https://demo-api-capital.backend-capital.com/api/v1"
 
 
-def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
+def run_executor_loop(config, db_path: str, interval_seconds: int = 30, startup_offset_seconds: int = 0) -> None:
     """Boucle continue : place les signaux validés en attente, détecte
     les remplissages, gère les positions ouvertes (TP/SL/trailing),
     annule les ordres limite périmés. Mode démo exclusivement.
@@ -1367,7 +1368,14 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
     la boucle est journalisée et interrompt seulement l'itération
     courante — jamais le process : abandonner la surveillance des
     positions déjà ouvertes serait plus dangereux que de réessayer au
-    prochain cycle."""
+    prochain cycle.
+
+    `startup_offset_seconds` (défaut 0, 24/08/2026, voir
+    docs/DECISIONS.md) : pause fixe unique avant le premier appel réseau
+    — même mécanisme d'échelonnement que `technical_strategy_executor.
+    run_technical_strategy_loop` (voir sa docstring), pour que les 6
+    process de production ne cognent plus l'API Capital.com au même
+    instant depuis la même IP."""
     import time
 
     import anthropic
@@ -1389,6 +1397,8 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
             "CAPITAL_ACCOUNT_ID manquant — requis pour cibler explicitement le compte "
             "(jamais le compte \"préféré\", instable, voir docs/DECISIONS.md du 20/08/2026)"
         )
+
+    time.sleep(startup_offset_seconds)
 
     client = CapitalClient(config.capital_api_key, config.capital_identifier, config.capital_api_password, _DEMO_BASE_URL)
     client.login()
@@ -1439,7 +1449,10 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30) -> None:
             # rendant la surcouche §2.7 aveugle à ce mode de panne
             # précis (voir docs/DECISIONS.md).
             try:
-                client.get_account_balance()
+                retry_with_backoff(
+                    client.get_account_balance,
+                    exceptions=(CapitalApiError, requests.exceptions.RequestException),
+                )
                 circuit_breaker_store.record_api_result(db_path, process_name, True)
             except (CapitalApiError, requests.exceptions.RequestException):
                 circuit_breaker_store.record_api_result(

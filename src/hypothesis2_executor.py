@@ -54,10 +54,14 @@ def _describe_signal(hypothesis_label: str, asset: str, signal) -> str:
     )
 
 
-def run_hypothesis2_loop(config, db_path: str, interval_seconds: int = 60) -> None:
+def run_hypothesis2_loop(config, db_path: str, interval_seconds: int = 60, startup_offset_seconds: int = 20) -> None:
     """Délègue à technical_strategy_executor.run_technical_strategy_loop
     avec les paramètres propres à l'Hypothèse #2 : compte et identifiants
-    Capital.com dédiés (config.capital_*_hypothesis2)."""
+    Capital.com dédiés (config.capital_*_hypothesis2).
+
+    `startup_offset_seconds=20` (24/08/2026, voir docs/DECISIONS.md) :
+    échelonnement des 6 process de production sur la même IP, voir
+    docstring de `technical_strategy_executor.run_technical_strategy_loop`."""
     run_technical_strategy_loop(
         config, db_path,
         source=HYPOTHESIS2_SOURCE,
@@ -73,6 +77,7 @@ def run_hypothesis2_loop(config, db_path: str, interval_seconds: int = 60) -> No
         hypothesis_label=_HYPOTHESIS_LABEL,
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
+        startup_offset_seconds=startup_offset_seconds,
     )
 
 

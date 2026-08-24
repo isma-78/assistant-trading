@@ -1877,5 +1877,125 @@ trade de l'application rétroactive et déploiement détaillés dans
 
 ---
 
+## 2026-08-24 — Hypothèse #5 : V3, retrait de la confluence ICT (régime structurel + RSI seuls) — remplace l'entrée "REDÉFINIE" du 23/08/2026 ci-dessus
+
+Demande explicite d'Ismaël, motivée par une observation opérationnelle
+**pas un résultat de trade** (cohérent avec la "Règle de modification"
+en en-tête et invariant #10) : la version V2 (régime structurel +
+confluence ICT complète + RSI, trois conditions réunies) n'a produit
+**AUCUN signal, donc aucun trade**, en ~26h de fonctionnement en
+production depuis son déploiement le 23/08/2026 après-midi (vérifié en
+base le 24/08/2026 : `SELECT COUNT(*) FROM signals WHERE
+source='hypothesis5'` -> 0). Pas un ajustement sur des données
+observées — H5 n'a produit aucune donnée à ajuster.
+
+### Ce qui change par rapport à l'entrée remplacée (V2, 23/08/2026)
+
+| | V2 (remplacée) | V3 (retenue) |
+|---|---|---|
+| Régime | Structurel (BOS/CHoCH, hérité de H2) | **Inchangé** |
+| Déclencheur | Confluence ICT de H2 (Fibonacci+FVG) **ET** RSI(14) franchissant 50, même bougie | Régime structurel **ET** RSI(14) franchissant 50, même bougie — **confluence ICT retirée** |
+| Sortie | §2.10 (TP1 1R/TP2 2R/trailing 20%) | **Inchangée** |
+
+### Déclencheur (V3)
+
+Régime structurel confirmé (BOS/CHoCH, `ict_strategy.
+compute_structural_regime`, réutilisé) **ET** momentum RSI(14)
+franchissant le seuil 50 dans le sens de la structure, au même moment
+(entre l'avant-dernière et la dernière bougie fournies — condition de
+franchissement strict, **inchangée depuis la V2**,
+`hypothesis5_strategy._rsi_just_crossed_threshold`). La confluence ICT
+(swings fractals K=2 comme ancrage, zone de Fibonacci 61,8-78,6 %, FVG
+chevauchant la zone) est retirée : c'était la composante la plus
+restrictive des trois conditions de la V2. `ict_strategy.evaluate_entry`
+(régime + jambe + confluence complète, utilisée par la V2) est
+remplacée par `ict_strategy.compute_structural_entry` (nouvelle,
+régime + jambe SEULS, extraite de `evaluate_entry` le 24/08/2026 pour
+cet usage précis — voir docs/DECISIONS.md ; `evaluate_entry` elle-même,
+utilisée par H2, reste strictement inchangée, vérifiée par régression).
+
+**Rationale du retrait** : éviter le doublon avec H2 (qui reste régime +
+confluence ICT complète, inchangée) — H5 devient une hypothèse
+distincte (régime + momentum RSI), pas une redite de H2 avec RSI ajouté
+par-dessus. La confluence ICT était par construction la couche la plus
+restrictive (H2 seule, qui la conserve, produit déjà peu de signaux —
+voir l'entrée du 23/08/2026 sur la bascule du régime structurel, décrite
+comme "un filtre nettement plus strict que MA200").
+
+**Précision sur la demande d'origine** : la demande de cette révision
+mentionnait une "fenêtre de 3 bougies déjà en place" pour le
+franchissement RSI. Vérifié en relisant le code avant d'écrire cette
+entrée : ce n'est pas exact — `_rsi_just_crossed_threshold` compare
+uniquement les deux dernières bougies (franchissement strict), jamais
+une fenêtre de 3, ni en V2 ni maintenant. Conservé tel quel (rien à
+élargir qui existait déjà) ; une fenêtre de tolérance plus large serait
+un nouveau paramètre à justifier séparément (invariant #10), non fait
+ici faute de demande explicite sur ce point précis.
+
+### Sortie (inchangée)
+
+Mécanisme §2.10 déjà construit pour Station X, sans aucune modification :
+TP1 50 % à 1R, TP2 30 % à 2R, TP3 20 % sous trailing 2×ATR(14) plancher
+breakeven, stop déplacé au breakeven dès TP1 touché.
+
+### Paramètres exacts
+
+| Paramètre | Valeur | Statut |
+|---|---|---|
+| Régime structurel (BOS/CHoCH) | Hérité de H2 | Réutilisé, pas un nouveau choix |
+| Confluence ICT (K=2, Fibonacci, FVG) | — | **Retirée** (n'est plus une condition d'entrée) |
+| **Config RSI** (période + seuil de franchissement) | 14, 50 | **Paramètre #1**, inchangé |
+| **Distance TP1** | 1R | **Paramètre #2**, inchangé |
+| **Distance TP2** | 2R | **Paramètre #3**, inchangé |
+| Résolution des bougies | MINUTE_15 | Inchangée (couche session/multi-timeframe du 23/08/2026, toujours 4/3 — dépassement déjà assumé) |
+| Actifs | Les 8 de la liste blanche | Inchangé |
+| Source dédiée | `hypothesis5` | Inchangée |
+
+**Toujours 3 paramètres propres à cette hypothèse — le retrait de la
+confluence ICT ne change pas le compte (elle était héritée de H2,
+jamais comptée dans le budget propre de H5) — le dépassement 4/3 déjà
+assumé pour la résolution M15 reste inchangé, voir entrée du
+23/08/2026.**
+
+### Fréquence de signaux attendue (estimation, pas une donnée observée)
+
+Retirer la couche la plus restrictive (confluence ICT à trois
+conditions géométriques : swings fractals confirmés + fenêtre Fibonacci
+étroite [61,8-78,6%] + FVG chevauchant) augmente mécaniquement la
+fréquence de signaux par rapport à la V2 (qui en a produit 0 en 26h) —
+il ne reste plus que deux conditions (régime structurel + RSI), toutes
+deux nettement moins restrictives individuellement que la géométrie
+Fibonacci/FVG. Pas de chiffre précis avancé ici (aucun backtest
+disponible sur ce projet, voir invariant #10 — pas de sur-ajustement a
+priori) : à observer en production, comme pour toute autre hypothèse.
+Attendu néanmoins plus fréquent que H2 (qui garde la confluence ICT
+complète) et plus rare que H3 (régime seul, sans second filtre) — H5 se
+positionne entre les deux par construction.
+
+### Indépendance vis-à-vis de Station X
+
+Inchangée : aucune valeur lue depuis les signaux réels ou la table
+`signals` de Station X — voir docs/DECISIONS.md pour la vérification.
+
+### Ce que cette révision NE change PAS
+
+- Aucune modification de `ict_strategy.evaluate_entry` (H2) —
+  comportement vérifié strictement inchangé par régression.
+- Aucune modification du mécanisme de sortie §2.10.
+- Aucun nouveau paramètre au sens de l'invariant #10 (voir ci-dessus).
+- Ne sera jamais ajustée automatiquement sur la base de ses propres
+  résultats — toute évolution future = nouvelle entrée datée.
+
+### Plafond §3.9 et correction pour comparaisons multiples
+
+Inchangé : correction calibrée sur 5 hypothèses simultanées (H1-H5),
+jamais 4.
+
+Implémentation, tests (100% sur `ict_strategy.py`/
+`hypothesis5_strategy.py`), déploiement et vérification en direct
+détaillés dans `docs/DECISIONS.md` (24/08/2026).
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4 ou #5 — jamais une modification de ce qui précède.*

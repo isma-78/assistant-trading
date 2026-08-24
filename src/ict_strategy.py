@@ -68,6 +68,14 @@ automatiquement par `executor._evaluate_position_management` via
 
 Aucun LLM (invariant #1) : comparaisons numériques déterministes,
 fail-safe (invariant #7 — toute erreur interne devient "pas de signal").
+
+**24/08/2026** (voir docs/DECISIONS.md) : `evaluate_entry` refactorée en
+`_find_regime_and_leg` (cœur régime+jambe partagé) + confluence
+Fibonacci/FVG appliquée par-dessus — comportement de `evaluate_entry`
+STRICTEMENT inchangé (vérifié par régression), extraction motivée par
+`compute_structural_entry` (nouvelle, régime+jambe SANS confluence),
+réutilisée par l'Hypothèse #5 (V3, voir hypothesis5_strategy.py) qui
+remplace la confluence ICT par un filtre RSI(14).
 """
 
 from typing import List, Optional, Tuple
@@ -248,21 +256,15 @@ def _find_latest_valid_leg(
     raise ValueError(f"direction inconnue : {direction!r}")
 
 
-def evaluate_entry(asset: str, candles: List[Candle]) -> Optional[TrendSignal]:
-    """Point d'entrée unique de l'Hypothèse #2 : régime structurel BOS/
-    CHoCH (`compute_structural_regime`, bascule du 23/08/2026 — voir
-    docstring du module), jambe de swings fractals, zone de confluence
-    Fibonacci, FVG chevauchant la zone dans le sens du régime.
-
-    Ne lève jamais d'exception : toute erreur interne devient "pas de
-    signal" (fail-safe, invariant #7 — même patron que trend_strategy)."""
-    try:
-        return _evaluate_entry(asset, candles)
-    except Exception:
-        return None
-
-
-def _evaluate_entry(asset: str, candles: List[Candle]) -> Optional[TrendSignal]:
+def _find_regime_and_leg(candles: List[Candle]) -> Optional[Tuple[str, float, float, float]]:
+    """Cœur partagé entre `evaluate_entry` (Hypothèse #2, confluence
+    Fibonacci/FVG en plus) et `compute_structural_entry` (Hypothèse #5,
+    RSI en plus, voir hypothesis5_strategy.py) — extrait le 24/08/2026
+    (voir docs/DECISIONS.md) pour ne calculer régime structurel et jambe
+    d'impulsion QU'UNE SEULE FOIS, jamais deux logiques divergentes.
+    Retourne (régime, swing_low, swing_high, clôture_courante) de la
+    jambe la plus récente dans le sens du régime, ou None si pas assez
+    d'historique, aucun régime tranché, ou aucune jambe valide."""
     # Garde de longueur minimale : uniquement ce dont find_confirmed_swings
     # a besoin (RECENT_WINDOW + marge de confirmation des swings en bord de
     # fenêtre) — plus de dépendance à MA_PERIOD (200) depuis la bascule du
@@ -282,11 +284,56 @@ def _evaluate_entry(asset: str, candles: List[Candle]) -> Optional[TrendSignal]:
     if leg is None:
         return None
     swing_low, swing_high = leg
+    return regime, swing_low, swing_high, current_close
+
+
+def compute_structural_entry(asset: str, candles: List[Candle]) -> Optional[TrendSignal]:
+    """Régime structurel BOS/CHoCH + jambe d'impulsion (swings fractals),
+    SANS la confluence Fibonacci/FVG — entrée = clôture courante, stop =
+    borne opposée de la jambe. Extrait le 24/08/2026 (voir
+    docs/DECISIONS.md) pour l'Hypothèse #5 (V3, hypothesis5_strategy.py) :
+    le RSI(14) y remplace la confluence ICT comme second filtre, réutilise
+    ce même régime/jambe plutôt que de le recalculer indépendamment.
+
+    Ne lève jamais d'exception : toute erreur interne devient "pas de
+    signal" (fail-safe, invariant #7 — même patron que evaluate_entry)."""
+    try:
+        result = _find_regime_and_leg(candles)
+    except Exception:
+        return None
+    if result is None:
+        return None
+    regime, swing_low, swing_high, current_close = result
+    stop_price = swing_low if regime == "long" else swing_high
+    return TrendSignal(asset=asset, direction=regime, entry_price=current_close, stop_price=stop_price)
+
+
+def evaluate_entry(asset: str, candles: List[Candle]) -> Optional[TrendSignal]:
+    """Point d'entrée unique de l'Hypothèse #2 : régime structurel BOS/
+    CHoCH (`compute_structural_regime`, bascule du 23/08/2026 — voir
+    docstring du module), jambe de swings fractals, zone de confluence
+    Fibonacci, FVG chevauchant la zone dans le sens du régime.
+
+    Ne lève jamais d'exception : toute erreur interne devient "pas de
+    signal" (fail-safe, invariant #7 — même patron que trend_strategy)."""
+    try:
+        return _evaluate_entry(asset, candles)
+    except Exception:
+        return None
+
+
+def _evaluate_entry(asset: str, candles: List[Candle]) -> Optional[TrendSignal]:
+    result = _find_regime_and_leg(candles)
+    if result is None:
+        return None
+    regime, swing_low, swing_high, current_close = result
 
     zone_low, zone_high = compute_fibonacci_zone(regime, swing_low, swing_high)
     if not (zone_low <= current_close <= zone_high):
         return None
 
+    window_size = RECENT_WINDOW + 2 * FRACTAL_K + 1
+    recent = candles[-window_size:]
     fvgs = find_fvgs(recent)
     overlap = any(
         d == regime and not (high < zone_low or low > zone_high)

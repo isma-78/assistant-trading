@@ -129,31 +129,37 @@ def test_r_multiples_are_1_and_2():
 # evaluate_entry / _evaluate_entry — bout en bout
 # ---------------------------------------------------------------------------
 #
-# Les deux conditions (confluence ICT + franchissement RSI) sont testées
-# ENSEMBLE au moyen d'un double (`unittest.mock.patch`) sur
-# `_ict_evaluate_entry` pour les cas positifs (long/short) : construire
-# organiquement une seule fenêtre de bougies satisfaisant SIMULTANÉMENT
-# la géométrie ICT (régime structurel + zone de Fibonacci + FVG, déjà
-# validée dans tests/test_ict_strategy.py) ET une trajectoire RSI précise
-# est sur-contraint (les hauts/bas nécessaires à la structure ICT
-# forcent des clôtures qui ne laissent quasiment aucune liberté pour
-# façonner le RSI). Découpler les deux dépendances isole correctement
-# CE module (qui ne fait que les combiner) de la correction de
-# `ict_strategy.evaluate_entry` elle-même (déjà testée à 100% séparément).
-# Le cas "confluence ICT présente MAIS RSI non franchi" ci-dessous, lui,
-# utilise une fenêtre RÉELLE (aucun double) pour prouver que le filtre
-# RSI s'applique bien sur une vraie sortie d'ict_strategy.evaluate_entry.
+# V3 (24/08/2026, voir docs/DECISIONS.md/docs/HYPOTHESES.md) : la
+# confluence ICT (Fibonacci/FVG) est retirée, seul le régime structurel +
+# jambe d'impulsion (`ict_strategy.compute_structural_entry`) est requis
+# EN PLUS du franchissement RSI.
+#
+# Les deux conditions (régime structurel + franchissement RSI) sont
+# testées ENSEMBLE au moyen d'un double (`unittest.mock.patch`) sur
+# `_compute_structural_entry` pour les cas positifs (long/short) :
+# construire organiquement une seule fenêtre de bougies satisfaisant
+# SIMULTANÉMENT la géométrie structurelle (régime + jambe, déjà validée
+# dans tests/test_ict_strategy.py) ET une trajectoire RSI précise est
+# sur-contraint. Découpler les deux dépendances isole correctement CE
+# module (qui ne fait que les combiner) de la correction de
+# `ict_strategy.compute_structural_entry` elle-même (déjà testée à 100%
+# séparément). Le cas "régime structurel présent MAIS RSI non franchi"
+# ci-dessous, lui, utilise une fenêtre RÉELLE (aucun double) pour prouver
+# que le filtre RSI s'applique bien sur une vraie sortie de
+# `ict_strategy.compute_structural_entry`.
 
-def test_evaluate_entry_no_ict_signal_returns_none():
-    with patch("src.hypothesis5_strategy._ict_evaluate_entry", return_value=None):
+def test_evaluate_entry_no_structural_signal_returns_none():
+    with patch("src.hypothesis5_strategy._compute_structural_entry", return_value=None):
         assert evaluate_entry("EURUSD", _closes(_RSI_CROSS_UP_CLOSES)) is None
 
 
-def test_evaluate_entry_ict_signal_present_but_no_rsi_cross_returns_none():
-    # Fenêtre réelle (aucun double) : confluence ICT complète (même
-    # géométrie haussière que tests/test_ict_strategy.py, entrée=105,
-    # stop=90), mais les clôtures intermédiaires (seules libres — hauts/
-    # bas figés par la géométrie ICT) ne produisent PAS de franchissement
+def test_evaluate_entry_structural_signal_present_but_no_rsi_cross_returns_none():
+    # Fenêtre réelle (aucun double) : régime structurel + jambe valides
+    # (même géométrie haussière que tests/test_ict_strategy.py, entrée=105,
+    # stop=90 — la zone Fibonacci/FVG n'est même plus requise depuis la
+    # V3, mais cette fenêtre les satisfait aussi, hérité du fixture
+    # original), mais les clôtures intermédiaires (seules libres — hauts/
+    # bas figés par la géométrie) ne produisent PAS de franchissement
     # RSI récent du seuil 50 (validé en exécutant le code réel : RSI
     # passe de ~55.7 à ~62.7, déjà au-dessus de 50 avant la clôture
     # courante -> aucun franchissement).
@@ -176,8 +182,8 @@ def test_evaluate_entry_ict_signal_present_but_no_rsi_cross_returns_none():
 
 
 def test_evaluate_entry_both_conditions_met_long():
-    ict_signal = TrendSignal(asset="EURUSD", direction="long", entry_price=105.0, stop_price=90.0, confidence=1.0)
-    with patch("src.hypothesis5_strategy._ict_evaluate_entry", return_value=ict_signal):
+    structural_signal = TrendSignal(asset="EURUSD", direction="long", entry_price=105.0, stop_price=90.0, confidence=1.0)
+    with patch("src.hypothesis5_strategy._compute_structural_entry", return_value=structural_signal):
         signal = evaluate_entry("EURUSD", _closes(_RSI_CROSS_UP_CLOSES))
     assert signal is not None
     assert isinstance(signal, Hypothesis5Signal)
@@ -192,8 +198,8 @@ def test_evaluate_entry_both_conditions_met_long():
 
 
 def test_evaluate_entry_both_conditions_met_short():
-    ict_signal = TrendSignal(asset="EURUSD", direction="short", entry_price=95.0, stop_price=110.0, confidence=1.0)
-    with patch("src.hypothesis5_strategy._ict_evaluate_entry", return_value=ict_signal):
+    structural_signal = TrendSignal(asset="EURUSD", direction="short", entry_price=95.0, stop_price=110.0, confidence=1.0)
+    with patch("src.hypothesis5_strategy._compute_structural_entry", return_value=structural_signal):
         signal = evaluate_entry("EURUSD", _closes(_RSI_CROSS_DOWN_CLOSES))
     assert signal is not None
     assert signal.direction == "short"
@@ -202,13 +208,13 @@ def test_evaluate_entry_both_conditions_met_short():
     assert signal.tp2 == pytest.approx(95.0 - 2 * r)
 
 
-def test_evaluate_entry_ict_signal_present_but_rsi_direction_mismatch_returns_none():
-    # Confluence ICT haussière, mais le RSI franchit 50 à la HAUSSE alors
-    # qu'on teste ici un signal ICT "short" (fenêtre RSI construite pour
-    # un franchissement long, jamais short) -> aucune des deux conditions
-    # n'est réunie dans le même sens, pas de signal.
-    ict_signal = TrendSignal(asset="EURUSD", direction="short", entry_price=95.0, stop_price=110.0, confidence=1.0)
-    with patch("src.hypothesis5_strategy._ict_evaluate_entry", return_value=ict_signal):
+def test_evaluate_entry_structural_signal_present_but_rsi_direction_mismatch_returns_none():
+    # Régime structurel haussier disponible, mais le RSI franchit 50 à la
+    # HAUSSE alors qu'on teste ici un signal structurel "short" (fenêtre
+    # RSI construite pour un franchissement long, jamais short) -> aucune
+    # des deux conditions n'est réunie dans le même sens, pas de signal.
+    structural_signal = TrendSignal(asset="EURUSD", direction="short", entry_price=95.0, stop_price=110.0, confidence=1.0)
+    with patch("src.hypothesis5_strategy._compute_structural_entry", return_value=structural_signal):
         signal = evaluate_entry("EURUSD", _closes(_RSI_CROSS_UP_CLOSES))
     assert signal is None
 
@@ -227,5 +233,25 @@ def test_evaluate_entry_internal_error_is_fail_safe():
         confidence: float = 1.0
 
     bad_signal = _BadDirectionSignal(asset="EURUSD", direction="sideways", entry_price=100.0, stop_price=90.0)
-    with patch("src.hypothesis5_strategy._ict_evaluate_entry", return_value=bad_signal):
+    with patch("src.hypothesis5_strategy._compute_structural_entry", return_value=bad_signal):
         assert evaluate_entry("EURUSD", _closes(_RSI_CROSS_UP_CLOSES)) is None
+
+
+def test_evaluate_entry_no_longer_requires_fibonacci_fvg_confluence():
+    # V3 (24/08/2026) : contrairement à la version précédente (qui
+    # déléguait à ict_strategy.evaluate_entry, confluence Fibonacci/FVG
+    # incluse), un régime structurel valide SANS confluence ICT suffit
+    # désormais, tant que le RSI franchit 50 dans le même sens. Double sur
+    # `_compute_structural_entry` avec une clôture (145) délibérément hors
+    # de toute zone de Fibonacci plausible pour la jambe (90-140) — la
+    # confluence ICT complète (ict_strategy.evaluate_entry) rejetterait ce
+    # cas (voir test_ict_strategy.test_evaluate_entry_price_outside_zone_
+    # returns_none), mais compute_structural_entry (donc H5 V3) ne la
+    # vérifie jamais.
+    structural_signal = TrendSignal(asset="EURUSD", direction="long", entry_price=145.0, stop_price=90.0, confidence=1.0)
+    with patch("src.hypothesis5_strategy._compute_structural_entry", return_value=structural_signal):
+        signal = evaluate_entry("EURUSD", _closes(_RSI_CROSS_UP_CLOSES))
+    assert signal is not None
+    assert signal.direction == "long"
+    assert signal.entry_price == pytest.approx(145.0)
+    assert signal.stop_price == pytest.approx(90.0)

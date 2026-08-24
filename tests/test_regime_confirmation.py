@@ -1,5 +1,6 @@
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+from src.capital_client import CapitalApiError
 from src.regime_confirmation import (
     MA_PERIOD,
     compute_index_regimes,
@@ -86,6 +87,52 @@ def test_compute_index_regimes_both_fail_safe_none():
     client.get_prices.side_effect = RuntimeError("panne broker")
     regimes = compute_index_regimes(client, "HOUR")
     assert regimes == {"US30": None, "US100": None}
+
+
+# --- compute_index_regimes : retry avec backoff (24/08/2026, voir docs/DECISIONS.md) ---
+
+def test_compute_index_regimes_retries_transient_429_then_succeeds():
+    # Un 429 transitoire sur le premier appel de CHAQUE indice ne doit
+    # plus donner None immédiatement — nouvel essai avant d'abandonner.
+    client = MagicMock()
+    client.get_prices.side_effect = [
+        CapitalApiError("429 too many requests"), _regime_response("long"),  # US30 : échec puis succès
+        _regime_response("short"),  # US100 : succès direct
+    ]
+    with patch("src.retry.time.sleep") as mock_sleep:
+        regimes = compute_index_regimes(client, "HOUR")
+    assert regimes == {"US30": "long", "US100": "short"}
+    assert client.get_prices.call_count == 3
+    mock_sleep.assert_called_once()
+
+
+def test_compute_index_regimes_exhausts_retries_falls_back_to_none():
+    # 429 persistant sur les 3 tentatives (défaut de retry_with_backoff) :
+    # même comportement fail-safe qu'avant (None pour cet indice seul),
+    # juste après avoir épuisé les essais supplémentaires.
+    client = MagicMock()
+    client.get_prices.side_effect = [
+        CapitalApiError("429"), CapitalApiError("429"), CapitalApiError("429"),  # US30 : 3 échecs
+        _regime_response("long"),  # US100 : succès direct
+    ]
+    with patch("src.retry.time.sleep") as mock_sleep:
+        regimes = compute_index_regimes(client, "HOUR")
+    assert regimes == {"US30": None, "US100": "long"}
+    assert client.get_prices.call_count == 4
+    assert mock_sleep.call_count == 2
+
+
+def test_compute_index_regimes_non_network_error_not_retried():
+    # RuntimeError n'est pas dans le tuple d'exceptions retenté par
+    # retry_with_backoff — comportement fail-safe immédiat inchangé,
+    # aucun essai supplémentaire, aucune pause.
+    client = MagicMock()
+    client.get_prices.side_effect = [RuntimeError("panne"), _regime_response("long")]
+    with patch("src.retry.time.sleep") as mock_sleep:
+        regimes = compute_index_regimes(client, "HOUR")
+    assert regimes == {"US30": None, "US100": "long"}
+    assert client.get_prices.call_count == 2
+    mock_sleep.assert_not_called()
 
 
 # --- derive_confirmed_regime --------------------------------------------------

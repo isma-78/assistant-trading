@@ -184,3 +184,13 @@ def test_run_trend_loop_untouched_by_session_multi_timeframe_layer():
     assert kwargs["resolution"] == "HOUR"
     assert "session_gated" not in kwargs
     assert "require_regime_confirmation" not in kwargs
+
+
+def test_run_trend_loop_default_startup_offset_is_10s():
+    # Échelonnement des 6 process (24/08/2026, voir docs/DECISIONS.md) :
+    # executor_loop=0s, trend_executor=10s, H2=20s, H3=30s, H4=40s, H5=50s.
+    config = MagicMock()
+    with patch("src.trend_executor.run_technical_strategy_loop") as mock_loop:
+        run_trend_loop(config, "db.sqlite")
+    _, kwargs = mock_loop.call_args
+    assert kwargs["startup_offset_seconds"] == 10

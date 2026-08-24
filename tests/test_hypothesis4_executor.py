@@ -53,6 +53,16 @@ def test_run_hypothesis4_loop_forwards_h4_credentials_and_resolution():
     assert set(kwargs["assets"]) == set(HYPOTHESIS4_ASSETS)
 
 
+def test_run_hypothesis4_loop_default_startup_offset_is_40s():
+    # Échelonnement des 6 process (24/08/2026, voir docs/DECISIONS.md) :
+    # executor_loop=0s, trend_executor=10s, H2=20s, H3=30s, H4=40s, H5=50s.
+    config = MagicMock()
+    with patch("src.hypothesis4_executor.run_technical_strategy_loop") as mock_loop:
+        run_hypothesis4_loop(config, "db.sqlite")
+    _, kwargs = mock_loop.call_args
+    assert kwargs["startup_offset_seconds"] == 40
+
+
 def test_run_hypothesis4_loop_raises_configerror_when_credentials_missing():
     from src.config import ConfigError
 

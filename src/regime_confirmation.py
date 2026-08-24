@@ -63,8 +63,11 @@ confirmé, jamais un signal laissé passer sur un état indéterminé).
 
 from typing import Dict, Optional, Tuple
 
-from src.capital_client import CapitalClient
+import requests
+
+from src.capital_client import CapitalApiError, CapitalClient
 from src.market_data import get_candles
+from src.retry import retry_with_backoff
 from src.trend_strategy import MA_PERIOD, compute_regime
 
 # Même marge que technical_strategy_executor.CANDLE_COUNT (dupliquée
@@ -99,11 +102,22 @@ def compute_index_regimes(client: CapitalClient, resolution: str) -> Dict[str, O
     Fail-safe PAR INDICE (invariant #7) : une erreur sur un indice donne
     None pour cet indice seul (jamais une exception qui remonterait et
     interromprait le rafraîchissement de l'autre) — `derive_confirmed_
-    regime` traite déjà None comme "non confirmé"."""
+    regime` traite déjà None comme "non confirmé".
+
+    Nouvelle tentative avec backoff court AVANT d'abandonner sur None
+    (`src/retry.py`, 24/08/2026, voir docs/DECISIONS.md) : ce
+    rafraîchissement n'a lieu qu'aux 3 ouvertures de session UTC plus
+    une fois au démarrage (voir technical_strategy_executor.py) — un
+    seul 429 transitoire laissait sinon le cache à None (ou périmé)
+    jusqu'au créneau suivant, jusqu'à ~8h de rejets fail-safe sans
+    rapport avec le marché."""
     regimes: Dict[str, Optional[str]] = {}
     for index_epic in _CONFIRMATION_INDICES:
         try:
-            candles = get_candles(client, index_epic, resolution=resolution, count=_CANDLE_COUNT)
+            candles = retry_with_backoff(
+                lambda epic=index_epic: get_candles(client, epic, resolution=resolution, count=_CANDLE_COUNT),
+                exceptions=(CapitalApiError, requests.exceptions.RequestException),
+            )
             regimes[index_epic] = compute_regime(candles)
         except Exception:
             regimes[index_epic] = None

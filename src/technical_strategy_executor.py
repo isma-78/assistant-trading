@@ -81,6 +81,7 @@ from src.executor import (
 from src.go_nogo import GoNoGoStatus
 from src.market_data import Candle, get_candles
 from src.regime_confirmation import compute_index_regimes, derive_confirmed_regime
+from src.retry import retry_with_backoff
 from src.risk_engine import RiskCaps, RiskEngine
 from src.trend_strategy import MA_PERIOD
 
@@ -264,6 +265,7 @@ def run_technical_strategy_loop(
     describe_signal: Optional[Callable[[str, str, object], str]] = None,
     interval_seconds: int = 60,
     require_regime_confirmation: bool = False,
+    startup_offset_seconds: int = 0,
 ) -> None:
     """Boucle continue générique d'une stratégie technique complémentaire
     (§2.11). Un seul point de variation par appelant : `source`,
@@ -294,7 +296,17 @@ def run_technical_strategy_loop(
     plus). La gestion des positions déjà ouvertes (remplissages,
     annulations, trailing, coupe-circuits) continue elle aussi à CHAQUE
     itération, comme avant cette révision : geler la gestion du risque
-    serait dangereux, pas juste conservateur."""
+    serait dangereux, pas juste conservateur.
+
+    `startup_offset_seconds` (défaut 0, 24/08/2026, voir
+    docs/DECISIONS.md) : pause fixe unique avant le premier appel réseau
+    de ce process (avant même `login()`) — échelonne les 6 process
+    (executor_loop, trend_executor, H2-H5) qui, tous démarrés avec
+    interval_seconds=60, finissaient par cogner l'API Capital.com au
+    même instant à chaque minute depuis la même IP. Chaque appelant
+    (`trend_executor.py`, `hypothesisN_executor.py`) passe une valeur
+    fixe distincte (~10s d'écart) — pas un mécanisme dynamique, un
+    simple décalage constant."""
     import time
 
     import anthropic
@@ -317,6 +329,8 @@ def run_technical_strategy_loop(
             "— requis pour cibler explicitement le compte (jamais le compte \"préféré\", "
             "instable, voir docs/DECISIONS.md du 20/08/2026)"
         )
+
+    time.sleep(startup_offset_seconds)
 
     client = CapitalClient(api_key, identifier, password, _DEMO_BASE_URL)
     client.login()
@@ -359,9 +373,17 @@ def run_technical_strategy_loop(
             now = datetime.now(timezone.utc)
 
             # Surcouche anomalie système (§2.7) — même sonde de
-            # connectivité que executor.run_executor_loop.
+            # connectivité que executor.run_executor_loop. Nouvelle
+            # tentative avec backoff court avant d'abandonner (24/08/2026,
+            # voir docs/DECISIONS.md) : un seul 429 transitoire ici
+            # sautait TOUT le cycle (aucune entrée, aucune gestion des
+            # positions ouvertes), le point de défaillance le plus visible
+            # du rate-limiting Capital.com après le déploiement H2-H5.
             try:
-                client.get_account_balance()
+                retry_with_backoff(
+                    client.get_account_balance,
+                    exceptions=(CapitalApiError, requests.exceptions.RequestException),
+                )
                 circuit_breaker_store.record_api_result(db_path, process_name, True)
             except (CapitalApiError, requests.exceptions.RequestException):
                 circuit_breaker_store.record_api_result(

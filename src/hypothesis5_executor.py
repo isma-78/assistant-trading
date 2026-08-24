@@ -1,13 +1,14 @@
 """
-hypothesis5_executor.py — Boucle autonome de l'Hypothèse #5 (confluence
-ICT + momentum RSI, régime structurel, sortie progressive §2.10),
-validée par Ismaël le 23/08/2026 (voir docs/HYPOTHESES.md — cette
-entrée REMPLACE une version plus ancienne du même jour, jamais
-déployée). Détection via hypothesis5_strategy.evaluate_entry (délègue le
-régime structurel et la confluence ICT à ict_strategy.evaluate_entry,
+hypothesis5_executor.py — Boucle autonome de l'Hypothèse #5 (régime
+structurel + momentum RSI, sortie progressive §2.10), V3 depuis le
+24/08/2026 (voir docs/HYPOTHESES.md/docs/DECISIONS.md — REMPLACE la
+version "confluence ICT + RSI" validée le 23/08/2026, retirée après 0
+signal en ~26h de production). Détection via hypothesis5_strategy.
+evaluate_entry (délègue le régime structurel ET LA JAMBE D'IMPULSION,
+SANS confluence Fibonacci/FVG, à ict_strategy.compute_structural_entry,
 exige EN PLUS un franchissement du RSI(14) à 50 dans le même sens sur la
-même bougie, ajoute TP1(1R)/TP2(2R)), déclencheur INCHANGÉ par tout ce
-qui suit.
+même bougie, ajoute TP1(1R)/TP2(2R)) — voir la docstring de
+hypothesis5_strategy.py pour le détail complet de cette révision.
 
 **Couche session/multi-timeframe, 23/08/2026** : résolution M15 (au lieu
 de HOUR — le RSI(14)/MA200 internes à `hypothesis5_strategy`/
@@ -56,18 +57,23 @@ _HYPOTHESIS_LABEL = "Hypothèse #5"
 
 def _describe_signal(hypothesis_label: str, asset: str, signal) -> str:
     return (
-        f"{hypothesis_label} — {asset} : confluence ICT (swing fractal K=2, zone de Fibonacci, "
-        f"FVG) ET franchissement RSI(14)/50, en régime {signal.direction} (structure BOS/CHoCH), "
-        f"entrée={signal.entry_price}, stop={signal.stop_price}, TP1={signal.tp1} (1R), "
-        f"TP2={signal.tp2} (2R), reliquat 20% sous trailing ATR (docs/HYPOTHESES.md)"
+        f"{hypothesis_label} — {asset} : régime structurel (BOS/CHoCH) ET franchissement "
+        f"RSI(14)/50 dans le même sens (V3, 24/08/2026 — plus de confluence ICT, voir "
+        f"docs/HYPOTHESES.md), direction {signal.direction}, entrée={signal.entry_price}, "
+        f"stop={signal.stop_price}, TP1={signal.tp1} (1R), TP2={signal.tp2} (2R), "
+        f"reliquat 20% sous trailing ATR"
     )
 
 
-def run_hypothesis5_loop(config, db_path: str, interval_seconds: int = 60) -> None:
+def run_hypothesis5_loop(config, db_path: str, interval_seconds: int = 60, startup_offset_seconds: int = 50) -> None:
     """Délègue à technical_strategy_executor.run_technical_strategy_loop
     avec les paramètres propres à l'Hypothèse #5 : compte et identifiants
     Capital.com dédiés (config.capital_*_hypothesis5 — voir docstring du
-    module pour l'état actuel de ce prérequis)."""
+    module pour l'état actuel de ce prérequis).
+
+    `startup_offset_seconds=50` (24/08/2026, voir docs/DECISIONS.md) :
+    échelonnement des 6 process de production sur la même IP, voir
+    docstring de `technical_strategy_executor.run_technical_strategy_loop`."""
     run_technical_strategy_loop(
         config, db_path,
         source=HYPOTHESIS5_SOURCE,
@@ -83,6 +89,7 @@ def run_hypothesis5_loop(config, db_path: str, interval_seconds: int = 60) -> No
         hypothesis_label=_HYPOTHESIS_LABEL,
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
+        startup_offset_seconds=startup_offset_seconds,
     )
 
 

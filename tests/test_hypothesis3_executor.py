@@ -58,3 +58,13 @@ def test_run_hypothesis3_loop_forwards_h3_credentials_and_resolution():
     assert set(kwargs["assets"]) == set(HYPOTHESIS3_ASSETS)
     assert "session_gated" not in kwargs  # paramètre retiré, voir docs/DECISIONS.md
     assert kwargs["require_regime_confirmation"] is True
+
+
+def test_run_hypothesis3_loop_default_startup_offset_is_30s():
+    # Échelonnement des 6 process (24/08/2026, voir docs/DECISIONS.md) :
+    # executor_loop=0s, trend_executor=10s, H2=20s, H3=30s, H4=40s, H5=50s.
+    config = MagicMock()
+    with patch("src.hypothesis3_executor.run_technical_strategy_loop") as mock_loop:
+        run_hypothesis3_loop(config, "db.sqlite")
+    _, kwargs = mock_loop.call_args
+    assert kwargs["startup_offset_seconds"] == 30

@@ -90,7 +90,7 @@ def _generate_and_queue_signal(db_path, client, asset: str) -> None:
     )
 
 
-def run_trend_loop(config, db_path: str, interval_seconds: int = 60) -> None:
+def run_trend_loop(config, db_path: str, interval_seconds: int = 60, startup_offset_seconds: int = 10) -> None:
     """Boucle continue du Flux B. Intervalle par défaut plus long que
     Station X (60s vs 30s) : les bougies horaires ne changent pas plus
     vite qu'une fois par heure, inutile de solliciter l'API aussi souvent
@@ -99,7 +99,12 @@ def run_trend_loop(config, db_path: str, interval_seconds: int = 60) -> None:
     Délègue à technical_strategy_executor.run_technical_strategy_loop
     (voir docstring du module ci-dessus) avec les paramètres propres à
     l'Hypothèse #1 — le compte principal (mêmes credentials que Station
-    X, voir docs/DECISIONS.md du 20/08/2026)."""
+    X, voir docs/DECISIONS.md du 20/08/2026).
+
+    `startup_offset_seconds=10` (24/08/2026, voir docs/DECISIONS.md) :
+    valeur fixe distincte de `executor.run_executor_loop` (0s), pour
+    échelonner les 6 process de production sur la même IP — voir
+    docstring de `technical_strategy_executor.run_technical_strategy_loop`."""
     run_technical_strategy_loop(
         config, db_path,
         source=HYPOTHESIS_SOURCE,
@@ -115,6 +120,7 @@ def run_trend_loop(config, db_path: str, interval_seconds: int = 60) -> None:
         hypothesis_label=_HYPOTHESIS_LABEL,
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
+        startup_offset_seconds=startup_offset_seconds,
     )
 
 

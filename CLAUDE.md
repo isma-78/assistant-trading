@@ -656,6 +656,49 @@ mienne. Détail complet dans `docs/DECISIONS.md`/`docs/HYPOTHESES.md`
   `confidence_scorer`/`hypothesis2_strategy`/`hypothesis3_strategy`/
   `hypothesis5_strategy`.
 
+## Palier P2.9 (suite) — Rate-limiting Capital.com : échelonnement + retry ciblé ; Hypothèse #5 V3 (24/08/2026)
+
+Suite à une investigation demandée par Ismaël sur des trades manqués
+dans la journée et l'inactivité totale de H5 — diagnostic : 6 process
+concurrents (executor_loop/trend_executor/H2-H5, tous déployés
+ensemble le 23/08/2026) pollent l'API Capital.com depuis la même IP,
+provoquant des milliers de 429/jour. Détail complet (chiffres du
+diagnostic, rationale des deux correctifs, tableau des décalages,
+estimation de fréquence H5) dans `docs/DECISIONS.md`/`docs/HYPOTHESES.md`
+du 24/08/2026.
+
+- **Échelonnement fixe des 6 process** : nouveau paramètre
+  `startup_offset_seconds` sur `run_executor_loop`/`run_technical_
+  strategy_loop` (pause unique avant le premier appel réseau) —
+  executor_loop=0s, trend_executor=10s, H2=20s, H3=30s, H4=40s, H5=50s.
+- **`src/retry.py`** (nouveau) : `retry_with_backoff`, 3 tentatives/
+  backoff court, appliqué à exactement deux points (jamais aux ordres,
+  jamais en décorateur générique — voir docs/DECISIONS.md) : la sonde
+  de connectivité générale en début de cycle, et le rafraîchissement du
+  contexte de régime croisé H3/H4 (`regime_confirmation.
+  compute_index_regimes`) — ce dernier identifié comme le point de
+  défaillance le plus coûteux (jusqu'à ~8h de rejets fail-safe "régime :
+  None" par échec transitoire, faute de retry).
+- **Hypothèse #5 — V3** (`src/hypothesis5_strategy.py`) : retrait de la
+  confluence ICT (Fibonacci/FVG), motivé par 0 signal produit en ~26h
+  avec l'ancienne définition (pas un ajustement sur trades — H5 n'en a
+  produit aucun). Devient régime structurel + RSI(14)/50 seuls.
+  `src/ict_strategy.py` refactoré (extraction de `_find_regime_and_leg`,
+  nouvelle fonction publique `compute_structural_entry`) pour exposer
+  régime+jambe sans la confluence, réutilisée par H5 — comportement de
+  `evaluate_entry` (H2) vérifié strictement inchangé par régression.
+- 712 tests passent au total (659 + 53 nouveaux/modifiés sur ce lot,
+  dont 7 pour `retry.py`), 100% toujours vérifié sur `risk_engine`/`capital_manager`/`go_nogo`/
+  `validator`/`trend_strategy`/`circuit_breaker`/`ict_strategy`/
+  `mean_reversion_strategy`/`confidence_scorer`/`hypothesis2_strategy`/
+  `hypothesis3_strategy`/`hypothesis5_strategy`/`regime_confirmation`.
+- **Déploiement VPS effectué le 24/08/2026** : `git pull` puis
+  redémarrage des 6 process (tmux) pour que les nouveaux
+  `startup_offset_seconds` prennent effet. Vérification en direct sur
+  plusieurs heures en cours (taux de 429 avant/après, fréquence des
+  rejets "régime : None", premier signal H5 V3 le cas échéant) — voir
+  `docs/DECISIONS.md` pour le suivi.
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou
