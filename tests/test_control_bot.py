@@ -9,6 +9,7 @@ from src.control_bot import (
     KNOWN_COMMANDS,
     _process_update,
     format_aide,
+    format_analyse_causale,
     format_etat,
     handle_command,
     parse_command,
@@ -170,6 +171,73 @@ def test_format_etat_shows_open_trade_and_envelope(tmp_path):
     assert "GOLD" in reply
     assert "short" in reply
     assert "490.0" in reply
+
+
+# ---------------------------------------------------------------------------
+# /analyse_causale (§3.11, 24/08/2026) — premier consommateur réel de
+# causal_analysis_log, avant l'existence du cycle autonome (§3.9)
+# ---------------------------------------------------------------------------
+
+def test_format_analyse_causale_empty(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    reply = format_analyse_causale(db_path)
+    assert "Aucune analyse" in reply
+
+
+def test_format_analyse_causale_shows_recent_entries(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO causal_analysis_log (declencheur, trades_concernes_ids, contexte_json, categorie, analyse_texte, action_prise, created_at) "
+            "VALUES ('day_r:GOLD:stationx', '[1]', '{}', 'hypothese_pattern', 'Texte explicatif du pattern.', NULL, '2026-08-24T12:00:00Z')"
+        )
+        conn.execute(
+            "INSERT INTO causal_analysis_log (declencheur, trades_concernes_ids, contexte_json, categorie, analyse_texte, action_prise, created_at) "
+            "VALUES ('week_r:EURUSD:hypothesis', '[2,3]', '{}', 'anomalie_technique', 'Slippage hors norme detecte.', NULL, '2026-08-24T13:00:00Z')"
+        )
+    reply = format_analyse_causale(db_path)
+    assert "day_r:GOLD:stationx" in reply
+    assert "week_r:EURUSD:hypothesis" in reply
+    assert "Texte explicatif du pattern." in reply
+    assert "Slippage hors norme detecte." in reply
+    assert "Anomalie technique" in reply
+    assert "Hypothèse de pattern" in reply
+
+
+def test_format_analyse_causale_respects_display_limit(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    with connection_scope(db_path) as conn:
+        for i in range(8):
+            conn.execute(
+                "INSERT INTO causal_analysis_log (declencheur, trades_concernes_ids, contexte_json, categorie, analyse_texte, action_prise, created_at) "
+                "VALUES (?, '[]', '{}', 'hypothese_pattern', ?, NULL, ?)",
+                (f"day_r:ASSET{i}:stationx", f"texte {i}", f"2026-08-24T{i:02d}:00:00Z"),
+            )
+    reply = format_analyse_causale(db_path)
+    assert "ASSET7" in reply  # le plus récent
+    assert "ASSET0" not in reply  # au-delà de la limite d'affichage
+
+
+def test_format_analyse_causale_shows_action_prise_when_present(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO causal_analysis_log (declencheur, trades_concernes_ids, contexte_json, categorie, analyse_texte, action_prise, created_at) "
+            "VALUES ('day_r:GOLD:stationx', '[1]', '{}', 'anomalie_technique', 'texte', 'Corrigé manuellement', '2026-08-24T12:00:00Z')"
+        )
+    reply = format_analyse_causale(db_path)
+    assert "Corrigé manuellement" in reply
+
+
+def test_handle_command_analyse_causale_dispatches(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    reply = handle_command(db_path, "analyse_causale", None)
+    assert "Aucune analyse" in reply
 
 
 # ---------------------------------------------------------------------------

@@ -69,6 +69,7 @@ COMMANDS = [
     ("reprendre", "Réactive les entrées (global, ou /reprendre ACTIF)"),
     ("stop_urgence", "Ferme toutes les positions ouvertes, bloque toutes les entrées"),
     ("dashboard", "Génère et envoie le dashboard complet (§4.6)"),
+    ("analyse_causale", "Dernières analyses causales de coupe-circuits (§3.11)"),
     ("aide", "Affiche la liste des commandes disponibles"),
 ]
 KNOWN_COMMANDS = {name for name, _ in COMMANDS}
@@ -135,6 +136,48 @@ def format_etat(db_path: str) -> str:
         lines.append(f"  GLOBAL : {b['breaker_type']}")
     for b in asset_breakers:
         lines.append(f"  {b['actif']} ({b['source'] or 'toutes sources'}) : {b['breaker_type']}")
+
+    return "\n".join(lines)
+
+
+CAUSAL_ANALYSIS_DISPLAY_LIMIT = 5
+
+_CATEGORY_LABELS = {
+    "anomalie_technique": "⚠️ Anomalie technique",
+    "evenement_marche": "\U0001F30D Événement de marché",
+    "hypothese_pattern": "\U0001F4CC Hypothèse de pattern (en attente)",
+}
+
+
+def format_analyse_causale(db_path: str) -> str:
+    """§3.11 /analyse_causale : dernières entrées de `causal_analysis_log`
+    en langage clair — lecture seule, aucune décision. Ajoutée le
+    24/08/2026 (voir docs/DECISIONS.md) : jusqu'ici, `causal_analysis_
+    log` n'avait AUCUN consommateur réel — le cycle autonome (§3.9) qui
+    doit à terme l'exploiter statistiquement n'est pas construit
+    (dépend du backtest rétrospectif). Cette commande rend le travail
+    déjà fait par `causal_analyzer.py` consultable dès aujourd'hui,
+    sans attendre le cycle autonome."""
+    with connection_scope(db_path) as conn:
+        rows = conn.execute(
+            "SELECT declencheur, categorie, analyse_texte, action_prise, created_at "
+            "FROM causal_analysis_log ORDER BY id DESC LIMIT ?",
+            (CAUSAL_ANALYSIS_DISPLAY_LIMIT,),
+        ).fetchall()
+
+    lines = ["\U0001F52C Analyse causale — coupe-circuits (§3.11)"]
+    if not rows:
+        lines.append("\nAucune analyse enregistrée pour l'instant — journalisée automatiquement au prochain coupe-circuit R (day_r/week_r/drawdown_r).")
+        return "\n".join(lines)
+
+    for row in rows:
+        label = _CATEGORY_LABELS.get(row["categorie"], row["categorie"])
+        lines.append(f"\n{label}")
+        lines.append(f"  Déclencheur : {row['declencheur']}")
+        lines.append(f"  Quand : {row['created_at']}")
+        lines.append(f"  {row['analyse_texte']}")
+        if row["action_prise"]:
+            lines.append(f"  Action prise : {row['action_prise']}")
 
     return "\n".join(lines)
 
@@ -207,6 +250,9 @@ def handle_command(
 
     if command == "dashboard":
         return _send_dashboard(db_path, bot_token, chat_id)
+
+    if command == "analyse_causale":
+        return format_analyse_causale(db_path)
 
     if command == "aide":
         return format_aide()

@@ -12,6 +12,46 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-24 (soir, suite 2) — `/analyse_causale` : premier consommateur réel de `causal_analysis_log`
+
+Vérification factuelle demandée par Ismaël immédiatement après la
+construction du moteur causal : `grep -rn "causal_analysis_log"
+src/*.py` ne trouvait, avant cette entrée, qu'un seul appel dans tout
+le projet — l'INSERT de `causal_analyzer.record_causal_analysis`
+lui-même. Aucun SELECT nulle part, `dashboard.py`/`control_bot.py` ne
+la référençaient pas. Confirmé aussi en direct sur le VPS :
+`causal_analysis_log` contenait 0 ligne au moment de la vérification
+(aucun coupe-circuit R déclenché depuis le déploiement de ce jour) —
+honnête, le module n'a encore produit aucune donnée réelle.
+
+Le cycle autonome (§3.9, palier séparé, dépend du backtest) est le
+consommateur prévu à terme, mais il n'existe pas encore. Sans commande
+dédiée, le travail déjà construit resterait invisible pendant les
+semaines nécessaires à ce chantier suivant.
+
+- `control_bot.py` : nouvelle commande `/analyse_causale` (ajoutée à
+  `COMMANDS`, seule source pour `/aide` et le menu natif Telegram —
+  aucune liste séparée à tenir à jour, même patron que toute commande
+  précédente). `format_analyse_causale` lit les 5 dernières lignes de
+  `causal_analysis_log`, affiche déclencheur/catégorie (libellé lisible
+  par catégorie)/horodatage/texte d'analyse déjà déterministe/action
+  prise si renseignée — lecture seule stricte, aucune décision, même
+  garde-fou que `/etat`.
+- 5 nouveaux tests (vide, entrées récentes affichées, limite
+  d'affichage respectée, `action_prise` affichée quand présente,
+  dispatch `handle_command`) + suite `control_bot.py` existante
+  toujours verte (33 tests).
+- 816 tests passent au total, 100% de couverture inchangée sur tous les
+  modules critiques (aucun module critique touché par cet ajout).
+
+### Vérification en direct sur le VPS
+
+À compléter après déploiement (git pull + redémarrage de `control_bot`
+uniquement — les 6 boucles de trading ne sont pas concernées par ce
+changement, aucun redémarrage nécessaire pour elles).
+
+---
+
 ## 2026-08-24 (soir, suite) — Moteur d'analyse causale (§3.11) + capture réelle du spread (§2.6)
 
 Deux chantiers demandés en parallèle par Ismaël, construits dans cet
