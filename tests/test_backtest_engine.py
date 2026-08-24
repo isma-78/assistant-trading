@@ -152,6 +152,16 @@ def test_entry_execution_price_unknown_direction_raises():
         entry_execution_price("sideways", bar)
 
 
+def test_entry_execution_price_custom_slippage_multiplier():
+    # 24/08/2026 (voir docs/DECISIONS.md) : comparaison 100% vs 50% du
+    # spread pour re-evaluer la degradation observee sur H4/H5.
+    bar = _bar("t", 100.0, 100.0, 100.0, 100.0, spread=0.2)
+    price_full = entry_execution_price("long", bar, slippage_multiplier=1.0)
+    price_half = entry_execution_price("long", bar, slippage_multiplier=0.5)
+    assert price_half < price_full  # slippage moindre -> moins defavorable pour un long
+    assert price_half == pytest.approx(bar.open_ask + bar.spread_open * 0.5)
+
+
 def test_exit_execution_price_long_below_level():
     price = exit_execution_price("long", level_price=100.0, exit_bar_spread=0.2)
     assert price == pytest.approx(100.0 - 0.1 - 0.2 * SLIPPAGE_SPREAD_MULTIPLIER)
@@ -162,6 +172,12 @@ def test_exit_execution_price_short_above_level():
     price = exit_execution_price("short", level_price=100.0, exit_bar_spread=0.2)
     assert price == pytest.approx(100.0 + 0.1 + 0.2 * SLIPPAGE_SPREAD_MULTIPLIER)
     assert price > 100.0
+
+
+def test_exit_execution_price_custom_slippage_multiplier():
+    price_full = exit_execution_price("long", level_price=100.0, exit_bar_spread=0.2, slippage_multiplier=1.0)
+    price_half = exit_execution_price("long", level_price=100.0, exit_bar_spread=0.2, slippage_multiplier=0.5)
+    assert price_half > price_full  # slippage moindre -> moins defavorable pour une sortie long
 
 
 def test_exit_execution_price_unknown_direction_raises():
@@ -250,6 +266,32 @@ def test_replay_stop_hit_full_lifecycle_negative_pnl():
     assert trade.r_multiple_total == pytest.approx(-1.0, abs=0.05)
     assert trade.pnl_eur < 0
     assert result.final_envelope_balance < 1000.0
+
+
+def test_replay_slippage_multiplier_affects_pnl():
+    # 24/08/2026 (voir docs/DECISIONS.md) : un multiplicateur plus faible
+    # doit produire un R-multiple moins negatif (moins de cout) sur un
+    # meme scenario perdant, toutes choses egales par ailleurs — spread
+    # large (2.0) pour rendre l'effet mesurable sur un stop de 10 points.
+    risk_engine, whitelist = _make_risk_engine()
+    bars = [
+        _bar("2026-01-01T00:00:00", 100, 100, 100, 100, spread=2.0),
+        _bar("2026-01-02T00:00:00", 100, 100, 100, 100, spread=2.0),
+        _bar("2026-01-03T00:00:00", 100, 101, 60, 90, spread=2.0),
+        _bar("2026-01-04T00:00:00", 90, 90, 90, 90, spread=2.0),
+    ]
+    signal = _FakeSignal(direction="long", entry_price=100.0, stop_price=90.0)
+
+    result_full = replay_hypothesis(
+        "TEST", bars, entry_fn=_trigger_on_call(2, signal), risk_engine=risk_engine, whitelist=whitelist,
+        envelope_initial=1000.0, confidence_threshold=0.0, lookback=5, slippage_multiplier=1.0,
+    )
+    result_half = replay_hypothesis(
+        "TEST", bars, entry_fn=_trigger_on_call(2, signal), risk_engine=risk_engine, whitelist=whitelist,
+        envelope_initial=1000.0, confidence_threshold=0.0, lookback=5, slippage_multiplier=0.5,
+    )
+    assert result_full.trades[0].r_multiple_total < result_half.trades[0].r_multiple_total
+    assert result_full.final_envelope_balance < result_half.final_envelope_balance
 
 
 def test_replay_tp1_tp2_then_final_stop_partials_sum_to_one():

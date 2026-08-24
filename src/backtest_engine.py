@@ -112,12 +112,18 @@ def bar_from_raw(raw: dict) -> Optional[HistoricalBar]:
 # Modèle de coûts — voir docs/HYPOTHESES.md pour la justification
 # ---------------------------------------------------------------------------
 
-def entry_execution_price(direction: str, bar: HistoricalBar) -> float:
+def entry_execution_price(direction: str, bar: HistoricalBar, slippage_multiplier: float = SLIPPAGE_SPREAD_MULTIPLIER) -> float:
     """Prix d'entrée simulé = ouverture de `bar` (la bougie SUIVANT celle
     qui a déclenché le signal, décision pré-enregistrée), payé au bid/ask
     réel (pas le mid) PLUS slippage forfaitaire (multiplicateur du spread
-    de cette même bougie) — toujours défavorable."""
-    slippage = bar.spread_open * SLIPPAGE_SPREAD_MULTIPLIER
+    de cette même bougie) — toujours défavorable.
+
+    `slippage_multiplier` (défaut = `SLIPPAGE_SPREAD_MULTIPLIER`,
+    24/08/2026, voir docs/DECISIONS.md) : paramétrable pour comparer
+    plusieurs hypothèses de coût côte à côte (ex. 1.0 vs 0.5) sans
+    modifier la constante par défaut ni le comportement des appelants
+    existants qui ne le précisent pas."""
+    slippage = bar.spread_open * slippage_multiplier
     if direction == "long":
         return round(bar.open_ask + slippage, 8)
     if direction == "short":
@@ -125,12 +131,16 @@ def entry_execution_price(direction: str, bar: HistoricalBar) -> float:
     raise ValueError(f"direction inconnue : {direction!r}")
 
 
-def exit_execution_price(direction: str, level_price: float, exit_bar_spread: float) -> float:
+def exit_execution_price(
+    direction: str, level_price: float, exit_bar_spread: float,
+    slippage_multiplier: float = SLIPPAGE_SPREAD_MULTIPLIER,
+) -> float:
     """Prix de sortie simulé à un niveau théorique `level_price` (stop/TP,
     valeur mid — calculée par une stratégie sur des Candle en mid), ajusté
     par le demi-spread réel de la bougie de sortie (franchissement bid/ask
-    autour du niveau) PLUS slippage forfaitaire — toujours défavorable."""
-    slippage = exit_bar_spread * SLIPPAGE_SPREAD_MULTIPLIER
+    autour du niveau) PLUS slippage forfaitaire — toujours défavorable.
+    `slippage_multiplier` : voir entry_execution_price."""
+    slippage = exit_bar_spread * slippage_multiplier
     half_spread = exit_bar_spread / 2
     if direction == "long":  # sortie = vente
         return round(level_price - half_spread - slippage, 8)
@@ -239,6 +249,7 @@ def replay_hypothesis(
     confirming_bars: Optional[Dict[str, List[HistoricalBar]]] = None,
     is_donchian_trailing: bool = False,
     lookback: int = DEFAULT_LOOKBACK,
+    slippage_multiplier: float = SLIPPAGE_SPREAD_MULTIPLIER,
 ) -> BacktestResult:
     """Rejoue `entry_fn` sur `own_bars` (ordre chronologique), fenêtre
     glissante stricte de `lookback` bougies (jamais de bougie future),
@@ -254,7 +265,12 @@ def replay_hypothesis(
 
     `is_donchian_trailing` : H1 uniquement — transmet la fenêtre de
     bougies à `evaluate_position_management` pour son trailing Donchian
-    pur (état sans tp1/tp2)."""
+    pur (état sans tp1/tp2).
+
+    `slippage_multiplier` (défaut = `SLIPPAGE_SPREAD_MULTIPLIER`,
+    24/08/2026, voir docs/DECISIONS.md) : permet de rejouer la même
+    hypothèse avec un coût de slippage différent (ex. comparaison 100%
+    vs 50% du spread), sans changer la constante par défaut."""
     own_candles = [b.to_candle() for b in own_bars]
     confirming_candles: Dict[str, List[Candle]] = {}
     if require_regime_confirmation and confirming_bars:
@@ -276,7 +292,7 @@ def replay_hypothesis(
 
         if open_state is not None:
             closed_trade, open_state = _manage_open_position(
-                open_state, bar, window, risk_engine, asset, is_donchian_trailing,
+                open_state, bar, window, risk_engine, asset, is_donchian_trailing, slippage_multiplier,
             )
             if closed_trade is not None:
                 trades.append(closed_trade)
@@ -315,7 +331,7 @@ def replay_hypothesis(
         if not decision.approved:
             continue
 
-        executed_entry_price = entry_execution_price(signal.direction, execution_bar)
+        executed_entry_price = entry_execution_price(signal.direction, execution_bar, slippage_multiplier)
         entry_date = _parse_date(execution_bar.time_utc)
 
         state = OpenTradeState(
@@ -350,7 +366,7 @@ def _bar_hour(time_utc: str) -> Optional[int]:
 
 def _manage_open_position(
     open_state: dict, bar: HistoricalBar, window: List[Candle], risk_engine: RiskEngine,
-    asset: str, is_donchian_trailing: bool,
+    asset: str, is_donchian_trailing: bool, slippage_multiplier: float = SLIPPAGE_SPREAD_MULTIPLIER,
 ) -> Tuple[Optional[BacktestTrade], Optional[dict]]:
     """Gère une position simulée sur `bar` : stop testé EN PREMIER au
     point le plus défavorable de la bougie, cible/trailing testés ensuite
@@ -384,7 +400,7 @@ def _manage_open_position(
         return None, open_state
 
     exit_date = _parse_date(bar.time_utc)
-    executed_exit_price = exit_execution_price(state.direction, action.exit_price, bar.spread_open)
+    executed_exit_price = exit_execution_price(state.direction, action.exit_price, bar.spread_open, slippage_multiplier)
     executed_exit_price = financing_adjusted_exit_price(
         state.direction, executed_exit_price, state.entry_price, open_state["entry_date"], exit_date,
     )

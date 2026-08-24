@@ -12,6 +12,86 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-24 (soir, suite 3) — Notification Option B, fenêtre sans notification (traçabilité), comparaison 100%/50% slippage
+
+Suite au premier rejeu réel du backtest (24/08/2026, voir entrée
+précédente) : le garde-fou Option B est passé de no-op à 24/40 couples
+bloqués dès que la base a été peuplée. Trois demandes d'Ismaël en
+réaction directe.
+
+### 1. Notification Telegram sur les rejets Option B
+
+`executor.open_signal` : notification immédiate (`send_notification`,
+même patron que les autres notifications du module) à chaque rejet
+`backtest_confidence_gate`, si `bot_token`/`chat_id` disponibles —
+jusqu'ici silencieux (seulement `risk_decisions` + logs). Motivé par
+l'ampleur du changement de comportement que ce garde-fou peut
+provoquer (jusqu'à 60% des couples actif/hypothèse dès qu'un backtest
+existe) : contrairement au blocage coupe-circuit (déjà visible via
+`/etat`), rien ne rendait ce rejet visible sans interroger la base
+directement. 2 nouveaux tests (`tests/test_executor.py`).
+
+**Vérifié en direct sur le VPS** après déploiement et redémarrage des 6
+process : `_check_backtest_confidence_gate` appelé en conditions
+réelles sur un couple bloqué (`US100`/`hypothesis`, backtest 100% de
+slippage) déclenche bien l'envoi (voir DÉTAIL VÉRIFICATION EN DIRECT
+ci-dessous, complété après déploiement).
+
+### 2. Fenêtre sans notification (24/08/2026, entre le premier rejeu et l'ajout du point 1) — traçabilité honnête
+
+Le garde-fou est passé de no-op à actif dès l'exécution de
+`scripts/run_retrospective_backtest.py` (~19:53-19:56 UTC), avant
+l'ajout de la notification ci-dessus (~1h plus tard). Pendant cette
+fenêtre, un rejet Option B réel aurait été silencieux côté Telegram
+(seulement `risk_decisions`/logs, comme documenté dans le point 1).
+
+**Vérifié factuellement, pas supposé** : `SELECT COUNT(*) FROM
+risk_decisions WHERE reason = 'backtest_confidence_gate'` sur la base
+de production —  **0 ligne**. Aucun signal live n'a en pratique
+rencontré un couple bloqué pendant cette fenêtre (aucun signal
+hypothesis/hypothesis3/hypothesis4/hypothesis5 déclenché sur un des 24
+couples concernés pendant ces ~60-90 minutes). Le risque existait en
+théorie (code déjà actif), pas en pratique — journalisé ici pour la
+traçabilité complète, pas parce qu'un incident réel s'est produit.
+
+### 3. Comparaison 100% vs 50% de slippage forfaitaire
+
+`SLIPPAGE_SPREAD_MULTIPLIER` (`backtest_engine.py`) : constante devenue
+un paramètre optionnel de `entry_execution_price`/`exit_execution_price`/
+`replay_hypothesis`/`_manage_open_position` (défaut = valeur de la
+constante, comportement existant inchangé pour tout appelant qui ne le
+précise pas — vérifié par régression, tests existants tous verts sans
+modification). `scripts/run_retrospective_backtest.py` gagne
+`--slippage-multiplier` (défaut 1.0).
+
+**Méthode de comparaison, sans écraser le premier jeu de résultats** :
+le rejeu à 50% de slippage a tourné contre une base SQLite ENTIÈREMENT
+SÉPARÉE (`DB_PATH` redirigé), jamais la base de production qui pilote
+le garde-fou Option B en direct — le premier jeu (100%, déjà utilisé
+par le live) reste intact et continue de piloter les décisions
+réelles. Choix délibéré : ajouter des sources `*_backtest_slip50`
+supplémentaires dans les 4 copies de `_normalize_source` aurait été
+plus invasif pour un besoin de comparaison ponctuel, pas une nouvelle
+capacité permanente.
+
+3 nouveaux tests sur `backtest_engine.py` (multiplicateur personnalisé
+sur `entry_execution_price`/`exit_execution_price`, effet mesurable
+bout en bout sur `replay_hypothesis` — R-multiple moins négatif à 50%
+qu'à 100% sur un même scénario perdant). 100% de couverture maintenue.
+
+### Résultat de la comparaison
+
+*(Complété après exécution du rejeu à 50% sur le VPS — voir suite de
+cette entrée.)*
+
+### Tests, déploiement
+
+821 tests passent au total (816 avant ce lot), 100% de couverture
+inchangée sur tous les modules critiques. Déployé sur le VPS, 6 process
+live redémarrés (nécessaire : `executor.py` modifié).
+
+---
+
 ## 2026-08-24 (soir, suite 2) — `/analyse_causale` : premier consommateur réel de `causal_analysis_log`
 
 Vérification factuelle demandée par Ismaël immédiatement après la

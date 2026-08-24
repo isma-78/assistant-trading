@@ -719,6 +719,18 @@ def open_signal(
             )
             conn.execute("UPDATE signals SET statut = 'rejete' WHERE id = ?", (signal_row["id"],))
         logger.info("Signal %s rejeté : %s", signal_row["id"], backtest_gate_detail)
+        # Notification Telegram (24/08/2026, demande explicite d'Ismaël,
+        # voir docs/DECISIONS.md) : ce garde-fou peut désormais bloquer
+        # silencieusement une majorité des couples (actif, hypothèse) dès
+        # qu'un backtest existe — un rejet de ce type change le
+        # comportement live de façon notable, contrairement au blocage
+        # coupe-circuit (déjà visible via /etat) qui n'a pas besoin de
+        # cette notification supplémentaire.
+        if bot_token and chat_id:
+            send_notification(
+                bot_token, chat_id,
+                f"\U0001F4CA Signal {asset} ({signal_row['source']}) rejeté — garde-fou backtest\n{backtest_gate_detail}",
+            )
         return None
 
     snapshot = get_price_snapshot(client, epic)

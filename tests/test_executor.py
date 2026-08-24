@@ -2067,6 +2067,50 @@ def test_open_signal_rejected_by_backtest_confidence_gate(tmp_path):
         conn.close()
 
 
+def test_open_signal_backtest_gate_rejection_sends_notification(tmp_path):
+    # 24/08/2026, demande explicite d'Ismaël (voir docs/DECISIONS.md) :
+    # un rejet par ce garde-fou doit être notifié, contrairement au
+    # comportement initial (silencieux, seulement risk_decisions/logs).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
+    _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", PHASE_A_MIN_TRADES_BACKTEST, r_multiple=-0.5)
+    signal_row = _insert_signal(db_path, source="hypothesis5", confiance=1.0)
+
+    client = MagicMock()
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    with patch("src.executor.send_notification") as mock_notify:
+        result = open_signal(
+            db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+            confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+            bot_token="tok", chat_id="42",
+        )
+
+    assert result is None
+    mock_notify.assert_called_once()
+    args, _ = mock_notify.call_args
+    assert args[0] == "tok" and args[1] == "42"
+    assert "GOLD" in args[2]
+    assert "garde-fou backtest" in args[2]
+
+
+def test_open_signal_backtest_gate_rejection_no_notification_without_tokens(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
+    _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", PHASE_A_MIN_TRADES_BACKTEST, r_multiple=-0.5)
+    signal_row = _insert_signal(db_path, source="hypothesis5", confiance=1.0)
+
+    client = MagicMock()
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    with patch("src.executor.send_notification") as mock_notify:
+        open_signal(
+            db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+            confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+        )
+    mock_notify.assert_not_called()
+
+
 def test_open_signal_not_blocked_when_backtest_data_insufficient(tmp_path):
     # Aucune donnée backtest pour ce couple -> le garde-fou ne fait rien,
     # comportement inchangé (approuvé normalement).

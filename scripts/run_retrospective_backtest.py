@@ -141,12 +141,15 @@ def _persist_trade(db_path: str, asset: str, source: str, channel: str, trade: B
         )
 
 
-def run_one_hypothesis(db_path: str, key: str, assets: List[str], envelope_initial: float, confidence_threshold: float) -> None:
+def run_one_hypothesis(
+    db_path: str, key: str, assets: List[str], envelope_initial: float, confidence_threshold: float,
+    slippage_multiplier: float = 1.0,
+) -> None:
     label, source, entry_fn, resolution, require_regime, is_donchian = HYPOTHESES[key]
     caps = RiskCaps(risk_percent_default=2.0, risk_percent_boosted=4.0, envelope_initial=envelope_initial)
     risk_engine = RiskEngine(caps=caps, whitelist=ASSET_WHITELIST)
 
-    print(f"=== {label} ({key}) — source={source}, résolution={resolution} ===")
+    print(f"=== {label} ({key}) — source={source}, résolution={resolution}, slippage_multiplier={slippage_multiplier} ===")
     for asset in assets:
         own_bars = _load_bars(asset, resolution)
         if len(own_bars) < 50:
@@ -160,6 +163,7 @@ def run_one_hypothesis(db_path: str, key: str, assets: List[str], envelope_initi
         result = replay_hypothesis(
             asset, own_bars, entry_fn, risk_engine, ASSET_WHITELIST, envelope_initial, confidence_threshold,
             require_regime_confirmation=require_regime, confirming_bars=confirming_bars, is_donchian_trailing=is_donchian,
+            slippage_multiplier=slippage_multiplier,
         )
         envelope_id, _ = load_or_create_envelope(db_path, asset, "demo", envelope_initial, source=source)
         for trade in result.trades:
@@ -185,6 +189,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hypothesis", default="H1,H2,H3,H4,H5")
     parser.add_argument("--assets", default=",".join(ALL_ASSETS))
+    parser.add_argument(
+        "--slippage-multiplier", type=float, default=1.0,
+        help="Multiplicateur de slippage forfaitaire (fraction du spread observé, voir backtest_engine.py "
+             "SLIPPAGE_SPREAD_MULTIPLIER) — permet de comparer plusieurs hypothèses de coût (24/08/2026, "
+             "voir docs/DECISIONS.md). Pour comparer sans écraser un run précédent, rediriger aussi DB_PATH.",
+    )
     args = parser.parse_args()
 
     keys = [k.strip().upper() for k in args.hypothesis.split(",") if k.strip()]
@@ -192,12 +202,16 @@ def main() -> None:
 
     config = load_config()
     init_db(config.db_path)
+    print(f"Base de données ciblée : {config.db_path} (slippage_multiplier={args.slippage_multiplier})")
 
     for key in keys:
         if key not in HYPOTHESES:
             print(f"Hypothèse inconnue ignorée : {key}")
             continue
-        run_one_hypothesis(config.db_path, key, assets, config.envelope_initial, config.confidence_threshold)
+        run_one_hypothesis(
+            config.db_path, key, assets, config.envelope_initial, config.confidence_threshold,
+            slippage_multiplier=args.slippage_multiplier,
+        )
 
     print("Terminé.")
 
