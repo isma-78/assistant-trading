@@ -79,10 +79,41 @@ sur `entry_execution_price`/`exit_execution_price`, effet mesurable
 bout en bout sur `replay_hypothesis` — R-multiple moins négatif à 50%
 qu'à 100% sur un même scénario perdant). 100% de couverture maintenue.
 
-### Résultat de la comparaison
+### Résultat de la comparaison (rejeu 50% terminé, 0 erreur)
 
-*(Complété après exécution du rejeu à 50% sur le VPS — voir suite de
-cette entrée.)*
+Comparaison `confidence_scorer.compute_confidence_score` (seuils
+backtest) entre les deux bases, couple par couple, sur les 32 couples
+ayant au moins 1 trade simulé :
+
+- **Effet du slippage confirmé dans le sens attendu partout** : réduire
+  le slippage de 100% à 50% du spread améliore l'espérance nette sur
+  les 32/32 couples (jamais l'inverse) — cohérence interne du modèle de
+  coûts vérifiée, pas juste supposée.
+- **Un seul changement de signe** sur l'ensemble : `hypothesis`/BTCUSD
+  passe de -0.0148R à +0.0206R. Partout ailleurs, le signe (positif ou
+  négatif) de l'espérance est IDENTIQUE aux deux niveaux de coût.
+- **H4 et H5 — la question posée par Ismaël, réponse factuelle** :
+  aucun des deux ne change de signe sur AUCUN actif, même à 50% de
+  slippage.
+  - H4 : reste négative sur les 6 couples avec assez de données
+    (-0.013R à -0.39R à 50%, contre -0.06R à -0.49R à 100%) —
+    amélioration de ~30-40% en magnitude, jamais suffisante pour passer
+    positif.
+  - H5 : reste négative sur les 8/8 couples (-0.01R à -0.28R à 50%,
+    contre -0.10R à -0.35R à 100%) — même constat, aucune inversion.
+  - **Conclusion honnête** : la dégradation sévère sur H4/H5 n'est PAS
+    un artefact du choix précis "100% de slippage" — elle résiste à un
+    doublement de la générosité de l'hypothèse de coût. Le multiplicateur
+    de slippage explique une partie de l'ampleur (~30-40% de la
+    magnitude), pas le signe du résultat.
+- H2 : écarts numériques importants (ex. GOLD -1.15R vs -1.11R, GBPUSD
+  +1.17R vs +1.37R) mais **toujours 0-2 trades par actif** dans les
+  deux jeux — statistiquement sans signification, comme déjà noté,
+  aucune conclusion à en tirer côté H2 quel que soit le slippage retenu.
+- La base de comparaison (`data/comparisons/assistant_trading_slip50.db`)
+  n'alimente jamais le garde-fou Option B en direct (qui continue de
+  lire la base de production, jeu à 100% de slippage, déjà en place) —
+  conservée uniquement à titre d'analyse, aucune action requise dessus.
 
 ### Tests, déploiement
 

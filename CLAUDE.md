@@ -780,6 +780,37 @@ contexte), moteur causal ensuite. Détail complet dans
   décision intacte, vérifié par leurs suites de tests existantes).
 - Déploiement/vérification en direct : voir `docs/DECISIONS.md`.
 
+## Palier P3 (suite) — Premier rejeu réel du backtest, garde-fou Option B actif, notification + comparaison de coûts (24/08/2026 soir)
+
+Le backtest (~2 ans d'historique, 8 actifs × 2 résolutions) a tourné
+pour de vrai sur la base de production. Détail chiffré complet
+(espérance par couple, comparaison 100%/50% de slippage) dans
+`docs/DECISIONS.md`.
+
+- **Le garde-fou Option B bloque désormais 24/40 couples (actif,
+  hypothèse) en direct** — H5 sur 8/8 actifs, H4 sur 6/8, H1 sur 6/8,
+  H3 sur 4/8, H2 sur 0/8 (encore trop peu de trades). C'était un no-op
+  jusqu'au premier rejeu ; ça ne l'est plus.
+- **Notification Telegram ajoutée** sur chaque rejet `backtest_
+  confidence_gate` (`executor.open_signal`) — vérifiée en direct sur le
+  VPS avec un signal réel sur un couple bloqué (US100/hypothesis),
+  aucun appel broker, notification confirmée reçue.
+- **Fenêtre sans notification documentée honnêtement** (avant cet
+  ajout) : vérifié factuellement en base, 0 rejet réel n'a eu lieu
+  pendant cette fenêtre — risque théorique, pas un incident.
+- **Comparaison 100% vs 50% de slippage forfaitaire** (rejeu sur une
+  base séparée, jamais celle qui pilote le live) : la dégradation
+  sévère de H4 (négative sur tous les couples avec assez de données) et
+  H5 (négative sur 8/8) **résiste** au changement d'hypothèse de coût —
+  aucun changement de signe, seulement ~30-40% d'amélioration en
+  magnitude. Un seul changement de signe sur l'ensemble des 32 couples
+  testés (`hypothesis`/BTCUSD). Conclusion : la négativité de H4/H5
+  n'est pas un artefact du choix de slippage précis.
+- 821 tests passent, 100% de couverture maintenue.
+- **Construction du cycle autonome (§3.9) volontairement mise en
+  pause** — décision explicite d'Ismaël, en attente d'avoir vu l'effet
+  de cette comparaison avant de bâtir dessus.
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou
