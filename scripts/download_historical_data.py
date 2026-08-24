@@ -69,7 +69,15 @@ _RESOLUTION_MINUTES = {"HOUR": 60, "MINUTE_15": 15}
 
 
 def _page_window(to_time: datetime, resolution: str) -> tuple:
-    minutes = _RESOLUTION_MINUTES[resolution] * MAX_BARS_PER_REQUEST
+    # -1 bougie de marge de sécurité : une fenêtre de EXACTEMENT
+    # `MAX_BARS_PER_REQUEST` bougies déclenche parfois
+    # `error.invalid.max.daterange` (limite de plage par requête,
+    # distincte du plafond `max` lui-même — trouvée empiriquement le
+    # 24/08/2026 en lançant ce script, seuil mesuré à ~999,5-1000
+    # bougies selon l'arrondi, voir docs/DECISIONS.md). Reste large
+    # (1 bougie sur 1000, perte négligeable) plutôt que de retenter une
+    # limite exacte fragile.
+    minutes = _RESOLUTION_MINUTES[resolution] * (MAX_BARS_PER_REQUEST - 1)
     from_time = to_time - timedelta(minutes=minutes)
     return from_time, to_time
 
@@ -87,6 +95,14 @@ def download_one(client: CapitalClient, epic: str, resolution: str, now: datetim
         from_time, to_time_window = _page_window(to_time, resolution)
         params = {
             "resolution": resolution,
+            # `max` DOIT être explicite : sans lui, l'API applique un
+            # plafond implicite très bas (10 bougies observées) et rejette
+            # `from`/`to` avec `error.invalid.max.daterange` dès que la
+            # plage dépasse ce que ce plafond implicite justifierait —
+            # trouvé empiriquement le 24/08/2026 en lançant ce script
+            # (voir docs/DECISIONS.md), pas anticipé par la sonde initiale
+            # (qui ne testait que des fenêtres d'un jour).
+            "max": MAX_BARS_PER_REQUEST,
             "from": from_time.strftime("%Y-%m-%dT%H:%M:%S"),
             "to": to_time_window.strftime("%Y-%m-%dT%H:%M:%S"),
         }
