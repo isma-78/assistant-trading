@@ -2416,6 +2416,178 @@ validés (le cas échéant) et rapport des échecs dans `docs/DECISIONS.md`.
 
 ---
 
+## 2026-08-25 (suite) — PRÉ-ENREGISTREMENT : cycle 2 de l'évolution H3/H4/H5 — axe timeframe, correction statistique, cycle autonome avec application automatique
+
+Écrit et daté **avant tout calcul sur les données**, suite à la demande
+explicite d'Ismaël de « débloquer » le cycle autonome et faire varier le
+timeframe (et les autres paramètres déjà explorés) « sur la base de
+l'historique et de la compréhension du marché ». Trois clarifications
+obtenues avant d'écrire ce pré-enregistrement :
+
+1. **H1 reste hors périmètre** — inchangé par rapport au cycle 1.
+2. **Application automatique dès validation** — un candidat qui valide
+   est appliqué en direct SANS attendre une confirmation d'Ismaël à
+   chaque cycle. **Écart explicite et assumé au §3.9 du CDC**, qui dit
+   littéralement « Validation (toi) [...] Jamais appliquée
+   automatiquement » — remplacé ici par une validation automatique
+   déterministe (seuils fixés à l'avance, jamais un jugement LLM),
+   couvert par l'autonomie déléguée du 16/08/2026 (préambule de
+   `docs/DECISIONS.md`). Journalisé ici comme écart, pas silencieux.
+3. **Le timeframe varie sur toute la chaîne**, y compris la couche de
+   confirmation croisée US30/US100 (H3/H4) — réouvre le gel décidé au
+   cycle 1. La couche session (fenêtres horaires, exemption crypto)
+   n'est PAS concernée : aucune hypothèse théorique n'a été formulée sur
+   elle, seule la RÉSOLUTION des bougies (entrée + confirmation) varie.
+
+### Deuxième écart CDC, trouvé en écrivant ce pré-enregistrement (pas cherché) : §3.9 est un mécanisme PROSPECTIF, pas rétrospectif
+
+Le §3.9 du CDC prescrit un test « uniquement sur données POSTÉRIEURES à
+la génération » (prospectif, trimestriel, ≥10 trades réels). Tout ce
+chantier — cycle 1 compris — utilise au contraire le backtest
+RÉTROSPECTIF du §2.11 (historique 2024-2026, découpage entraînement/
+validation temporel, mais les deux bornes sont dans le passé). C'est le
+mécanisme §2.11, pas littéralement le §3.9, qui alimente cette
+évolution — le nom « cycle autonome (§3.9) » utilisé dans la conversation
+pour désigner ce chantier est une étiquette commode, pas une conformité
+littérale au §3.9. Assumé explicitement : le volume de trades prospectifs
+réel (quelques dizaines par mois au mieux) rendrait un test purement
+prospectif inexploitable à l'échelle de temps souhaitée par Ismaël ; le
+rétrospectif reste le seul mécanisme disponible avec un volume
+suffisant. Les deux garanties que le §3.9 visait à préserver sont
+conservées sous une autre forme : **correction statistique proportionnelle
+au nombre d'hypothèses/candidats testés** (voir ci-dessous, exigée
+explicitement par le §3.9 ET l'invariant #10) et **le plafond de 3
+hypothèses par cycle** (voir ci-dessous).
+
+### Plafond CDC « 3 hypothèses par cycle » — appliqué littéralement
+
+4 hypothèses seraient explorables (H2/H3/H4/H5). **H2 est reportée au
+prochain cycle trimestriel**, pas incluse dans celui-ci : volume déjà
+extrêmement faible au cycle 1 (n=9 trades poolés sur 1.5 an
+d'entraînement, les deux candidats) — passer en HOUR réduirait encore ce
+volume (moins de bougies, un déclencheur déjà rare), sans base
+statistique exploitable même avec correction. Ce cycle couvre **H3, H4,
+H5 — exactement 3, plafond CDC respecté à la lettre.**
+
+### Découpage temporel (identique au cycle 1, aucune donnée nouvelle)
+
+Même CUTOFF que le cycle 1 : **2025-12-01T00:00 UTC** — ENTRAÎNEMENT
+avant, VALIDATION après, jamais consultée avant sélection. Bougies HOUR
+déjà téléchargées (2024-05-14 → 2026-08-24, 8 actifs) — aucun nouveau
+téléchargement nécessaire, aucun appel réseau dans ce chantier.
+
+### Ce qui reste inchangé (aucune ligne modifiée par ce chantier)
+
+- Mécanisme de sortie §2.10, garde-fou Option B, `trend_strategy.py`
+  (H1), `ict_strategy.FRACTAL_K` (partagé H2/H5, H2 hors périmètre ce
+  cycle de toute façon) — mêmes exclusions que le cycle 1.
+- Couche session (fenêtres horaires, exemption crypto) —
+  `technical_strategy_executor.py`/`session_windows.py` non touchés :
+  seule la résolution des bougies varie, pas la logique de fenêtrage.
+- Risk caps, `risk_engine.py`, `capital_manager.py`, `go_nogo.py` —
+  **jamais modifiables par ce cycle, sous aucune condition** (invariant
+  #6, rappelé explicitement car ce chantier introduit une application
+  automatique pour la première fois).
+
+### Candidats — axe timeframe, choisis sur justification théorique AVANT tout calcul
+
+**H3** (Donchian breakout + confirmation croisée US30/US100, actuel M15/M15) :
+- A (référence) : entrée M15, confirmation M15
+- B : entrée HOUR, confirmation HOUR — hypothèse : une cassure de canal
+  lue en H1 filtre le bruit intrajournalier qui produit les faux
+  signaux déjà documentés en M15.
+- C : entrée M15, confirmation HOUR — hypothèse mixte : garder la
+  réactivité d'entrée en M15 tout en lisant le régime de fond sur une
+  échelle plus lente et moins bruitée. **Rendu possible par le
+  correctif d'alignement du 25/08/2026** (pointeur par horodatage,
+  supporte nativement des résolutions différentes entre bougies propres
+  et bougies de confirmation — jamais testé avant ce correctif).
+
+**H4** (retour à la moyenne Bollinger + confirmation croisée, actuel M15/M15) :
+- A (référence) : entrée M15, confirmation M15
+- B : entrée HOUR, confirmation HOUR — hypothèse : le retour à la
+  moyenne est classiquement plus fiable sur une échelle plus lente
+  (moins de faux signaux de bande dépassée par du bruit pur).
+- C : entrée M15, confirmation HOUR — même rationale mixte que H3-C.
+
+**H5** (régime structurel + RSI(14)/50, actuel M15, pas de confirmation croisée) :
+- A (référence) : M15
+- B : HOUR — hypothèse : un croisement RSI/50 lu en H1 capte un
+  changement de momentum réel plutôt qu'une oscillation intrajournalière.
+
+**8 candidats au total ce cycle** (3+3+2), tous sur les paramètres déjà
+au budget §2.11 existant de leur hypothèse (résolution des bougies —
+degré de liberté déjà implicite dans le choix initial de chaque
+hypothèse, jamais un nouveau paramètre ajouté au budget).
+
+### Sélection sur entraînement — correction statistique pour comparaisons multiples (exigée par §3.9 ET invariant #10)
+
+Le cycle 1 utilisait un seuil simple (espérance ponctuelle > 0). Avec
+plus de candidats testés par hypothèse ce cycle, un seuil ponctuel seul
+gonfle le risque de faux positif (« tester plusieurs idées en fait
+gagner une par hasard », §3.9 littéral). Correction de Bonferroni à
+l'intérieur de chaque famille d'hypothèse (m = nombre de candidats de
+cette hypothèse ce cycle) :
+
+- Pour chaque candidat, calcul de la moyenne et de l'écart-type des
+  R-multiples poolés sur les 8 actifs (entraînement), erreur-type
+  SE = écart-type / racine(n).
+- Seuil corrigé unilatéral : z = quantile normal(1 - 0.05/m) — H3/H4
+  (m=3) : z≈2.128 ; H5 (m=2) : z≈1.960.
+- **Un candidat qualifie si et seulement si** : n ≥
+  `PHASE_B_MIN_TRADES_BACKTEST` (150, seuil déjà existant, réutilisé) ET
+  (moyenne − z×SE) > 0 — la borne basse de l'intervalle corrigé doit être
+  strictement positive, pas seulement la moyenne ponctuelle. **Critère
+  strictement plus exigeant que le cycle 1** — assumé : plus de candidats
+  testés, barre plus haute, exactement l'esprit du §3.9.
+- Candidat retenu par hypothèse : le qualifiant avec l'espérance
+  ponctuelle la plus élevée. Si aucun ne qualifie : aucun candidat
+  retenu, validation jamais consultée — identique au cycle 1.
+
+### Critère de succès en validation (inchangé par rapport au cycle 1)
+
+`PHASE_A_MIN_TRADES_BACKTEST` (60) trades poolés minimum, espérance
+nette strictement positive, un seul essai, jamais itéré. Pas de
+correction supplémentaire ici : un seul candidat par hypothèse atteint
+cette étape (déjà le candidat unique retenu sur l'entraînement).
+
+### Mécanisme d'application automatique — conçu maintenant, exercé seulement si un candidat valide
+
+Deux natures de changement, deux mécanismes :
+
+- **Paramètres déjà dynamiques par attribut de module** (TP1/TP2,
+  RSI_PERIOD, écart-type Bollinger, multiple de stop) : nouvelle table
+  `hypothesis_parameter_overrides` (audit complet : candidat, espérance
+  entraînement/validation, n, horodatage). Nouveau module
+  `src/hypothesis_params.py` : `apply_overrides(module, hypothesis,
+  db_path)`, appelé une fois au DÉMARRAGE de chaque `hypothesisN_
+  executor.py` (pas en cours de run — un changement de paramètre ne
+  prend effet qu'après un redémarrage explicite, cohérent avec le
+  principe "code-locked" du §4.2/invariant #4). Défaillant/absent =
+  aucun effet, valeurs codées en dur du module inchangées (fail-safe,
+  invariant #7).
+- **Résolution des bougies** (littérale dans chaque `hypothesisN_
+  executor.py`) : le cycle édite ce littéral, fait tourner la suite de
+  tests complète, commit + push + déploiement + redémarrage du process
+  concerné UNIQUEMENT si les tests passent au vert. Toute étape en échec
+  interrompt le cycle avant tout changement effectif côté VPS (fail-safe),
+  notifie Telegram, journalise l'échec.
+- **Jamais** : `risk_engine.py`, `capital_manager.py`, `go_nogo.py`, les
+  plafonds de risque, la couche session, le garde-fou Option B.
+- **Notification Telegram systématique** à chaque cycle (candidats
+  testés, résultat par hypothèse, application ou non) — même patron que
+  les notifications déjà en place.
+- **Cadence trimestrielle** : ce cycle (cycle 2) tourne maintenant, à la
+  demande explicite d'Ismaël. Les cycles suivants tournent automatiquement
+  tous les ~90 jours (crontab VPS), jamais plus rapproché — plafond CDC
+  respecté à la lettre malgré l'application automatique.
+
+Implémentation, résultats complets (tous les candidats), tests,
+déploiement de ce qui valide (le cas échéant), rapport honnête des échecs
+dans `docs/DECISIONS.md` — même discipline que le cycle 1.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4, #5, ou du backtest rétrospectif — jamais une modification de
 ce qui précède.*
