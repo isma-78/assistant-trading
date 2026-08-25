@@ -236,6 +236,31 @@ def _historical_regime(
     return derive_confirmed_regime(asset, index_regimes)
 
 
+def _advance_confirming_pointer(series: List[Candle], pointer: int, as_of_time: str) -> int:
+    """Avance `pointer` (jamais en arrière) jusqu'à l'index de la
+    première bougie de `series` dont `time_utc > as_of_time` — c'est-à-
+    dire jusqu'à inclure toutes les bougies déjà closes à `as_of_time`,
+    aucune bougie future. Correctif du 25/08/2026 (voir docs/
+    DECISIONS.md) : `own_bars` et les séries de confirmation (US30/
+    US100) n'ont PAS le même nombre de bougies en pratique (heures de
+    marché différentes par instrument) — aligner par position dans la
+    liste comparait silencieusement des bougies d'instants différents.
+    Les deux séries étant chronologiques par construction, ce pointeur
+    monotone donne un résultat correct en O(n) amorti sur toute la
+    boucle appelante, sans recherche répétée depuis le début."""
+    while pointer < len(series) and series[pointer].time_utc <= as_of_time:
+        pointer += 1
+    return pointer
+
+
+def _trailing_window(series: List[Candle], pointer: int, lookback: int) -> List[Candle]:
+    """Les `lookback` dernières bougies de `series` strictement avant
+    `pointer` (voir _advance_confirming_pointer) — même contrat que la
+    fenêtre glissante de l'actif lui-même (jamais plus que `lookback`
+    bougies, jamais une bougie non close à l'instant considéré)."""
+    return series[max(0, pointer - lookback):pointer]
+
+
 def replay_hypothesis(
     asset: str,
     own_bars: List[HistoricalBar],
@@ -275,6 +300,15 @@ def replay_hypothesis(
     confirming_candles: Dict[str, List[Candle]] = {}
     if require_regime_confirmation and confirming_bars:
         confirming_candles = {k: [b.to_candle() for b in v] for k, v in confirming_bars.items()}
+    # Pointeurs monotones PAR HORODATAGE, jamais par position dans la
+    # liste (correctif 25/08/2026, voir docs/DECISIONS.md) : own_bars et
+    # confirming_bars n'ont PAS le même nombre de bougies en pratique
+    # (heures de marché différentes par instrument — ex. EURUSD 24/5 vs
+    # US30 24/5 avec des jours fériés propres) ; aligner par index `t`
+    # comparait silencieusement des bougies d'instants différents. Les
+    # deux séries sont chronologiques (garanti par construction) donc un
+    # pointeur qui n'avance jamais en arrière suffit, O(n) amorti.
+    confirming_pointers: Dict[str, int] = {k: 0 for k in confirming_candles}
 
     envelope = CapitalManager(envelope_initial)
     simulated_reserve = 0.0
@@ -305,8 +339,10 @@ def replay_hypothesis(
         if require_regime_confirmation:
             hour = _bar_hour(bar.time_utc)
             if hour is not None and _should_refresh_regime_context(last_regime_refresh_hour, hour):
-                us30_window = confirming_candles.get("US30", [])[max(0, t + 1 - lookback):t + 1]
-                us100_window = confirming_candles.get("US100", [])[max(0, t + 1 - lookback):t + 1]
+                for key, series in confirming_candles.items():
+                    confirming_pointers[key] = _advance_confirming_pointer(series, confirming_pointers[key], bar.time_utc)
+                us30_window = _trailing_window(confirming_candles.get("US30", []), confirming_pointers.get("US30", 0), lookback)
+                us100_window = _trailing_window(confirming_candles.get("US100", []), confirming_pointers.get("US100", 0), lookback)
                 confirmed_regime = _historical_regime(us30_window, us100_window, asset)
                 last_regime_refresh_hour = hour
 

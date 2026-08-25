@@ -10,14 +10,17 @@ from src.backtest_engine import (
     SLIPPAGE_SPREAD_MULTIPLIER,
     BacktestResult,
     HistoricalBar,
+    _advance_confirming_pointer,
     _bar_hour,
     _parse_date,
+    _trailing_window,
     bar_from_raw,
     entry_execution_price,
     exit_execution_price,
     financing_adjusted_exit_price,
     replay_hypothesis,
 )
+from src.market_data import Candle
 from src.risk_engine import AssetSpec, RiskCaps, RiskEngine
 
 
@@ -413,6 +416,95 @@ def test_replay_donchian_trailing_flag_no_crash_stop_hit():
     )
     assert len(result.trades) == 1
     assert result.trades[0].exit_reason == "close_full_stop"
+
+
+# ---------------------------------------------------------------------------
+# _advance_confirming_pointer / _trailing_window — correctif du 25/08/2026
+# (alignement par horodatage, pas par position dans la liste : own_bars
+# et les series de confirmation n'ont pas le meme nombre de bougies en
+# pratique, voir docs/DECISIONS.md)
+# ---------------------------------------------------------------------------
+
+def _candle(time_utc, value=100.0):
+    return Candle(time_utc=time_utc, open=value, high=value, low=value, close=value)
+
+
+def test_advance_confirming_pointer_stops_before_future_bar():
+    series = [_candle("2026-01-01T00:00:00"), _candle("2026-01-01T05:00:00"), _candle("2026-01-01T06:00:00")]
+    # A l'instant 01h, seule la 1ere bougie (00h) est deja close - les
+    # bougies a 05h/06h sont dans le futur relatif a cet instant, meme
+    # si elles occupent les indices 1 et 2 (index-based les aurait incluses).
+    ptr = _advance_confirming_pointer(series, 0, "2026-01-01T01:00:00")
+    assert ptr == 1
+
+
+def test_advance_confirming_pointer_includes_bar_at_exact_time():
+    series = [_candle("2026-01-01T00:00:00"), _candle("2026-01-01T01:00:00")]
+    ptr = _advance_confirming_pointer(series, 0, "2026-01-01T01:00:00")
+    assert ptr == 2
+
+
+def test_advance_confirming_pointer_never_goes_backward():
+    series = [_candle("2026-01-01T00:00:00"), _candle("2026-01-01T01:00:00"), _candle("2026-01-01T02:00:00")]
+    ptr = _advance_confirming_pointer(series, 2, "2026-01-01T00:30:00")  # instant anterieur au pointeur deja atteint
+    assert ptr == 2  # ne recule jamais, meme si as_of_time est "avant"
+
+
+def test_advance_confirming_pointer_empty_series():
+    assert _advance_confirming_pointer([], 0, "2026-01-01T00:00:00") == 0
+
+
+def test_trailing_window_respects_lookback():
+    series = [_candle(f"2026-01-01T{i:02d}:00:00") for i in range(10)]
+    window = _trailing_window(series, pointer=7, lookback=3)
+    assert [c.time_utc for c in window] == ["2026-01-01T04:00:00", "2026-01-01T05:00:00", "2026-01-01T06:00:00"]
+
+
+def test_trailing_window_pointer_less_than_lookback():
+    series = [_candle(f"2026-01-01T{i:02d}:00:00") for i in range(3)]
+    window = _trailing_window(series, pointer=2, lookback=10)
+    assert len(window) == 2
+
+
+def test_replay_regime_confirmation_handles_mismatched_confirming_length():
+    # Reproduction directe du bug corrige le 25/08/2026 : own_bars a 230
+    # bougies horaires, les series de confirmation en ont 460 (2x plus
+    # fines, meme periode calendaire) - un alignement par index aurait
+    # servi des bougies decalees dans le temps. Verifie juste l'absence
+    # de crash et un comportement coherent (regime toujours resolu
+    # "long" sur une serie de confirmation strictement montante, quelle
+    # que soit sa longueur relative a own_bars).
+    n = 230
+    own_bars = _flat_bars(n, level=50.0)
+    # Bougies de confirmation deux fois plus nombreuses (pas de gap de 24
+    # bougies mais un pas de 30 minutes reel), memes bornes calendaires.
+    us_rising_fine = []
+    for i in range(n * 2):
+        v = 1.0 + i * 0.025  # meme pente cumulee sur la periode que _rising_bars(n, step=0.05)
+        day = min(1 + i // 48, 28)
+        hour = (i // 2) % 24
+        minute = 30 if i % 2 else 0
+        us_rising_fine.append(_bar(f"2026-01-{day:02d}T{hour:02d}:{minute:02d}:00", v, v, v, v, spread=0.001))
+    confirming = {"US30": us_rising_fine, "US100": us_rising_fine}
+
+    signal = _FakeSignal(direction="long", entry_price=50.0, stop_price=40.0)
+    calls = {"n": 0}
+
+    def entry_fn(asset, candles):
+        calls["n"] += 1
+        if calls["n"] == 225:
+            return signal
+        return None
+
+    own_bars[226] = _bar(own_bars[226].time_utc, 50, 51, 30, 35)
+    risk_engine, whitelist = _make_risk_engine()
+    result = replay_hypothesis(
+        "TEST", own_bars, entry_fn=entry_fn, risk_engine=risk_engine, whitelist=whitelist,
+        envelope_initial=1000.0, confidence_threshold=0.0, lookback=DEFAULT_LOOKBACK,
+        require_regime_confirmation=True, confirming_bars=confirming,
+    )
+    assert len(result.trades) == 1
+    assert result.trades[0].direction == "long"
 
 
 def test_replay_regime_confirmation_blocks_mismatched_direction():

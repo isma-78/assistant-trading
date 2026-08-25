@@ -2260,6 +2260,162 @@ l'impact du téléchargement sur le taux de succès live) rapportés dans
 
 ---
 
+## 2026-08-25 — PRÉ-ENREGISTREMENT : évolution de H2/H3/H4/H5 par entraînement/validation temporelle sur le backtest existant
+
+Écrit et daté **avant tout calcul sur les données** (candidats et
+critère de succès figés ici, avant de regarder un seul résultat
+d'entraînement) — conformément au §3.8 ("aucune variable supplémentaire
+sans justification théorique écrite préalable", "tout ajustement est
+proposé... jamais silencieux"). Décision d'Ismaël, méthode validée
+avant construction.
+
+**H1 hors périmètre, intacte** — aucune ligne de `trend_strategy.py`
+n'est modifiée par ce chantier, vérifié explicitement ci-dessous pour
+chaque hypothèse touchée.
+
+### Découpage temporel (mesuré sur l'historique déjà téléchargé, aucun nouveau téléchargement)
+
+Bougies M15 (H2-H5) disponibles du 2024-06-14T11:00 au 2026-08-24T17:30
+UTC (801 jours). Coupure à 2/3 : **2025-11-30T15:20 UTC**, arrondie à
+**2025-12-01T00:00 UTC** pour lisibilité.
+
+- **ENTRAÎNEMENT** : 2024-06-14 → 2025-12-01 (~534 jours, ~2/3)
+- **VALIDATION** : 2025-12-01 → 2026-08-24 (~267 jours, ~1/3), **jamais
+  consultée avant la sélection du candidat**
+
+Coûts : modèle le plus pessimiste déjà construit (`SLIPPAGE_SPREAD_
+MULTIPLIER = 1.0`, 100% du spread en plus du spread réel), cohérent
+avec §2.6.
+
+### Ce qui reste inchangé (aucune ligne modifiée dans ce chantier)
+
+- Couche session/multi-timeframe (cadence de rafraîchissement du
+  régime croisé H3/H4, `technical_strategy_executor.py`/
+  `regime_confirmation.py`).
+- Mécanisme de sortie §2.10 (TP1 50%/TP2 30%/TP3 20% trailing, ou TP
+  fixe pour H4) — `executor._evaluate_position_management`.
+- Garde-fou Option B (`executor._check_backtest_confidence_gate`).
+- `trend_strategy.py` (MA_PERIOD, DONCHIAN_PERIOD, `evaluate_entry`,
+  `compute_regime`) — **partagé avec H1** (régime de H4 via
+  `compute_regime`, déclencheur de H3 via `evaluate_entry`) : exclu de
+  toute modification, y compris "pour H3" ou "pour H4" — un changement
+  ici toucherait H1 par ricochet.
+- `ict_strategy.FRACTAL_K`/confluence — **partagé entre H2 et H5** (H5
+  réutilise `compute_structural_entry`) : exclu de toute modification
+  pour la même raison (un changement "pour H2" toucherait H5 par
+  ricochet, et inversement).
+
+### Portée exacte des paramètres explorés (aucun nouveau, seulement re-réglés)
+
+Chaque paramètre ci-dessous existe DÉJÀ dans le budget §2.11 de son
+hypothèse (voir `docs/HYPOTHESES.md`, entrées antérieures) — cette
+exploration ne fait varier que sa VALEUR, jamais son existence. Aucun
+nouveau degré de liberté introduit.
+
+| Hypothèse | Paramètre(s) explorés | Fichier | Statut budget |
+|---|---|---|---|
+| H2 | `TP1_R_MULTIPLE`/`TP2_R_MULTIPLE` | `hypothesis2_strategy.py` | valeur re-réglée, budget inchangé |
+| H3 | `TP1_R_MULTIPLE`/`TP2_R_MULTIPLE` | `hypothesis3_strategy.py` | valeur re-réglée, budget inchangé |
+| H4 | `BOLLINGER_STD_MULTIPLIER`, `STOP_WIDTH_MULTIPLIER` | `mean_reversion_strategy.py` | valeur re-réglée, budget inchangé |
+| H5 | `RSI_PERIOD`, `TP1_R_MULTIPLE`/`TP2_R_MULTIPLE` | `hypothesis5_strategy.py` | valeur re-réglée, budget inchangé |
+
+### Décision explicite : PAS de paramétrage par-actif dans ce chantier
+
+Un paramètre différent par actif multiplierait les degrés de liberté
+par 8 (point de vigilance d'Ismaël) — écarté pour cette évolution : un
+seul jeu de valeurs par hypothèse, partagé sur les 8 actifs, exactement
+comme aujourd'hui. La décision train/validation se fait donc sur les
+trades **regroupés (poolés) des 8 actifs**, pas actif par actif — cohérent
+avec le fait que le paramètre lui-même est partagé. Le détail par actif
+est rapporté pour information, jamais pour trancher.
+
+### Candidats par hypothèse — choisis sur justification théorique, AVANT tout calcul
+
+**H2** (actuel : TP1=1.0R, TP2=2.0R) :
+- A (référence) : TP1=1.0R, TP2=2.0R
+- B : TP1=0.5R, TP2=1.5R — prise de profit plus rapide, cohérente avec
+  un déclencheur déjà très sélectif (confluence ICT complète) où
+  chaque signal mérite d'être sécurisé tôt plutôt que d'espérer un
+  mouvement prolongé sur un échantillon rare.
+
+**H3** (actuel : TP1=1.0R, TP2=2.0R, hérite du déclencheur H1 Donchian(20)+MA200) :
+- A (référence) : TP1=1.0R, TP2=2.0R
+- B : TP1=0.5R, TP2=1.5R — même rationale que H2-B, déclencheur non
+  sélectif (simple cassure de canal) où sécuriser tôt limite l'érosion
+  par retournement.
+- C : TP1=1.5R, TP2=3.0R — hypothèse inverse : si la cassure capture un
+  vrai prolongement de tendance, des cibles plus larges laissent courir
+  le mouvement avant que le tiers restant ne passe sous trailing.
+
+**H4** (actuel : Bollinger(20, 2.0σ), stop_width=1.0×) :
+- A (référence) : 2.0σ, stop_width=1.0
+- B : 2.5σ — bande plus large, ne retient que des écarts statistiquement
+  plus extrêmes (moins de signaux, sélection plus stricte du retour à
+  la moyenne).
+- C : stop_width=1.5× — stop élargi, motivé par le reproche classique
+  fait aux systèmes de retour à la moyenne naïfs : un stop trop serré
+  sort la position juste avant que le retour attendu ne se produise.
+
+**H5** (actuel : RSI(14)/50, TP1=1.0R, TP2=2.0R, hérite du régime structurel H2) :
+- A (référence) : RSI(14), TP1=1.0R, TP2=2.0R
+- B : RSI(9) — lecture de momentum plus réactive, capte le
+  franchissement du seuil 50 plus tôt dans le mouvement.
+- C : TP1=0.5R, TP2=1.5R — même rationale que H2-B/H3-B.
+
+### Sélection du candidat (entraînement SEUL, avant tout contact avec la validation)
+
+Pour chaque hypothèse : rejeu de CHAQUE candidat sur la période
+d'ENTRAÎNEMENT uniquement, sur les 8 actifs, trades poolés. Le
+candidat retenu est celui avec l'espérance nette la plus élevée **et**
+strictement positive, avec au moins `PHASE_B_MIN_TRADES_BACKTEST` (150,
+déjà défini dans `confidence_scorer.py`) trades poolés sur
+l'entraînement. Si aucun candidat ne satisfait ces deux conditions :
+**aucun candidat n'est retenu pour cette hypothèse, la validation n'est
+jamais consultée** (inutile de tester sur la validation un candidat
+déjà disqualifié sur l'entraînement — évite de gaspiller la seule
+tentative de validation autorisée).
+
+Nombre de candidats considérés sur l'entraînement, écrit ici avant
+résultat : **2 pour H2, 3 pour H3, 3 pour H4, 3 pour H5** — le candidat
+retenu (le cas échéant) et le nombre exact considéré seront rapportés
+dans `docs/DECISIONS.md`, y compris si c'est la référence (A) qui gagne
+(un résultat honnête, pas un échec de la démarche).
+
+### Critère de succès en validation (figé ici, jamais ajusté après coup)
+
+Réutilise `PHASE_A_MIN_TRADES_BACKTEST` (60, déjà défini dans
+`confidence_scorer.py`) plutôt qu'un nouveau seuil inventé : le
+candidat retenu sur l'entraînement **VALIDE** si et seulement si, sur
+la période de VALIDATION seule (jamais entraînement), poolé sur les 8
+actifs :
+- nombre de trades ≥ 60, **et**
+- espérance nette strictement positive.
+
+**Un seul essai de validation par candidat retenu — jamais
+d'itération.** Si le critère échoue, l'hypothèse reste en pause (garde-
+fou Option B déjà actif, base réelle déjà à jour) — pas de nouveau
+candidat testé contre cette même validation, pas de nouvelle tentative
+dans ce chantier. Un échec est un résultat, journalisé comme tel dans
+`docs/DECISIONS.md`, pas juste les succès.
+
+### Ce que cette évolution NE fait PAS
+
+- Ne modifie jamais `trend_strategy.py`/`ict_strategy.FRACTAL_K` — H1
+  intacte, H2/H5 non entrelacées entre elles par ce chantier.
+- Ne modifie jamais la couche session/multi-timeframe, le mécanisme de
+  sortie §2.10, ni le garde-fou Option B.
+- N'introduit aucun paramétrage par-actif (décision explicite ci-dessus).
+- N'augmente jamais le budget de variables d'une hypothèse — re-règle
+  des valeurs déjà comptées, n'en ajoute aucune.
+
+Implémentation (script d'évaluation entraînement/validation, jamais
+committé comme partie du pipeline de production — outil de recherche
+ponctuel comme `calibrate_pip_value.py`), résultats complets (tous les
+candidats, pas seulement le gagnant), tests, déploiement des candidats
+validés (le cas échéant) et rapport des échecs dans `docs/DECISIONS.md`.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4, #5, ou du backtest rétrospectif — jamais une modification de
 ce qui précède.*
