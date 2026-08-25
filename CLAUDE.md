@@ -941,6 +941,33 @@ Détail complet dans `docs/DECISIONS.md`.
   comme dépassé depuis plusieurs paliers — à intégrer dans une future
   révision du CDC v4.
 
+## Palier P3 (suite) — Trois chantiers : squeeze Bollinger (H4), volume (H5), Station X vs H2 (25/08/2026)
+
+Détail complet dans `docs/DECISIONS.md`. **Écart CDC de plus, assumé** :
+pour ces deux premiers chantiers seulement, un candidat qualifié+validé
+aurait été auto-déployé sans confirmation manuelle d'Ismaël (§3.9
+"jamais appliquée automatiquement" contredit sur instruction explicite)
+— non exercé, aucun candidat n'a qualifié.
+
+- **Squeeze Bollinger pour H4** (`mean_reversion_strategy.
+  evaluate_entry_squeeze_breakout`, nouveau, 100% couvert, 31 tests) :
+  négatif sur les 8 actifs sans exception (-0,31R moyen), le résultat le
+  plus nettement négatif de la semaine. Non qualifié, non déployé. Code
+  conservé (testé, documenté, jamais appelé en live) pour traçabilité.
+- **Volume pour H5** : `lastTradedVolume` présent pour les 8 actifs mais
+  identifié comme volume TICK, pas réel (EURUSD < GOLD/crypto en
+  magnitude, incohérent avec un volume réel ; tous les instruments sont
+  des CFD chez ce broker). Condition d'Ismaël non remplie — sujet clos,
+  aucun candidat construit.
+- **Station X vs H2** : seulement 6 trades réels Station X (GOLD,
+  +1,61€). Point structurel : Station X n'a pas de fonction d'entrée
+  déterministe rejouable par `replay_hypothesis` (trader humain, pas une
+  règle de prix) — aucun backtest rétrospectif possible, contrairement à
+  H2/H3/H4/H5. Seule une comparaison trade-pour-trade en direct, sur une
+  fenêtre commune future, aurait un sens.
+- 867 tests passent, 100% de couverture maintenue. Aucun redémarrage de
+  process nécessaire (aucun changement de comportement live).
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou

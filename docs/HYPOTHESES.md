@@ -2851,6 +2851,148 @@ candidat qualifié, rapport honnête des échecs dans `docs/DECISIONS.md`
 
 ---
 
+## 2026-08-25 (suite 5) — PRÉ-ENREGISTREMENT : trois chantiers (squeeze Bollinger pour H4, volume pour H5, Station X vs H2) — écrit avant tout calcul
+
+Demande explicite d'Ismaël, trois chantiers indépendants. **Changement
+de règle explicite pour les chantiers 1 et 2 uniquement** : tout
+candidat qui qualifie sur l'entraînement ET valide sur la validation est
+**déployé automatiquement en démo, sans confirmation manuelle** —
+remplace la règle des cycles 1-3 ("nouvelle hypothèse jamais
+auto-déployée"). **Écart CDC supplémentaire, assumé explicitement** : le
+§3.9 dit littéralement "Jamais appliquée automatiquement" pour une
+hypothèse qui valide — ici étendu, sur instruction directe d'Ismaël, à
+des changements de LOGIQUE D'ENTRÉE (pas seulement des valeurs de
+paramètre comme le cycle 2). Couvert par l'autonomie déléguée du
+16/08/2026, journalisé comme un écart de plus, pas silencieux.
+
+### Chantier 1 — Nouvelle hypothèse pour H4 : breakout de volatilité (squeeze Bollinger)
+
+**Justification théorique (donnée par Ismaël, reproduite ici avant tout
+calcul)** : la volatilité de marché alterne contraction et expansion.
+Une compression prolongée des bandes de Bollinger précède
+statistiquement des mouvements directionnels plus amples. Logique
+distincte de H1/H3 (cassure Donchian en tendance établie), H2 (structure
++ ICT), H4 actuel (retour à la moyenne), H5 (momentum RSI) — nouvelle
+famille de déclencheur, pas une variante des précédentes.
+
+**Mécanique** :
+- Détection de compression : largeur de bande Bollinger(20, 2σ) —
+  réutilise `mean_reversion_strategy.compute_bollinger_bands` À
+  L'IDENTIQUE, aucune nouvelle fonction de calcul — au 20ᵉ percentile le
+  plus bas sur une fenêtre glissante de 100 périodes.
+- Signal d'entrée : clôture au-delà de la bande (haute ou basse) DE LA
+  BOUGIE COURANTE, alors que la compression était active À LA BOUGIE
+  PRÉCÉDENTE. Direction = sens de la cassure.
+- **Pas de filtre MA200** (décision explicite d'Ismaël) — donc pas de
+  `regime_type` au sens `_REGIME_TYPE_BY_SOURCE` existant (ni "ma200" ni
+  "structural_bos_choch" : nouvelle valeur `"aucun"`), et pas de
+  confirmation de régime croisée (`require_regime_confirmation=False`) —
+  cohérence stricte : un mécanisme sans notion de régime MA200 ne peut
+  pas être filtré par un régime MA200 cross-market.
+- Sortie : réutilise le mécanisme §2.10 TP1/TP2/trailing déjà construit
+  (`trend_strategy.compute_tp_levels`, comme H3/H5), stop = **bande
+  médiane (SMA) au moment de la cassure** — choix a priori
+  PARAMÈTRE-LIBRE (aucune nouvelle constante : c'est la valeur déjà
+  calculée par `compute_bollinger_bands`), justifié théoriquement : si le
+  prix revient jusqu'à la moyenne après une cassure de compression, la
+  thèse de breakout est invalidée par construction, pas une distance
+  arbitraire.
+
+**Budget de variables — compté honnêtement, PAS "2" comme framé dans la
+demande** : la demande décrit "2 paramètres a priori" (percentile,
+fenêtre). Vérifié contre la convention DÉJÀ établie par le projet
+(`hypothesis3_strategy.py`/`hypothesis5_strategy.py`, qui comptent
+TP1_R_MULTIPLE/TP2_R_MULTIPLE comme variables PROPRES à l'hypothèse,
+même quand leur valeur choisie est standard/identique aux autres) : ce
+candidat introduit en réalité **4 variables propres** — percentile de
+compression, fenêtre de lookback, TP1 (multiple de R), TP2 (multiple de
+R). La config Bollinger(20,2σ) est réutilisée À L'IDENTIQUE (même
+fonction, même constantes) — non recomptée, même précédent que H3
+réutilisant MA200/Donchian de H1 sans "dépenser" une seconde fois.
+**Signalé explicitement, pas silencieusement aligné sur le chiffre "2"
+de la demande.** 4/5 reste sous le plafond opérationnel de 5 établi au
+cycle 3 — **budget d'une hypothèse FRAÎCHE** (ce candidat concourt pour
+la PLACE de H4, il ne s'ajoute pas aux 4/5 déjà comptés pour la
+Bollinger-retour-à-la-moyenne actuelle — si adopté, l'ancien budget H4
+devient caduc, les anciennes variables ne sont plus utilisées).
+
+**Classification** : nouvelle hypothèse par nature (nouvelle fonction de
+décision, pas une valeur sur un attribut existant) — mais **auto-
+déployée si elle qualifie et valide**, par exception explicite de ce
+chantier (voir règle en tête de cette entrée).
+
+**Méthode** : un seul candidat (pas de grille — la demande en spécifie
+un seul), correction Bonferroni réduite à m=1 (z≈1.6449, seuil normal
+unilatéral à 95%, pas de réduction supplémentaire puisqu'un seul test).
+Qualifie sur l'entraînement si n ≥ `PHASE_B_MIN_TRADES_BACKTEST` (150) ET
+(moyenne − z×SE) > 0. Si qualifié, un seul essai sur la validation : PASS
+si n ≥ `PHASE_A_MIN_TRADES_BACKTEST` (60) ET espérance nette > 0. Même
+découpage temporel (CUTOFF 2025-12-01T00:00 UTC), même modèle de coûts
+que tous les cycles précédents.
+
+### Chantier 2 — Volume de transaction pour H5
+
+**Étape 1 (avant tout calcul)** : vérifier empiriquement ce que l'API
+Capital.com fournit comme champ volume, actif par actif — condition
+préalable explicite d'Ismaël avant tout candidat.
+
+**Si volume réel disponible pour plusieurs actifs** : un candidat
+combinant volume et RSI pour H5 (ex. confirmation du franchissement
+RSI(14)/50 déjà existant par un pic de volume relatif) — hypothèse
+SÉPARÉE de H5 actuelle (budget déjà à 5/5 depuis le cycle 3, aucune
+variable supplémentaire possible sur H5 elle-même). Même méthode
+qu'au chantier 1 (candidat unique, m=1, mêmes seuils), auto-déploiement
+si qualifié et validé — même exception que le chantier 1.
+
+**Sinon** : documenté et clos, aucun candidat construit (rien à évaluer
+sans variable exploitable — construire un candidat sur du bruit
+reviendrait exactement au data dredging que le §3.8 interdit).
+
+### Chantier 3 — Station X vs H2
+
+Vérification du volume de signaux/trades Station X déjà journalisés
+avant toute décision de méthode. **Point structurel à vérifier avant de
+promettre un rejeu** : `backtest_engine.replay_hypothesis` exige une
+fonction `entry_fn(asset, candles)` DÉTERMINISTE, dérivée uniquement du
+prix — Station X n'en a pas, ce sont les appels discrétionnaires d'un
+trader humain retransmis par Telegram, jamais une règle calculable sur
+l'historique de prix. **Si confirmé, aucun "rejeu via le moteur de
+backtest" n'est possible pour Station X au sens où il l'est pour
+H2/H3/H4/H5** — seule une comparaison trade-pour-trade sur une fenêtre
+calendaire commune où les deux tournent déjà en direct aurait un sens,
+jamais un backtest rétrospectif étendu artificiellement.
+
+Implémentation, résultats complets, rapport honnête (y compris les
+chantiers clos sans candidat) dans `docs/DECISIONS.md`.
+
+**Résultats (25/08/2026)** :
+- **Chantier 1** : candidat NON qualifié sur l'entraînement (n=5052,
+  moyenne=-0,3068R, négatif sur les 8 actifs sans exception, borne basse
+  corrigée=-0,3292R) — validation jamais consultée, aucun déploiement.
+  Détail complet dans `docs/DECISIONS.md`.
+- **Chantier 2** : `lastTradedVolume` présent pour les 8 actifs, mais
+  identifié comme volume TICK (comptage de mises à jour de prix), pas un
+  volume réel négocié — vérifié empiriquement (EURUSD, l'instrument le
+  plus liquide au monde en volume réel, affiche une valeur PLUS FAIBLE
+  que GOLD/crypto, incohérent avec un volume réel, cohérent avec un
+  volume tick) et structurellement (tous les instruments sont de type
+  CFD `CURRENCIES`/`CRYPTOCURRENCIES` chez ce broker, jamais un accès
+  direct à un carnet d'ordres réel). Condition de la demande d'Ismaël
+  ("seulement si volume réel disponible") NON remplie — aucun candidat
+  construit, sujet clos.
+- **Chantier 3** : 54 signaux Station X journalisés (52 GOLD, 2 BTCUSD),
+  seulement 6 trades réels ouverts (GOLD uniquement, +1,61€ net,
+  21-25/08/2026) — bien en-deçà des seuils déjà établis (n≥150
+  entraînement, n≥60 validation). Confirmation structurelle : Station X
+  n'a pas de fonction d'entrée déterministe rejouable par
+  `backtest_engine.replay_hypothesis` (appels discrétionnaires d'un
+  trader humain, pas une règle de prix) — aucun rejeu rétrospectif
+  possible au sens où il l'est pour H2/H3/H4/H5, contrairement à ce que
+  la demande envisageait comme option. Détail complet dans
+  `docs/DECISIONS.md`.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4, #5, ou du backtest rétrospectif — jamais une modification de
 ce qui précède.*

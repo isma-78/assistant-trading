@@ -12,6 +12,153 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-25 (suite 6) — Trois chantiers : squeeze Bollinger (H4), volume (H5), Station X vs H2 — aucun déploiement, écart CDC auto-déploiement assumé
+
+Pré-enregistrement complet dans `docs/HYPOTHESES.md` (25/08/2026, "trois
+chantiers") — justifications théoriques, budget, méthode — à lire en
+premier, pas répété ici. Demande explicite d'Ismaël.
+
+### Écart CDC — auto-déploiement sans confirmation manuelle, chantiers 1/2 uniquement
+
+**Cinquième écart CDC de la semaine, assumé explicitement.** Le §3.9 dit
+littéralement "Jamais appliquée automatiquement" pour une hypothèse qui
+valide. Ismaël a demandé explicitement, pour les chantiers 1 et 2
+seulement, qu'un candidat qualifié+validé soit déployé en démo SANS
+attendre sa confirmation — remplace la règle des cycles 1-3
+("nouvelle hypothèse jamais auto-déployée sans validation manuelle").
+Couvert par l'autonomie déléguée du 16/08/2026. **Non exercé dans les
+faits** : aucun des deux candidats n'a qualifié, donc aucun déploiement
+automatique n'a eu lieu — la règle reste actée pour un futur candidat
+qui qualifierait.
+
+### Chantier 1 — Squeeze Bollinger pour H4 : NON qualifié
+
+**Budget, compté honnêtement** : la demande décrivait "2 paramètres a
+priori" (percentile de compression, fenêtre de lookback). Par la
+convention DÉJÀ établie du projet (TP1/TP2 comptent séparément, voir
+H3/H5), ce candidat introduit en réalité **4 variables propres** :
+percentile (20), fenêtre (100 périodes), TP1 (1R), TP2 (2R) — la config
+Bollinger(20,2σ) est réutilisée à l'identique, non recomptée. Signalé
+avant tout calcul dans `docs/HYPOTHESES.md`, pas aligné silencieusement
+sur le chiffre "2" de la demande. Budget d'une hypothèse FRAÎCHE (ce
+candidat concourt pour la place de H4, pas un ajout aux 4/5 déjà comptés
+pour la Bollinger-retour-à-la-moyenne actuelle) — 4/5, sous le plafond
+opérationnel de 5.
+
+**Implémentation** : `src/mean_reversion_strategy.py::evaluate_entry_
+squeeze_breakout` (nouvelle fonction, module déjà critique — 100% de
+couverture maintenue, 31 tests dédiés dont les cas limites : pas assez
+de bougies, pas de compression, bandes absentes [mock], pas de cassure,
+risque initial nul [mock], erreur interne). Réutilise `compute_
+bollinger_bands` à l'identique et `trend_strategy.compute_tp_levels`
+(même mécanisme §2.10 que H2/H3/H5) — aucune fonction de calcul
+dupliquée. Stop = bande médiane (SMA) au moment de la cassure,
+paramètre-libre (invalidation naturelle de la thèse de breakout). Pas de
+confirmation de régime croisée (cohérent avec "pas de filtre MA200").
+
+**Résultat** (`logs/evaluate_squeeze_breakout.log`, 0 erreur,
+`scripts/evaluate_squeeze_breakout_candidate.py`, script ponctuel,
+aucune écriture DB) :
+
+| n (train) | Moyenne | Borne basse (z=1,6452) | Qualifié ? |
+|---|---|---|---|
+| 5052 | -0,3068R | -0,3292R | **Non** |
+
+Négatif sur les 8 actifs **sans exception** (-0,14R à -0,55R) — le
+résultat le plus nettement négatif de tous les candidats testés cette
+semaine (cycles 1-3 compris), pas une marge fine. Validation jamais
+consultée. **Aucun fichier de déploiement modifié** — H4 reste sur
+`evaluate_entry` (retour à la moyenne), inchangé. La nouvelle fonction
+reste dans le code (testée, documentée, jamais appelée par aucun
+process live) — traçabilité de ce qui a été essayé et rejeté, pas
+seulement des succès.
+
+### Chantier 2 — Volume pour H5 : sujet clos, pas de candidat construit
+
+**Vérification empirique du champ volume, actif par actif** (`GET
+/prices`, champ `lastTradedVolume`) :
+
+| Actif | Présent | Valeur observée (échantillon) |
+|---|---|---|
+| GOLD | Oui | 3289 |
+| US100 | Oui | 2344 |
+| US30 | Oui | 1012 |
+| EURUSD | Oui | 820 |
+| GBPUSD | Oui | 632 |
+| USDJPY | Oui | 560 |
+| BTCUSD | Oui | 4214 |
+| ETHUSD | Oui | 2927 |
+
+**Type : volume TICK (comptage de mises à jour de prix), pas un volume
+réel négocié** — deux éléments de preuve, pas une supposition :
+1. **Incohérence de magnitude** : EURUSD (l'instrument le plus liquide
+   au monde en volume réel négocié, largement devant l'or ou les
+   crypto-actifs) affiche une valeur (820) INFÉRIEURE à GOLD (3289) et
+   aux crypto (2927-4214) — impossible pour un volume réel, cohérent
+   avec un volume tick (fréquence de cotation du flux du broker, sans
+   rapport direct avec la liquidité sous-jacente réelle).
+2. **Structure de l'instrument** : `GET /markets/{epic}` confirme que
+   les 8 actifs sont tous de type CFD (`CURRENCIES`/`CRYPTOCURRENCIES`,
+   `marginFactor`, `overnightFee` — métadonnées caractéristiques d'un
+   CFD, jamais un accès direct à un carnet d'ordres d'échange réel).
+   Même les crypto-actifs sont offerts en CFD ici, jamais un accès
+   direct à un exchange spot — aucun volume réel négociable n'existe
+   structurellement à cette étape de la chaîne de données.
+
+**Condition d'Ismaël ("seulement si volume réel disponible pour
+plusieurs actifs") NON remplie** — aucun candidat volume+RSI construit,
+conformément à l'instruction explicite ("sinon: documente pourquoi ce
+n'est pas exploitable, clos le sujet"). Construire un candidat sur un
+proxy de fréquence de cotation aurait été un signal fabriqué, pas un
+signal de marché — exactement le data dredging que le §3.8 interdit.
+**Sujet clos.**
+
+### Chantier 3 — Station X vs H2 : comparaison non réalisable dans l'état actuel
+
+**Volume journalisé, chiffres exacts** :
+- `signals` (source Station X, canal Telegram `-1002481537588`) : 54
+  signaux (52 GOLD, 2 BTCUSD), 2026-08-17 → 2026-08-25.
+- `trades` réels : **6 seulement**, tous GOLD, +1,61€ net cumulé,
+  2026-08-21 → 2026-08-25.
+- Bien en-deçà des seuils déjà établis dans ce projet (n≥150
+  entraînement, n≥60 validation) — H2 elle-même n'avait que 9 trades
+  poolés au cycle 1, déjà signalé comme statistiquement insuffisant à
+  l'époque.
+
+**Point structurel vérifié, pas supposé** : `raw_messages` du canal
+Station X remonte à 2025-02-27 (174 messages, dont 71 de type "signal"),
+mais **`backtest_engine.replay_hypothesis` exige une fonction
+`entry_fn(asset, candles)` déterministe, dérivée uniquement du prix** —
+Station X n'en a pas : ce sont les appels discrétionnaires d'un trader
+humain retransmis par Telegram, jamais une règle calculable rétro-
+activement sur l'historique de prix. **Aucun rejeu via le moteur de
+backtest n'est possible pour Station X**, contrairement à H2/H3/H4/H5 —
+17 messages "signal" plus anciens (2025-03-03 à avant le 17/08/2026)
+existent dans `raw_messages` mais n'ont jamais été extraits vers
+`signals` (probablement une collecte d'historique Telethon au démarrage
+du listener, jamais suivie d'extraction) ; même extraits, le total
+resterait ~71 signaux, encore sous le seuil d'entraînement (150) et à
+peine au-dessus du seuil de validation (60) — pas de quoi changer la
+conclusion.
+
+**Ce qu'il faudrait, précisément** : pas un backtest, mais du TEMPS de
+collecte en direct — Station X et H2 doivent chacune accumuler des
+dizaines à une centaine de trades RÉELS avant qu'une comparaison
+statistiquement significative ait un sens. Aucun raccourci
+méthodologique disponible : le trader humain de Station X ne peut pas
+être "rejoué" sur 2 ans d'historique de prix comme une règle de code.
+
+### Tests, déploiement
+
+31 nouveaux tests (`tests/test_mean_reversion_strategy.py`), 867 passent
+au total, 100% de couverture maintenue sur `mean_reversion_strategy.py`.
+Déployé sur le VPS (code testé et documenté). **Aucun redémarrage de
+process nécessaire** — aucun des trois chantiers n'a produit de
+changement de comportement live (candidat H4 rejeté, chantier volume
+clos sans candidat, chantier Station X sans candidat construit).
+
+---
+
 ## 2026-08-25 (suite 4) — Cycle 3 de l'évolution H4/H5 : espace de recherche élargi (FVG/Fibonacci/structure/RSI), budget de variables vérifié, résultat nul
 
 Pré-enregistrement complet dans `docs/HYPOTHESES.md` (25/08/2026, "cycle
