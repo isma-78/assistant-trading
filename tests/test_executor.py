@@ -585,6 +585,71 @@ def test_open_signal_approved_places_limit_order_and_records_trade(tmp_path):
         conn.close()
 
 
+def test_open_signal_trade_row_visible_to_guard_before_broker_call_resolves(tmp_path):
+    # Correctif du 25/08/2026 (voir docs/DECISIONS.md — bug réel trouvé
+    # en investiguant l'écart trades réels/backtest, 4 positions
+    # H3/ETHUSD simultanées le 21/08/2026) : la ligne `trades` doit
+    # exister AVANT l'appel réseau, pas après — sinon le garde-fou
+    # `_has_active_signal_or_trade` ne voit rien pendant l'appel et un
+    # nouveau signal peut se générer sur le même actif. Simule la
+    # fenêtre de course : `place_limit_order` interroge la DB depuis
+    # SON PROPRE side_effect, comme le ferait un cycle concurrent.
+    from src.technical_strategy_executor import _has_active_signal_or_trade
+
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0, source="hypothesis3")
+
+    seen_active = {}
+
+    def _place_limit_order(**kwargs):
+        seen_active["value"] = _has_active_signal_or_trade(db_path, "GOLD", "hypothesis3")
+        return {"deal_id": "deal-xyz", "level": 100.0}
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.side_effect = _place_limit_order
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert seen_active["value"] is True
+
+
+def test_open_signal_placement_failure_marks_preinserted_trade_annule(tmp_path):
+    # Avant le correctif du 25/08/2026 : un échec de place_limit_order ne
+    # laissait AUCUNE ligne trades. Depuis, la ligne pré-insérée (avant
+    # l'appel réseau) doit être annulée explicitement — jamais laissée
+    # en 'en_attente' sans deal_id (bloquerait indéfiniment le garde-fou
+    # sur cet actif, invariant #7).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.side_effect = CapitalApiError("boom")
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result is None
+    conn = get_connection(db_path)
+    try:
+        trades = conn.execute("SELECT * FROM trades").fetchall()
+        assert len(trades) == 1
+        assert trades[0]["statut"] == "annule"
+        assert trades[0]["deal_id"] is None
+    finally:
+        conn.close()
+
+
 def test_open_signal_captures_spread_at_signal(tmp_path):
     # §2.6, 24/08/2026 (voir docs/DECISIONS.md) : ferme le gap de
     # market_snapshots.spread jamais alimenté pour le live.

@@ -128,14 +128,40 @@ explicitement, `tests/test_backtest_engine.py`) — structurellement
 incapable de produire 4 positions simultanées. C'est un facteur réel de
 divergence entre les deux, indépendant de tout bug d'alignement.
 
-**Pas corrigé dans ce lot** — trouvé pendant une investigation demandée
-comme "expliquer", pas "corriger" ; un changement à la logique
-d'ouverture d'ordre réel mérite une décision explicite d'Ismaël avant
-d'y toucher. Piste de correctif la plus directe : insérer la ligne
-`trades` (statut='en_attente', sans deal_id) AVANT l'appel réseau,
-mettre à jour le deal_id après succès — le garde-fou verrait alors la
-position "en cours de placement" immédiatement, plus de fenêtre de
-course. À valider avec Ismaël avant implémentation.
+**Corrigé le 25/08/2026, même jour, décision explicite d'Ismaël**
+(question posée directement après le rapport de cette investigation).
+`src/executor.py::open_signal` : la ligne `trades` est désormais
+insérée AVANT l'appel réseau de placement d'ordre (`deal_id` NULL,
+`statut='en_attente'`) — visible au garde-fou dès l'insertion, avant
+même que le réseau réponde. `deal_id` est mis à jour APRÈS succès. En
+cas d'échec (`CapitalApiError`), la ligne pré-insérée est explicitement
+passée à `statut='annule'` (jamais laissée en 'en_attente' sans
+deal_id, ce qui aurait bloqué indéfiniment tout nouveau signal sur cet
+actif — invariant #7).
+
+Module partagé par les 6 process live (`executor_loop`, `trend_executor`
+H1, `hypothesis2-5_executor`, tous via `technical_strategy_executor.
+run_technical_strategy_loop` -> `open_signal`) — correctif effectif pour
+toutes les hypothèses, pas seulement H3.
+
+2 nouveaux tests (`tests/test_executor.py`) :
+`test_open_signal_trade_row_visible_to_guard_before_broker_call_resolves`
+(simule la fenêtre de course : `place_limit_order` interroge
+`_has_active_signal_or_trade` depuis son propre `side_effect`, comme le
+ferait un cycle concurrent — prouve que la ligne est déjà visible) ;
+`test_open_signal_placement_failure_marks_preinserted_trade_annule`
+(échec réseau -> exactement 1 ligne `trades`, `statut='annule'`,
+`deal_id IS NULL` — avant ce correctif, aucune ligne n'existait sur cet
+échec). 847 tests passent (845 avant ce lot). `open_signal` reste hors
+de l'exigence de couverture à 100% (orchestration I/O, même traitement
+que `manage_open_trades`/`check_pending_fills`, voir en-tête de
+`tests/test_executor.py`) — non-régression vérifiée par la suite
+complète, pas par un delta de couverture.
+
+Déployé sur le VPS, 6 process redémarrés (le correctif touche le
+placement d'ordre réel, code qui ne prend effet qu'au redémarrage,
+principe "code-locked" déjà établi) — vérification en direct détaillée
+ci-dessous.
 
 ### Conclusion honnête
 

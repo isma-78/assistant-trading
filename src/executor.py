@@ -813,15 +813,6 @@ def open_signal(
         )
 
     direction_api = DIRECTION_TO_API[signal_row["sens"]]
-    try:
-        result = client.place_limit_order(
-            epic=epic, direction=direction_api, size=units,
-            level=signal_row["entree_min"],
-            guaranteed_stop=adjustment.stop_distance > 0, stop_distance=adjustment.stop_distance if adjustment.stop_distance > 0 else None,
-        )
-    except CapitalApiError:
-        logger.exception("Échec du placement de l'ordre limite pour le signal %s", signal_row["id"])
-        return None
 
     # Session de marché à l'ouverture (collecte uniquement, demande
     # explicite d'Ismaël, 20/08/2026 — voir docs/DECISIONS.md et
@@ -834,15 +825,29 @@ def open_signal(
     exit_type = _EXIT_TYPE_BY_SOURCE.get(signal_row["source"], "tp_partiel")
     timing_layer = _TIMING_LAYER_BY_SOURCE.get(signal_row["source"])
 
+    # Correctif du 25/08/2026 (bug réel trouvé en investiguant l'écart
+    # trades réels/backtest, voir docs/DECISIONS.md) : la ligne `trades`
+    # est désormais insérée ICI, AVANT l'appel réseau de placement
+    # d'ordre — `deal_id` NULL, mis à jour après succès. Avant ce
+    # correctif, `signals.statut` passait à 'approuve' plus haut sans
+    # qu'aucune ligne `trades` n'existe le temps de l'appel réseau :
+    # fenêtre de course où `_has_active_signal_or_trade`
+    # (`technical_strategy_executor.py`) ne voyait ni signal
+    # 'a_valider' (déjà 'approuve') ni trade 'en_attente'/'ouvert' (pas
+    # encore inséré) — un signal supplémentaire pouvait alors être
+    # généré sur le même actif au cycle suivant si le placement prenait
+    # plus longtemps qu'un cycle. Incident réel observé le 21/08/2026 (4
+    # positions H3/ETHUSD ouvertes simultanément). La ligne est visible
+    # au garde-fou dès son insertion, avant même que le réseau réponde.
     with connection_scope(db_path) as conn:
         cursor = conn.execute(
             "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
             "prix_entree_prevu, guaranteed_stop, stop_loss_initial, stop_loss_courant, risque_eur, "
             "pourcentage_risque_applique, ouvert_at, statut, stop_elargi, stop_origine_signal, session_marche, "
             "regime_type, exit_type, timing_layer) "
-            "VALUES (?, ?, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, NULL, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?, ?, ?)",
             (
-                signal_row["id"], result["deal_id"], signal_row["source"], asset, signal_row["sens"],
+                signal_row["id"], signal_row["source"], asset, signal_row["sens"],
                 units, signal_row["entree_min"], int(adjustment.stop_distance > 0),
                 adjustment.stop_price, adjustment.stop_price, risk_amount_eur,
                 (risk_amount_eur / envelope_manager.balance * 100) if envelope_manager.balance else 0.0,
@@ -851,6 +856,24 @@ def open_signal(
             ),
         )
         trade_id = cursor.lastrowid
+
+    try:
+        result = client.place_limit_order(
+            epic=epic, direction=direction_api, size=units,
+            level=signal_row["entree_min"],
+            guaranteed_stop=adjustment.stop_distance > 0, stop_distance=adjustment.stop_distance if adjustment.stop_distance > 0 else None,
+        )
+    except CapitalApiError:
+        logger.exception("Échec du placement de l'ordre limite pour le signal %s", signal_row["id"])
+        # Ligne pré-insérée ci-dessus annulée — jamais laissée en
+        # 'en_attente' sans deal_id, ce qui bloquerait indéfiniment tout
+        # nouveau signal sur cet actif (invariant #7, fail-safe).
+        with connection_scope(db_path) as conn:
+            conn.execute("UPDATE trades SET statut = 'annule' WHERE id = ?", (trade_id,))
+        return None
+
+    with connection_scope(db_path) as conn:
+        conn.execute("UPDATE trades SET deal_id = ? WHERE id = ?", (result["deal_id"], trade_id))
 
     # §3.8, variable #1 — collecte uniquement (invariant : n'influence
     # jamais decide_entry ci-dessus, appelé APRÈS que le trade est déjà
