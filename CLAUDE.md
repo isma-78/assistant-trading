@@ -905,6 +905,42 @@ live/backtest. Détail chiffré complet dans `docs/DECISIONS.md`.
 - Déployé, 6 process redémarrés proprement (sessions tmux préservées),
   tous confirmés vivants après redémarrage.
 
+## Palier P3 (suite) — Vérifications post-incident ETHUSD/H3 : plafond §2.3 confirmé respecté, trades exclus des stats §2.4 (25/08/2026)
+
+- **Plafond d'exposition simultanée (§2.3, 10%) : NON dépassé** par les 4
+  positions H3/ETHUSD de l'incident — pic réel 40,27€ = 8,05% de
+  l'enveloppe (500€), sous les 50€ (10%). Point de vigilance journalisé
+  (pas corrigé, hors périmètre) : `get_open_risk_eur` ne compte que
+  `statut='ouvert'`, pas `'en_attente'` — marge favorable plutôt que
+  garde-fou actif dans ce cas précis.
+- **Nouvelle colonne `trades.anomalie_technique`** (TEXT, NULL par
+  défaut) : `metrics.get_closed_trades_r_for_stats` exclut désormais tout
+  trade marqué (même patron que l'exclusion `stop_urgence` déjà en
+  place) — les 4 trades de l'incident sont exclus des stats §2.4/du
+  dashboard, jamais du P&L réel (`circuit_breaker_store`, non affectée).
+  ETHUSD/hypothesis3 passe de n=9/+87,65€ à n=4/-0,71€ une fois exclu —
+  cohérent avec le reste de H3.
+- 849 tests passent, 100% de couverture maintenue sur `db.py`/`metrics.py`.
+
+## Palier P3 (suite) — Cycle 3 de l'évolution H4/H5 : espace de recherche élargi, résultat nul (25/08/2026)
+
+Détail complet dans `docs/DECISIONS.md`.
+
+- Budget de variables vérifié AVANT tout calcul (demande explicite
+  d'Ismaël) : H4 3/5→4/5, **H5 4/5→5/5 (plafond atteint)** — 1 seule
+  nouvelle variable ajoutée par hypothèse ce cycle, pas de dérogation
+  improvisée.
+- H4-B (Bollinger+RSI confluence) : améliore nettement l'espérance
+  (-0,29R→-0,14R) mais reste négatif, ne qualifie pas.
+- H5-B (confluence ICT complète Fibo+FVG réintroduite) : seulement 4
+  signaux sur 1,5 an/8 actifs — confirme empiriquement la décision V3 du
+  24/08/2026 de retirer cette confluence (jusque-là motivée par 0 signal
+  en 26h de live seulement, jamais testée statistiquement).
+- **Aucun candidat qualifié, validation jamais consultée, aucun fichier
+  de stratégie modifié.** Écart CDC §2.11 (2-3 paramètres) formalisé
+  comme dépassé depuis plusieurs paliers — à intégrer dans une future
+  révision du CDC v4.
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou

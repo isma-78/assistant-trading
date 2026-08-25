@@ -12,6 +12,122 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-25 (suite 4) — Cycle 3 de l'évolution H4/H5 : espace de recherche élargi (FVG/Fibonacci/structure/RSI), budget de variables vérifié, résultat nul
+
+Pré-enregistrement complet dans `docs/HYPOTHESES.md` (25/08/2026, "cycle
+3") — candidats, comptage du budget, classification évolution/nouvelle-
+hypothèse, écart CDC formalisé — à lire en premier, pas répété en
+détail ici. H2/H3 hors périmètre (pas demandées), H1 intacte.
+
+### Clarification de citation
+
+La demande citait "§3.8 : 5 variables maximum" pour le budget par
+hypothèse. Le §3.8 du CDC énumère littéralement les 5 variables FIXES
+de la revue post-trade (`trade_analysis.py`), pas le budget de
+paramètres d'entrée d'une hypothèse — celui-ci est régi par le §2.11
+("2-3 paramètres maximum, choisis a priori"), déjà dépassé aux cycles
+précédents. Retenu quand même : **"5" adopté comme nouveau plafond
+opérationnel par hypothèse pour ce cycle**, par analogie avec l'esprit
+du §3.8, décision explicite d'Ismaël — pas une citation littérale exacte,
+et pas une correction silencieuse de sa demande. Voir aussi l'écart CDC
+formalisé ci-dessous.
+
+### Budget de variables — avant/après, méthodologie explicite
+
+Convention de comptage : deux sous-choix étroitement couplés (ex.
+"config RSI" = période + seuil) comptent comme **une seule variable**,
+des choix indépendants (TP1, TP2) comptent séparément — convention déjà
+utilisée par le projet lui-même (commentaire budget de
+`hypothesis5_strategy.py`).
+
+| Hypothèse | Avant ce cycle | Variables | Ajout ce cycle | Après ce cycle |
+|---|---|---|---|---|
+| H4 | 3/5 | Config Bollinger, multiple de stop, config résolution | +1 (confluence RSI) | **4/5** |
+| H5 | 4/5 | TP1, TP2, config RSI, résolution | +1 (confluence ICT Fibo+FVG, comptée comme UNE variable couplée) | **5/5 — plafond atteint** |
+
+**H5 est maintenant au plafond (5/5)** : plus aucune variable
+supplémentaire pour H5 sans en retirer une d'abord — à respecter
+strictement au cycle 4. H4 conserve 1 variable de marge (4/5). Aucune
+dérogation improvisée : le calcul a été fait et écrit dans
+`docs/HYPOTHESES.md` AVANT le choix des candidats, conformément à la
+consigne d'Ismaël.
+
+### Candidats et justification théorique (résumé, détail complet dans docs/HYPOTHESES.md)
+
+- **H4-B** : régime MA200 + toucher de bande Bollinger (inchangé) **ET**
+  RSI(14) < 30 (long) / > 70 (short) au moment du toucher — seuils
+  standards, a priori. Réutilise `hypothesis5_strategy.compute_rsi`,
+  aucune nouvelle fonction de calcul.
+- **H5-B** : régime structurel + RSI franchissant 50 (inchangé) **ET**
+  confluence ICT complète (zone Fibonacci + FVG chevauchant) —
+  réintroduit EXACTEMENT la logique de `ict_strategy._evaluate_entry`
+  (Hypothèse #2), retirée de H5 le 24/08/2026 faute de signal en ~26h de
+  LIVE (jamais évaluée sur l'historique complet jusqu'ici).
+
+Script de recherche ponctuel `scripts/evaluate_hypothesis_new_tools_
+cycle.py` (aucune écriture DB, aucun appel réseau) — les candidats B
+sont des fonctions d'entrée NOUVELLES définies dans le script, pas des
+overrides de valeur sur les modules réels. Testé en fumée sur données
+réelles avant le calcul complet (2750 itérations sans exception, régime
+structurel trouvé ~9% des fenêtres — cohérent, pas de bug de
+composition) avant de lancer le calcul complet.
+
+### Résultat (`logs/evaluate_new_tools_cycle.log`, 0 erreur) — AUCUN candidat qualifié, validation jamais consultée
+
+| Hyp. | Candidat | n (train) | Moyenne | Borne basse corrigée | Qualifié ? |
+|---|---|---|---|---|---|
+| H4 | A (réf.) | 2779 | -0.2894R | -0.3263R | Non |
+| H4 | B (+RSI) | 422 | **-0.1375R** | -0.2409R | Non (négatif) |
+| H5 | A (réf.) | 2095 | -0.1934R | -0.2361R | Non |
+| H5 | B (+ICT) | **4** | +0.1996R | -0.9831R | Non (n≪150) |
+
+**H4-B améliore nettement l'espérance** (-0,29R → -0,14R, quasiment un
+doublement vers zéro) en ajoutant la confluence RSI — mais reste
+solidement négatif, jamais assez pour qualifier. Résultat honnête,
+intéressant en soi : l'ajout de momentum réduit substantiellement la
+perte moyenne sans jamais la renverser.
+
+**H5-B confirme empiriquement, sur 1,5 an de données et 8 actifs, ce que
+le retrait V3 du 24/08/2026 supposait sans preuve statistique** : la
+confluence ICT complète (Fibonacci+FVG) sur H5 est si restrictive
+qu'elle ne produit que **4 signaux au total, tous actifs confondus, sur
+toute la période d'entraînement** — 3 fois moins que le seuil minimal de
+qualification (150). La décision de la retirer de la V3 (motivée alors
+uniquement par 0 signal en 26h de production, pas par un test
+statistique) se trouve confirmée a posteriori, pas juste supposée.
+
+### Classification évolution vs nouvelle hypothèse
+
+**Non exercée** (aucun candidat n'a qualifié) — mais la règle mécanique
+pré-enregistrée reste actée pour le futur : `hypothesis_params.py` ne
+peut modifier que des VALEURS d'attributs déjà lus par `evaluate_entry`,
+jamais ajouter une branche de code. Les deux candidats B de ce cycle
+auraient donc été classés "nouvelle hypothèse" (jamais auto-déployables,
+validation manuelle explicite requise) même s'ils avaient qualifié et
+validé — point tranché avant tout calcul, pas a posteriori.
+
+### Écart CDC — quatrième de la semaine, formalisé
+
+Le §2.11 ("2-3 paramètres maximum, choisis a priori") est dépassé par H4
+(4/5 désormais) et H5 (5/5) depuis plusieurs paliers. Ce cycle applique
+un plafond alternatif de 5 (voir clarification de citation ci-dessus),
+avec la même discipline anti-surapprentissage que l'original (correction
+statistique, découpage temporel, justification a priori). **Reste à
+faire, explicitement noté** : une future révision du CDC v4 devrait
+remplacer le "2-3 paramètres" du §2.11 par le plafond de 5 réellement en
+vigueur depuis le 25/08/2026 (ou tout autre nombre qu'Ismaël
+retiendrait) — le texte de référence désigne aujourd'hui un budget déjà
+dépassé en pratique, pas silencieusement laissé tel quel.
+
+### Conséquence
+
+**Aucun fichier de stratégie modifié** (`mean_reversion_strategy.py`,
+`hypothesis5_strategy.py` — 0 diff). H4/H5 restent sur leur
+configuration actuelle (candidat A, déjà en production). Rien à
+déployer, rien à redémarrer.
+
+---
+
 ## 2026-08-25 (suite 3) — Suites de l'incident ETHUSD/H3 : plafond de risque (§2.3) NON dépassé ; les 4 trades exclus des statistiques §2.4
 
 Deux vérifications demandées par Ismaël après le rapport de l'incident

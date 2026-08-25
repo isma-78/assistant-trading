@@ -2663,6 +2663,194 @@ intervention d'Ismaël.
 
 ---
 
+## 2026-08-25 (suite 4) — PRÉ-ENREGISTREMENT : cycle 3, H4/H5 seules, espace de recherche élargi (FVG/Fibonacci/structure/RSI/Bollinger en combinaison)
+
+Écrit et daté **avant tout calcul sur les données**, demande explicite
+d'Ismaël. H2/H3 hors périmètre de ce cycle (pas mentionnées dans la
+demande). H1 toujours hors périmètre (aucune ligne de `trend_strategy.py`
+concernée).
+
+### Clarification de citation, avant tout le reste
+
+La demande cite « §3.8 : 5 variables maximum » comme plafond du budget
+de variables PAR HYPOTHÈSE. Vérifié en relisant `docs/CDC_v4.md` : le
+§3.8 du CDC énumère littéralement **5 variables FIXES pour la revue
+post-trade** (alignement Matinale, alignement tendance technique, ratio
+gain/risque planifié, proximité macro, volatilité ATR normalisée) — un
+mécanisme distinct de `trade_analysis.py`, **pas** le budget de
+paramètres d'ENTRÉE d'une hypothèse technique. Le texte qui gouverne
+littéralement CE budget-là est le **§2.11** : « 2-3 paramètres maximum,
+choisis a priori ». Point déjà noté et sciemment dépassé au fil des
+paliers précédents (H5 à 3/3 puis 4/3 avec la résolution, H4 à 2/2 puis
+davantage avec le cycle 2 — voir historique ci-dessous).
+
+**Décision, pas une correction silencieuse de la demande d'Ismaël** :
+le nombre « 5 » est retenu comme **nouveau plafond opérationnel de
+variables par hypothèse pour ce cycle**, dans l'esprit du §3.8 (« aucune
+variable supplémentaire sans justification théorique écrite préalable »)
+appliqué par analogie au budget §2.11, PAS comme une citation littérale
+exacte de ce paragraphe précis. Ce point est repris dans l'entrée
+CDC-écart ci-dessous.
+
+### Comptage du budget déjà consommé — méthodologie et chiffres
+
+Convention de comptage réutilisée telle qu'établie par le projet
+lui-même (voir `hypothesis5_strategy.py`, commentaire budget) : deux
+sous-choix étroitement couplés comptent comme **une seule variable**
+(ex. « config RSI » = période + seuil ensemble, « config Bollinger » =
+période + multiplicateur d'écart-type ensemble, « config résolution » =
+résolution d'entrée + résolution de confirmation ensemble — ce ne sont
+pas des degrés de liberté indépendants, ils se fixent conjointement),
+tandis que des choix indépendants (TP1 et TP2, par exemple) comptent
+séparément — exactement la convention déjà utilisée dans le commentaire
+budget de `hypothesis5_strategy.py` ("§2.11, cap 2-3, exactement 3/3").
+
+**H4** (`mean_reversion_strategy.py`) :
+| # | Variable | Origine |
+|---|---|---|
+| 1 | Config Bollinger (période + écart-type) | Conception initiale (21/08/2026) |
+| 2 | Multiple de largeur du stop | Conception initiale (21/08/2026) |
+| 3 | Config résolution (entrée + confirmation croisée) | Cycle 2 (25/08/2026) |
+
+**H4 : 3/5 consommées avant ce cycle.**
+
+**H5** (`hypothesis5_strategy.py`) :
+| # | Variable | Origine |
+|---|---|---|
+| 1 | TP1 (multiple de R) | Conception initiale (23/08/2026) |
+| 2 | TP2 (multiple de R) | Conception initiale (23/08/2026) |
+| 3 | Config RSI (période + seuil) | Conception initiale (23/08/2026) |
+| 4 | Résolution des bougies | V3 (24/08/2026), déjà au-delà du plafond §2.11 d'origine (2-3), assumé alors |
+
+**H5 : 4/5 consommées avant ce cycle.**
+
+Le régime structurel BOS/CHoCH (`ict_strategy`, `FRACTAL_K`) et la
+couche session/multi-timeframe restent **partagés/gelés**, jamais
+comptés une seconde fois dans le budget d'une hypothèse qui les
+réutilise telle quelle (même règle que H3 réutilisant MA200/Donchian(20)
+de H1 sans "dépenser" une variable H3 dessus — voir correction du modèle
+de budget du 21/08/2026).
+
+### Conséquence directe du plafond (5), appliquée AVANT de choisir les candidats
+
+**H5 a le moins de marge (1 variable restante, 4/5).** Aucune
+combinaison à 2 nouveaux outils simultanés (ex. « FVG+Fibonacci comme
+DEUX degrés de liberté séparés ») n'est possible sans dépasser 5. **H4 a
+2 variables de marge (3/5)**, mais ce cycle n'en consomme volontairement
+qu'**UNE** par hypothèse (symétrie, prudence — voir "discipline
+renforcée" demandée) : **1 nouvelle variable ajoutée par hypothèse ce
+cycle, pas plus**, malgré la marge théorique plus large de H4.
+**Après ce cycle : H4 à 4/5, H5 à 5/5 (plafond atteint, plus aucune
+variable supplémentaire pour H5 sans en retirer une d'abord — à
+respecter strictement au cycle 4).**
+
+Ceci répond explicitement à la consigne : "si H4 ou H5 a déjà atteint ou
+dépassé ce plafond... n'ajoute pas de nouvelle variable sans clôturer
+d'abord une ancienne" — ni H4 ni H5 n'avait ATTEINT 5 avant ce cycle
+(3/5 et 4/5), l'ajout d'UNE variable chacune reste donc dans le budget,
+mais amène H5 exactement à la limite — **aucune dérogation improvisée,
+le calcul est fait et écrit ici avant tout candidat choisi.**
+
+### Candidats — UNE nouvelle variable par hypothèse, justification théorique écrite avant tout calcul
+
+**H4 — nouvelle variable : confluence RSI(14) au toucher de bande**
+(réutilise `hypothesis5_strategy.compute_rsi`, aucune nouvelle fonction
+de calcul créée) :
+- A (référence, config actuelle) : régime MA200 + toucher de bande de
+  Bollinger opposée au régime — inchangé.
+- B : A **ET** RSI(14) < 30 pour une entrée longue (bande basse),
+  RSI(14) > 70 pour une entrée courte (bande haute). Seuils 30/70 :
+  convention RSI standard (survente/surachat), choisis a priori, jamais
+  ajustés aux données. **Justification théorique** : un toucher de bande
+  seul ne distingue pas un étirement statistique réel (retour à la
+  moyenne probable) d'un toucher de bande pendant une poursuite de
+  tendance forte (le mode d'échec classique du retour à la moyenne,
+  cohérent avec la sévérité déjà observée de H4 aux cycles 1/2) — exiger
+  en plus un épuisement de momentum (RSI extrême) filtre ce second cas.
+
+**H5 — nouvelle variable : confluence ICT complète (Fibonacci + FVG) réintroduite comme UN seul filtre combiné**
+(réutilise `ict_strategy.compute_fibonacci_zone`/`find_fvgs`, EXACTEMENT
+la même logique que `ict_strategy._evaluate_entry`, Hypothèse #2 —
+aucune nouvelle fonction de calcul créée) :
+- A (référence, V3 actuelle) : régime structurel BOS/CHoCH + RSI(14)
+  franchissant 50 dans le sens du régime — inchangé.
+- B : A **ET** clôture courante dans la zone de retracement Fibonacci de
+  la jambe **ET** un FVG dans le sens du régime chevauchant cette même
+  zone — reprend EXACTEMENT la confluence ICT complète de la V2 de H5
+  (retirée le 24/08/2026 faute de signal en ~26h de LIVE, jamais évaluée
+  statistiquement sur 1,5 an d'historique d'entraînement). **Justification
+  théorique** : l'absence de signal en direct sur 26h n'est pas un
+  résultat statistique (aucun trade, donc rien à mesurer, cohérent avec
+  l'invariant #10 — la V3 avait été motivée par cette absence, pas par
+  un résultat observé) — un rejeu sur l'historique complet permet de
+  savoir si cette confluence produit ne serait-ce qu'un échantillon
+  exploitable, question jamais tranchée jusqu'ici.
+
+**Fibonacci et FVG comptent comme UNE seule variable** (§ méthodologie
+de comptage ci-dessus, "config étroitement couplée" — reprend un
+mécanisme unique déjà existant tel quel, aucun nouveau seuil ni nouvelle
+fonction, exactement le même statut que "config RSI" ou "config
+Bollinger" ailleurs dans ce budget).
+
+**4 candidats au total ce cycle** (2 par hypothèse) — nombre volontairement
+réduit (cycle 2 en avait jusqu'à 3 par hypothèse) : chaque candidat
+introduit cette fois un changement de LOGIQUE, pas seulement une valeur
+re-réglée, risque de faux positif plus consequential, discipline plus
+stricte justifiée.
+
+### Classification évolution vs nouvelle hypothèse — tranchée AVANT tout calcul, pas après coup
+
+**Les deux candidats B (H4 et H5) sont des NOUVELLES HYPOTHÈSES, jamais
+des évolutions.** Critère mécanique, pas un jugement au cas par cas :
+`src/hypothesis_params.py::apply_overrides` ne peut modifier que la
+VALEUR d'un attribut de module DÉJÀ lu par la fonction d'entrée
+existante (`setattr`, jamais une branche de code nouvelle) — ajouter une
+condition RSI ou une confluence ICT à `evaluate_entry` exige de modifier
+le CODE de la fonction elle-même, ce que ce mécanisme ne peut
+structurellement pas faire. **Conséquence, actée avant tout résultat** :
+même si un candidat B qualifie sur l'entraînement ET valide sur la
+validation, **il ne sera JAMAIS auto-déployé par ce cycle** — candidat B
+qualifié = proposition documentée, en attente d'une validation manuelle
+explicite d'Ismaël avant toute mise en application, quel que soit le
+résultat statistique.
+
+### Découpage temporel, correction statistique, critères (identiques aux cycles 1/2, réutilisés tels quels)
+
+Même CUTOFF (2025-12-01T00:00 UTC), même modèle de coûts
+(`SLIPPAGE_SPREAD_MULTIPLIER=1.0`). Correction Bonferroni intra-hypothèse
+(m=2 candidats chacune → z≈1.9604, alpha global 0.05, identique au calcul
+H5 du cycle 2) : qualifie sur l'entraînement seul si n ≥
+`PHASE_B_MIN_TRADES_BACKTEST` (150) ET (moyenne − z×SE) > 0. Le
+qualifiant à l'espérance la plus élevée (au plus un par hypothèse, ici
+au plus B puisque A est la référence déjà connue négative des cycles
+précédents) passe UNE FOIS sur la validation : PASS si n ≥
+`PHASE_A_MIN_TRADES_BACKTEST` (60) ET espérance nette > 0.
+
+### Écart CDC explicite — le gabarit "2-3 paramètres a priori" du §2.11 est dépassé, à formaliser
+
+**Quatrième écart CDC de cette semaine, journalisé ici, pas silencieux.**
+Le §2.11 fixe littéralement "2-3 paramètres maximum, choisis a priori"
+pour la stratégie technique complémentaire. H4 (3 avant ce cycle, 4
+après) et H5 (4 avant ce cycle, 5 après) dépassent déjà ce gabarit
+depuis plusieurs paliers (H5 explicitement depuis le 24/08/2026). Ce
+cycle continue sur cette voie, avec la demande explicite d'Ismaël
+d'utiliser un plafond alternatif de 5 (repris du §3.8 par analogie, pas
+une citation littérale — voir clarification en tête de cette entrée).
+**Ceci n'est pas remis en cause ici** — décision assumée d'Ismaël,
+appliquée avec la même discipline anti-surapprentissage (correction
+statistique, découpage temporel, justification a priori) que le gabarit
+d'origine. **Reste à faire, explicitement noté, pas oublié** : une
+future mise à jour du CDC v4 devrait remplacer le "2-3 paramètres" du
+§2.11 par le plafond de 5 réellement appliqué depuis le 25/08/2026 (ou
+un autre nombre qu'Ismaël retiendrait), pour que le texte de référence
+cesse de désigner un budget déjà dépassé en pratique.
+
+Implémentation, résultats complets, tests, classification de chaque
+candidat qualifié, rapport honnête des échecs dans `docs/DECISIONS.md`
+— même discipline que les cycles 1/2.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4, #5, ou du backtest rétrospectif — jamais une modification de
 ce qui précède.*
