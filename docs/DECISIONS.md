@@ -12,6 +12,147 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-25 (suite 2) — Investigation demandée par Ismaël : écart entre trades réels et backtest — BUG RÉEL TROUVÉ (positions simultanées non bloquées, H3/ETHUSD)
+
+Demande explicite d'Ismaël : expliquer avec des chiffres vérifiés
+pourquoi des trades réels gagnants existent (H3/ETHUSD notamment) alors
+que le backtest conclut à une espérance négative partout, et vérifier
+explicitement qu'aucune divergence de logique n'existe entre
+`executor.py`/`technical_strategy_executor.py` (réel) et
+`backtest_engine.replay_hypothesis` (simulé) — précédent du bug
+d'alignement de cette même semaine cité comme raison de ne pas exclure
+cette piste sans vérification.
+
+Deux scripts PONCTUELS (préfixe `_`, jamais partie du pipeline, jamais
+d'écriture DB) : `scripts/_fetch_incremental_gap.py` (complète
+l'historique M15 déjà téléchargé jusqu'à maintenant — écart < 1 jour,
+94 bougies/actif ajoutées, pas de nouveau téléchargement complet) et
+`scripts/_compare_live_vs_backtest_window.py` (rejoue le backtest, même
+configuration que le direct, restreint aux trades produits dans la
+fenêtre EXACTE des trades réels).
+
+### 1. Trades réels à ce jour (H2 à H5, base de production)
+
+| Hyp. | Actif | n | P&L net cumulé | Premier trade |
+|---|---|---|---|---|
+| H2 | BTCUSD | 1 (annulé) | — | 2026-08-21T18:55 |
+| H2 | ETHUSD | 1 | -10.00€ | 2026-08-22T22:15 |
+| H2 | US100 | 1 (ouvert) | — | 2026-08-21T19:45 |
+| H3 | GOLD | 1 (ouvert) | — | 2026-08-21T06:37 |
+| H3 | EURUSD | 1 (ouvert) | — | 2026-08-21T13:34 |
+| H3 | GBPUSD | 2 | -9.45€ | 2026-08-21T08:53 |
+| H3 | USDJPY | 3 | -6.90€ | 2026-08-21T08:34 |
+| H3 | US30 | 1 (ouvert) | — | 2026-08-21T15:42 |
+| H3 | US100 | 4 | -16.39€ | 2026-08-21T09:54 |
+| H3 | BTCUSD | 6 | -14.95€ | 2026-08-21T07:02 |
+| H3 | ETHUSD | 9 | **+87.65€** | 2026-08-21T07:17 |
+| H4 | BTCUSD | 1 | +14.69€ | 2026-08-23T05:10 |
+| H4 | ETHUSD | 1 | +15.93€ | 2026-08-23T04:51 |
+| H4 | US100 | 1 | -9.95€ | 2026-08-25T14:06 |
+| H4 | US30 | 1 (ouvert) | — | 2026-08-25T13:53 |
+| H5 | — | 0 | — | — |
+
+**Hors ETHUSD/H3, tous les résultats fermés sont négatifs ou n=1**
+(sauf H4/BTCUSD et H4/ETHUSD, un seul trade chacun — non significatif).
+H3 (hors ETHUSD) : GBPUSD/USDJPY/US100/BTCUSD tous négatifs, cohérent
+avec le backtest.
+
+### 2. Configuration live = candidat A (référence) du backtest, vérifié directement
+
+`SELECT COUNT(*) FROM rule_changes WHERE statut='applique'` = **0** —
+aucun override actif. Constantes réellement importées en direct : H2
+TP1/TP2=1.0/2.0 ; H3 TP1/TP2=1.0/2.0 ; H4 Bollinger=2.0σ,
+stop_width=1.0 ; H5 RSI=14, TP1/TP2=1.0/2.0 — **identiques, aux 4
+décimales près, au candidat A (référence) testé dans les cycles 1 et 2**.
+Résolution : MINUTE_15 partout (aucun override), aussi identique à la
+candidate A. **Réponse à la question posée : la config live N'EST PAS
+distincte — c'est très exactement celle déjà testée et rejetée par le
+backtest, pas une config non testée.**
+
+### 3. Backtest rejoué sur la fenêtre EXACTE des trades réels (pas 2 ans)
+
+Résultat complet dans `logs/compare_live_vs_backtest.log`. Extrait
+représentatif : le backtest, rejoué avec la même config sur les mêmes
+bougies, produit un nombre de trades ET des horodatages très différents
+des trades réels sur cette fenêtre courte (ex. H3/BTCUSD : 6 trades réels
+21-24/08, 2 trades backtest 24-25/08 seulement ; H3/EURUSD : 1 trade réel
+21/08 short encore ouvert, 1 trade backtest 24/08 LONG). **Seule
+correspondance nette** : H3/USDJPY, premier trade réel 21/08 08:34 short
+vs signal backtest 21/08 08:30 short — même jour, même heure, même sens,
+décalage de 4 min (cohérent avec livraison ordre limite vs horodatage de
+signal). Ce point de correspondance confirme que le DÉCLENCHEUR lui-même
+(Donchian/MA200) est évalué de façon cohérente entre live et backtest
+quand rien d'autre ne diverge — la divergence trouvée ci-dessous (§4)
+explique le reste.
+
+### 4. Divergence réelle trouvée : le garde-fou anti-doublon a une fenêtre de course, positions simultanées non bloquées sur H3/ETHUSD le 21/08/2026
+
+**Fait vérifié, pas une hypothèse** : trades 26/27/28/29 (H3/ETHUSD)
+ont été ouverts à 4 reprises entre 07:17:38 et 07:20:34 le 21/08/2026 —
+**4 positions simultanément ouvertes sur le même (actif, source)**,
+toutes fermées ~24h plus tard (22/08 07:00, à quelques secondes
+d'écart), toutes via `trailing`, P&L +20.86€/+21.20€/+21.31€/+24.99€ =
+**+88.36€, soit PLUS que le total net ETHUSD/H3 (+87.65€)** — sans cet
+incident, les 5 autres trades ETHUSD/H3 auraient sommé à **-0.71€**,
+quasiment nul, cohérent avec le reste de H3.
+
+Vérifié par un balayage systématique de tous les trades H2-H5 pour tout
+chevauchement d'intervalle `[ouvert_at, ferme_at]` sur un même (source,
+actif) : **c'est le SEUL incident de ce type** dans toute la base — pas
+un problème généralisé, un incident isolé et daté.
+
+**Mécanisme confirmé en lisant `executor.py`, pas supposé** :
+`open_signal` (ligne ~794) met à jour `signals.statut = 'approuve'`
+**AVANT** d'appeler `client.place_limit_order` (ligne ~817) et
+**AVANT** l'insertion de la ligne `trades` (ligne ~838, `statut =
+'en_attente'`). Le garde-fou anti-doublon
+(`_has_active_signal_or_trade`, `technical_strategy_executor.py`)
+vérifie soit un signal `statut='a_valider'`, soit un trade
+`statut IN ('en_attente','ouvert')` — **aucun des deux n'existe pour un
+signal déjà 'approuve' mais dont la ligne `trades` n'est pas encore
+insérée**. Si le traitement d'un signal (place_limit_order + insertion)
+prend plus de temps qu'un cycle (~60-120s observés dans les horodatages
+réels ce jour-là), le cycle suivant génère un NOUVEAU signal sur le même
+actif sans que le garde-fou le voie. **Gap structurel dans le code
+partagé** (`technical_strategy_executor.py`/`executor.py`, utilisé par
+H1 à H5 identiquement) — pas spécifique à H3 ni à ETHUSD, seulement
+observé là pour l'instant. La cause exacte du ralentissement précis de
+signal 83 ce jour (avant le correctif de rate-limiting du 24/08/2026,
+donc plausible mais pas confirmé avec certitude par les logs) n'est pas
+établie avec certitude — le GAP dans le garde-fou, lui, est confirmé
+par lecture directe du code, pas une spéculation.
+
+**Non reproductible par le backtest par construction** :
+`replay_hypothesis` gère un seul trade actif à la fois par actif (testé
+explicitement, `tests/test_backtest_engine.py`) — structurellement
+incapable de produire 4 positions simultanées. C'est un facteur réel de
+divergence entre les deux, indépendant de tout bug d'alignement.
+
+**Pas corrigé dans ce lot** — trouvé pendant une investigation demandée
+comme "expliquer", pas "corriger" ; un changement à la logique
+d'ouverture d'ordre réel mérite une décision explicite d'Ismaël avant
+d'y toucher. Piste de correctif la plus directe : insérer la ligne
+`trades` (statut='en_attente', sans deal_id) AVANT l'appel réseau,
+mettre à jour le deal_id après succès — le garde-fou verrait alors la
+position "en cours de placement" immédiatement, plus de fenêtre de
+course. À valider avec Ismaël avant implémentation.
+
+### Conclusion honnête
+
+Écart expliqué par deux facteurs vérifiés, pas par une remise en cause
+de la conclusion du backtest : **(1)** échantillon live minuscule
+partout sauf ETHUSD/H3 (n=1-6, majoritairement négatif là où fermé —
+cohérent avec le backtest, pas contradictoire) ; **(2)** le seul résultat
+live nettement positif (ETHUSD/H3, +87.65€) est presque entièrement
+(+88.36€ sur +87.65€) l'effet d'un incident de positions quadruplées non
+prévu par la conception, jamais reproductible par le backtest. **Aucune
+divergence de logique de DÉCLENCHEMENT trouvée** (le point de
+correspondance USDJPY le confirme) — la divergence trouvée porte sur la
+gestion de la CONCURRENCE des signaux, un module partagé distinct de
+`entry_fn`/`replay_hypothesis`.
+
+---
+
 ## 2026-08-25 (suite) — Cycle 2 de l'évolution H3/H4/H5 : axe timeframe, résultat nul, infrastructure d'application automatique construite (§3.9 débloqué)
 
 Suite à la demande explicite d'Ismaël de « débloquer » le chantier
