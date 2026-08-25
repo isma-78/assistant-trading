@@ -160,8 +160,20 @@ complète, pas par un delta de couverture.
 
 Déployé sur le VPS, 6 process redémarrés (le correctif touche le
 placement d'ordre réel, code qui ne prend effet qu'au redémarrage,
-principe "code-locked" déjà établi) — vérification en direct détaillée
-ci-dessous.
+principe "code-locked" déjà établi) : `executor_loop`, `trend_executor`,
+`hypothesis2_executor` à `hypothesis5_executor` — arrêt propre
+(Ctrl-C, sessions tmux préservées, même méthode que toute la semaine),
+redémarrage échelonné (~2s d'écart), les 6 confirmés `ALIVE` par
+`pgrep -f "python -m <module>"` après redémarrage. Logs de démarrage
+propres pour H2/H4/H5 ("Démarrage de la boucle..." +, pour H4,
+"contexte de régime rafraîchi" dès le premier cycle) ; H3 et
+`trend_executor` montrent une erreur `error.not-found.dealId` sur
+`update_position_stop` juste après redémarrage — **préexistante, pas
+introduite par ce correctif** : même signature déjà présente dans les
+logs d'AVANT redémarrage (réconciliation d'une position déjà fermée
+côté broker par un stop garanti, absorbée par le `try/except` de la
+boucle principale, cycle suivant repart normalement). Suite de tests
+complète re-vérifiée après déploiement (847 passent).
 
 ### Conclusion honnête
 

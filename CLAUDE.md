@@ -878,6 +878,33 @@ Détail chiffré complet (8 candidats, tableau par hypothèse) dans
 - 845 tests passent, 100% de couverture maintenue. Déployé, suite verte
   sur le VPS, aucun redémarrage nécessaire (rien à appliquer).
 
+## Palier P3 (suite) — Investigation trades réels vs backtest : bug réel trouvé et corrigé (positions simultanées, 25/08/2026)
+
+Demande explicite d'Ismaël : expliquer l'écart entre trades réels
+(certains gagnants) et l'espérance négative du backtest, avec
+vérification explicite de l'absence de divergence de logique
+live/backtest. Détail chiffré complet dans `docs/DECISIONS.md`.
+
+- **Bug réel trouvé** : le 21/08/2026, 4 positions H3/ETHUSD ont été
+  ouvertes SIMULTANÉMENT (garde-fou anti-doublon `_has_active_signal_
+  or_trade` avait une fenêtre de course — `signals.statut` passait à
+  'approuve' avant l'insertion de la ligne `trades`). Ces 4 positions
+  expliquent +88.36€ sur les +87.65€ net d'ETHUSD/H3 — sans cet
+  incident isolé (vérifié : seul cas sur toute la base), les résultats
+  live H2-H4 sont majoritairement négatifs ou n=1, **cohérents avec le
+  backtest, pas contradictoires**.
+- **Config live confirmée identique au candidat A (référence)** déjà
+  testé et rejeté dans les cycles 1/2 d'évolution — pas une config
+  distincte non testée.
+- **Corrigé le même jour** (`src/executor.py::open_signal`) : la ligne
+  `trades` est désormais insérée AVANT l'appel réseau de placement
+  d'ordre (deal_id NULL), visible au garde-fou immédiatement ; mise à
+  jour du deal_id après succès, `statut='annule'` explicite en cas
+  d'échec réseau. Correctif effectif pour les 6 process live (module
+  partagé). 2 nouveaux tests, 847 passent au total.
+- Déployé, 6 process redémarrés proprement (sessions tmux préservées),
+  tous confirmés vivants après redémarrage.
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou
