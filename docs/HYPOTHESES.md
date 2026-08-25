@@ -2993,6 +2993,161 @@ chantiers clos sans candidat) dans `docs/DECISIONS.md`.
 
 ---
 
+## 2026-08-25 (suite 7) — PRÉ-ENREGISTREMENT : chantier de refonte H2-H5, diagnostic coût/edge puis branches conditionnelles
+
+Écrit avant tout calcul. Demande explicite d'Ismaël : diagnostic puis
+refonte enchaînés, branches pré-enregistrées, pas d'arrêt intermédiaire.
+
+### Phase 1 — Diagnostic coût/edge (pas une recherche de variables)
+
+**Hypothèse testée** : les espérances négatives déjà observées (-0,05R à
+-0,49R) sont du même ordre que le coût aller-retour en R sur un stop
+intraday serré — l'edge brut serait proche de zéro, entièrement consommé
+par les coûts (§2.6), plutôt qu'un edge réellement négatif.
+
+**Méthode** : configuration ACTUELLEMENT DÉPLOYÉE de H2/H3/H4/H5
+(`evaluate_entry` de chaque module, INCHANGÉ), rejouée sur les 2 ans
+complets, 8 actifs, DEUX fois par couple :
+- **Nette** : modèle de coûts §2.6 inchangé (spread réel + slippage
+  forfaitaire × 1.0 + financement overnight), exactement le modèle de
+  production.
+- **Brute** : coûts forcés à zéro — bougies synthétiques bid=ask=mid
+  (construites dans le script, `backtest_engine.py` non modifié),
+  `slippage_multiplier=0.0` (déjà paramétrable depuis le 24/08/2026),
+  `FINANCING_BPS_PER_DAY` monkeypatché à 0.0 le temps du rejeu (constante
+  lue au moment de l'appel par `financing_adjusted_exit_price`, jamais un
+  défaut de fonction — patch sûr, restauré immédiatement après).
+
+Aucune variable ajustée, aucun candidat choisi ici — une mesure, pas une
+optimisation. Pas de découpage entraînement/validation (inutile : rien
+n'est sélectionné sur cette mesure). `scripts/evaluate_zero_cost_
+diagnostic.py`, aucune écriture DB, aucun appel réseau.
+
+**Livrables** : tableau (actif, hypothèse) espérance nette / brute /
+écart ("coût en R") ; classement des couples du plus au moins pénalisé ;
+spread moyen réel par actif (fait de marché, pour recalibrage futur du
+modèle §2.6 si l'écart avec l'hypothèse actuelle est important — le
+modèle §2.6 lui-même n'est PAS changé dans ce backtest, seulement
+mesuré/rapporté).
+
+### Phase 2 — Refonte, branches conditionnelles (appliquées APRÈS lecture de la Phase 1, par hypothèse)
+
+**Branche A** (une hypothèse dont l'espérance BRUTE atteint ou dépasse
+zéro) : edge brut réel, problème structurel de coût — refonte, PAR
+ORDRE DE PRIORITÉ, une amélioration à la fois, réévaluée sur
+l'entraînement avant de passer à la suivante :
+1. Résolution HOUR puis H4 (bougies 4h), signal inchangé.
+2. Stop = multiple d'ATR calibré pour ratio coût/R < 5%.
+3. Réduction des confluences — retrait autorisé UNIQUEMENT si le nombre
+   de signaux augmente SANS dégrader l'espérance sur l'entraînement.
+   Aucune confluence ajoutée.
+
+**Branche B** (espérance BRUTE franchement négative) : pas d'edge,
+abandon sans re-paramétrage — documenté, hypothèse suivante.
+
+**Décidée hypothèse par hypothèse**, pas globalement — H2/H3/H4/H5
+peuvent se retrouver dans des branches différentes.
+
+**Contraintes maintenues pour toute évaluation en Phase 2** :
+découpage entraînement/validation figé (CUTOFF 2025-12-01T00:00 UTC,
+identique aux cycles précédents), critère de qualification fixé AVANT
+tout calcul de Phase 2 (n≥`PHASE_B_MIN_TRADES_BACKTEST` ET (moyenne −
+z×SE) > 0, correction Bonferroni si plusieurs candidats testés pour une
+même hypothèse), un seul candidat final par hypothèse choisi sur
+l'entraînement seul, validation consultée une seule fois. Modèle de
+coût §2.6 (nette) INCHANGÉ pour ces évaluations — seule la Phase 1 a
+utilisé des coûts nuls, à titre de diagnostic uniquement.
+
+### Déploiement — écart CDC supplémentaire, assumé
+
+**Sixième écart CDC de la semaine.** Tout candidat qualifié sur
+l'entraînement ET validé déployé automatiquement en démo, SANS
+confirmation manuelle — y compris s'il constitue une nouvelle logique de
+déclenchement (pas seulement un réglage de valeur), contrairement à la
+distinction évolution/nouvelle-hypothèse posée au cycle 3. Instruction
+explicite d'Ismaël, couverte par l'autonomie déléguée du 16/08/2026.
+Écart au §3.9 ("jamais appliquée automatiquement") ET, pour toute
+refonte touchant résolution/confluences/stop au-delà du gabarit
+d'origine, au §2.11 ("2-3 paramètres maximum") — les deux à formaliser
+dans une future révision du CDC v4, pas silencieusement.
+
+Résultat complet, branche appliquée et pourquoi (par hypothèse),
+candidats retenus/rejetés, tableau coût/R (référence pour toute
+conception future) dans `docs/DECISIONS.md`.
+
+---
+
+## 2026-08-25 (suite 8) — Résultats du chantier de refonte H2-H5 : diagnostic coût/edge et Phase 2, branches par hypothèse
+
+Résultats du pré-enregistrement précédent. Détail chiffré complet
+(tableau coût/R par couple, référence pour toute conception future)
+dans `docs/DECISIONS.md` — résumé décisionnel ici.
+
+### Phase 1 — Hypothèse confirmée, partiellement
+
+L'edge brut (coûts nuls) est positif pour **H3** (+0,0237R pondéré) et
+**H5** (+0,0139R pondéré) — l'espérance négative observée en direct
+était donc bien en grande partie un artefact de coût, pas une absence
+d'edge. **H4** reste négatif même à coût nul (-0,0199R) — proche de
+zéro mais sous la barre, Branche B par la règle pré-enregistrée. **H2**
+n'a pas assez de trades (n=1-2 par actif) pour trancher, brut ou net.
+
+### Phase 2 — branche par hypothèse
+
+- **H2** : ni Branche A ni Branche B tranchables — volume structurellement
+  insuffisant (même cause que le chantier "trois chantiers" du même
+  jour : déclencheur trop restrictif). Pas de refonte tentée, pas une
+  conclusion coût/edge — juste un manque de données.
+- **H3** : Branche A. Résolution (étape 1) : ni HOUR ni HOUR_4 ne
+  qualifient (HOUR_4 pourtant à +0,1341R, mais n=121 < 150) — MINUTE_15
+  conservée. Stop ATR×20 calibré (étape 2, cost/R<5% garanti même pour
+  BTCUSD, l'actif le plus pénalisé) : n(train)=205, moyenne=+0,0142R —
+  POSITIF pour la première fois de la semaine sur H3, mais borne basse
+  corrigée=-0,1078R, **NE QUALIFIE PAS** (n≥150 rempli, borne négative).
+  Confluence croisée (étape 3) : retrait dégrade à la fois le volume
+  (171<205) et l'espérance (-0,0087R<0,0142R) — CONSERVÉE. **Candidat
+  final : n'atteint pas le seuil de qualification pré-enregistré —
+  aucune validation consultée, aucun déploiement.** Résultat le plus
+  proche d'un edge exploitable de toute la semaine, documenté comme tel.
+- **H4** : Branche B. Abandon sans re-paramétrage, conformément à la
+  règle pré-enregistrée — pas de Phase 2 tentée.
+- **H5** : Branche A. Même schéma que H3 : aucune résolution ne
+  qualifie (HOUR_4 à +0,0513R, n=134<150) ; stop ATR×19 calibré :
+  n(train)=227, moyenne=**-0,1086R** (négatif, ne qualifie pas même sans
+  correction) ; retrait du RSI (étape 3) dégrade volume (177<227) ET
+  espérance (-0,1244R<-0,1086R) — CONSERVÉ. **Candidat final : ne
+  qualifie pas — aucune validation consultée, aucun déploiement.**
+
+**Aucun déploiement automatique cette semaine malgré l'écart CDC assumé
+qui l'autorisait** — la règle pré-enregistrée (n≥150, borne corrigée
+>0) n'a jamais laissé passer un candidat, y compris le plus proche
+(H3). Discipline respectée jusqu'au bout, pas relâchée pour produire un
+résultat.
+
+### Ce que le tableau coût/R révèle (référence pour toute conception future)
+
+- **BTCUSD est systématiquement l'actif le plus pénalisé en coût
+  absolu** (spread moyen ~62 unités de prix, très supérieur aux autres
+  actifs) — tout stop calibré pour rester sous 5% de coût/R sur BTCUSD
+  est nécessairement très large (ATR×20 pour H3), ce qui allonge
+  fortement la durée de détention et réduit le débit de trades.
+- **Les paires FX majeures (EURUSD notamment) ont le coût relatif le
+  plus faible** en valeur de spread, mais montrent souvent un coût/R
+  élevé car leur stop actuel (calibré sur la structure de marché, pas
+  sur le coût) est déjà très serré — H4/EURUSD : coût=0,2689R avec un
+  stop moyen de seulement 0,001081.
+- Le spread moyen réel mesuré (GOLD 0,371, US100 1,872, US30 2,174,
+  EURUSD 0,000086, GBPUSD 0,000181, USDJPY 0,014189, BTCUSD 61,918,
+  ETHUSD 2,652 — unités de prix) est **une mesure factuelle, pas un
+  changement du modèle §2.6** — à comparer par Ismaël au modèle
+  actuellement codé en dur (`SLIPPAGE_SPREAD_MULTIPLIER=1.0`) si une
+  recalibration est un jour souhaitée.
+
+Implémentation, scripts, tests de non-régression dans
+`docs/DECISIONS.md`.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4, #5, ou du backtest rétrospectif — jamais une modification de
 ce qui précède.*

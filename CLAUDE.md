@@ -968,6 +968,34 @@ aurait été auto-déployé sans confirmation manuelle d'Ismaël (§3.9
 - 867 tests passent, 100% de couverture maintenue. Aucun redémarrage de
   process nécessaire (aucun changement de comportement live).
 
+## Palier P3 (suite) — Chantier de refonte H2-H5 : diagnostic coût/edge puis refonte par branches (25/08/2026)
+
+Détail complet (tableau coût/R, référence pour toute conception future)
+dans `docs/DECISIONS.md`.
+
+- **Phase 1 (coûts nuls, 2 ans, config actuelle)** : edge brut positif
+  pour H3 (+0,024R) et H5 (+0,014R) — l'espérance négative en direct
+  est en grande partie un effet de coût. H4 reste négatif même à coût
+  nul (-0,020R, Branche B). H2 : données insuffisantes pour trancher.
+- **Phase 2, Branche A (H3, H5)** : résolution HOUR/HOUR_4 testée
+  (aucune ne qualifie, n<150) ; stop ATR calibré pour coût/R<5%
+  (H3 ×20, H5 ×19 — valeurs élevées dues au coût de BTCUSD) ; réduction
+  de confluence testée et REJETÉE pour les deux (retirer un filtre a
+  réduit le volume de trades complétés, pas augmenté — constat honnête,
+  pas anticipé). **H3 atteint +0,0142R sur l'entraînement (n=205) — le
+  résultat le plus proche d'un edge exploitable de la semaine — mais la
+  borne basse corrigée reste négative, ne qualifie pas.** H5 reste
+  négatif.
+- **Branche B (H4)** : abandon sans re-paramétrage, conforme à la règle
+  pré-enregistrée.
+- **Aucun candidat n'a qualifié — aucune validation consultée, aucun
+  déploiement automatique**, malgré l'écart CDC qui l'autorisait
+  (§3.9, étendu cette fois même aux nouvelles logiques de déclenchement,
+  instruction explicite d'Ismaël). Discipline non relâchée pour produire
+  un résultat.
+- 4 scripts de recherche ponctuels, aucun module de production modifié,
+  aucun redémarrage nécessaire.
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou

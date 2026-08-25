@@ -12,6 +12,174 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-25 (suite 7) — Chantier de refonte H2-H5 : diagnostic coût/edge (Phase 1) et refonte par branches (Phase 2)
+
+Pré-enregistrement complet dans `docs/HYPOTHESES.md` (25/08/2026,
+"chantier de refonte") — méthode, branches, contraintes — à lire en
+premier. Demande explicite d'Ismaël, diagnostic et refonte enchaînés
+sans arrêt intermédiaire.
+
+### Écart CDC — septième de la semaine
+
+Auto-déploiement sans confirmation manuelle pour tout candidat
+qualifié+validé, **y compris une nouvelle logique de déclenchement**
+(contrairement à la distinction évolution/nouvelle-hypothèse du cycle
+3) — instruction explicite d'Ismaël, écart au §3.9 assumé. Portée
+d'exploration au-delà du gabarit "2-3 paramètres" du §2.11 également
+assumée (résolution + stop ATR + réduction de confluence = jusqu'à 3
+changements structurels par hypothèse). **Non exercé dans les faits** :
+aucun candidat n'a qualifié, donc aucun déploiement automatique n'a eu
+lieu.
+
+### Phase 1 — Diagnostic coût/edge : tableau complet (référence pour toute conception future)
+
+`scripts/evaluate_zero_cost_diagnostic.py` (ponctuel, aucune écriture
+DB). Configuration ACTUELLEMENT déployée de H2/H3/H4/H5, 2 ans complets,
+8 actifs, coûts nuls (bougies synthétiques bid=ask=mid, slippage=0,
+financement=0) vs coûts réels (§2.6 inchangé).
+
+**Spread moyen réel constaté par actif** (unité de prix, fait de marché
+— PAS un changement du modèle §2.6, seulement mesuré/rapporté pour
+recalibration future si souhaitée) :
+
+| Actif | Spread moyen |
+|---|---|
+| GOLD | 0,371090 |
+| US100 | 1,871570 |
+| US30 | 2,174164 |
+| EURUSD | 0,000086 |
+| GBPUSD | 0,000181 |
+| USDJPY | 0,014189 |
+| BTCUSD | 61,918016 |
+| ETHUSD | 2,651917 |
+
+**Espérance nette vs brute par couple** :
+
+| Hyp. | Actif | n (net) | Espérance NETTE | n (brut) | Espérance BRUTE | Coût en R |
+|---|---|---|---|---|---|---|
+| H2 | GOLD | 1 | -1,1531R | 1 | -1,0000R | 0,1531R |
+| H2 | US100 | 1 | 0,0045R | 1 | 0,4881R | 0,4836R |
+| H2 | US30 | 1 | 0,1524R | 1 | 0,4682R | 0,3157R |
+| H2 | EURUSD | 1 | -1,8581R | 1 | -1,0000R | 0,8581R |
+| H2 | GBPUSD | 2 | 1,1748R | 2 | 1,8824R | 0,7077R |
+| H2 | USDJPY | 2 | -0,5049R | 2 | -0,2564R | 0,2485R |
+| H2 | BTCUSD | 0 | N/A | 0 | N/A | N/A |
+| H2 | ETHUSD | 1 | -1,0916R | 1 | -1,0000R | 0,0916R |
+| H3 | GOLD | 332 | 0,0056R | 332 | 0,0747R | 0,0692R |
+| H3 | US100 | 410 | -0,0463R | 403 | 0,0163R | 0,0625R |
+| H3 | US30 | 370 | -0,0656R | 368 | -0,0185R | 0,0471R |
+| H3 | EURUSD | 305 | -0,1440R | 301 | -0,0112R | 0,1328R |
+| H3 | GBPUSD | 325 | -0,1500R | 317 | 0,0292R | 0,1793R |
+| H3 | USDJPY | 294 | -0,1643R | 294 | -0,0275R | 0,1368R |
+| H3 | BTCUSD | 447 | -0,1660R | 440 | 0,0276R | 0,1936R |
+| H3 | ETHUSD | 451 | -0,0897R | 446 | 0,0768R | 0,1666R |
+| H4 | GOLD | 382 | -0,0463R | 382 | 0,1182R | 0,1644R |
+| H4 | US100 | 660 | -0,1875R | 684 | -0,0634R | 0,1241R |
+| H4 | US30 | 692 | -0,1735R | 725 | -0,0289R | 0,1447R |
+| H4 | EURUSD | 430 | -0,2700R | 430 | -0,0011R | 0,2689R |
+| H4 | GBPUSD | 454 | -0,3702R | 459 | 0,0657R | 0,4359R |
+| H4 | USDJPY | 355 | -0,2504R | 355 | 0,0102R | 0,2606R |
+| H4 | BTCUSD | 559 | -0,4901R | 581 | -0,0733R | 0,4169R |
+| H4 | ETHUSD | 596 | -0,4689R | 597 | -0,0928R | 0,3761R |
+| H5 | GOLD | 357 | -0,1075R | 355 | 0,0293R | 0,1368R |
+| H5 | US100 | 342 | -0,0394R | 342 | 0,0637R | 0,1031R |
+| H5 | US30 | 371 | -0,0467R | 370 | 0,0326R | 0,0792R |
+| H5 | EURUSD | 317 | -0,3253R | 317 | -0,1317R | 0,1936R |
+| H5 | GBPUSD | 339 | -0,2734R | 333 | 0,0471R | 0,3205R |
+| H5 | USDJPY | 346 | -0,2700R | 345 | -0,0554R | 0,2145R |
+| H5 | BTCUSD | 558 | -0,3488R | 552 | -0,0202R | 0,3286R |
+| H5 | ETHUSD | 499 | -0,2038R | 489 | 0,1133R | 0,3170R |
+
+**Bilan pondéré par hypothèse** : H2 aucune donnée exploitable ; **H3
+net=-0,1012R / brut=+0,0237R (n=2934)** ; **H4 net=-0,2878R /
+brut=-0,0199R (n=4128)** ; **H5 net=-0,2092R / brut=+0,0139R (n=3129)**.
+
+**Confirmation de l'hypothèse d'Ismaël, partielle** : H3 et H5 ont un
+edge brut réellement positif — l'espérance négative en direct est
+majoritairement un effet de coût. H4 reste négatif même à coût nul (très
+proche de zéro, -0,0199R, mais sous la barre) — la règle pré-enregistrée
+classe H4 en Branche B malgré la proximité, discipline non relâchée.
+
+### Phase 2 — Branche B : H4 abandonnée sans re-paramétrage
+
+Conformément à la règle pré-enregistrée. Aucune tentative de refonte.
+
+### Phase 2 — Branche A : H3 et H5, pipeline à 3 étapes
+
+**Étape 1 (résolution)**, `scripts/evaluate_refonte_step1_resolution.py`
+— HOUR_4 (bougies 4h) téléchargé pour la première fois cette semaine
+(`scripts/download_historical_data.py --resolutions HOUR_4`, résolution
+API vérifiée empiriquement — "HOUR4"/"MINUTE_240" rejetés,
+error.invalid.resolution — "HOUR_4" accepté). Correction Bonferroni m=3
+(MINUTE_15/HOUR/HOUR_4), z≈2,1285 :
+- H3 : HOUR_4 à +0,1341R (le point le plus positif observé cette
+  semaine !) mais n=121 < 150 — ne qualifie pas. MINUTE_15 conservée.
+- H5 : HOUR_4 à +0,0513R, n=134 < 150 — ne qualifie pas. MINUTE_15
+  conservée.
+
+**Étape 2 (stop ATR calibré)**,
+`scripts/evaluate_refonte_step2_atr_stop.py` — multiple d'ATR(14)
+calculé pour que le coût/R reste sous 5% même pour l'actif le plus
+pénalisé (BTCUSD, dominant le calcul dans les deux cas) : **H3 :
+ATR×20,0** ; **H5 : ATR×19,0** — valeurs élevées assumées comme
+conséquence directe et honnête du coût BTCUSD (spread ~62 unités),
+pas un artefact de calcul. Déclencheur INCHANGÉ (régime+Donchian pour
+H3, structure+RSI pour H5), stop remplacé, TP1(1R)/TP2(2R) inchangés en
+multiples de R (donc plus larges en prix). Résultat entraînement :
+- H3 : n=205, moyenne=**+0,0142R** — positif, une première cette
+  semaine sur cette hypothèse.
+- H5 : n=227, moyenne=**-0,1086R** — reste négatif.
+
+**Étape 3 (réduction de confluence)**,
+`scripts/evaluate_refonte_step3_confluence.py`, appliquée par-dessus le
+stop ATR de l'étape 2. Règle : retrait accepté SEULEMENT si le nombre de
+signaux augmente ET l'espérance ne se dégrade pas.
+- H3 (confirmation de régime croisée US30/US100) : SANS confirmation,
+  n=171 (< 205 AVEC) et moyenne=-0,0087R (< +0,0142R AVEC) — retrait
+  REJETÉ sur les deux critères. Confluence conservée.
+- H5 (filtre RSI) : SANS RSI, n=177 (< 227 AVEC) et moyenne=-0,1244R
+  (< -0,1086R AVEC) — retrait REJETÉ. Confluence conservée.
+- **Constat honnête, pas anticipé avant calcul** : retirer une
+  confluence a RÉDUIT le volume de trades complétés dans les deux cas,
+  contrairement à l'attente naïve ("moins de filtres = plus de
+  signaux") — le stop ATR très large (étape 2) allonge la détention des
+  positions ; plus de signaux ACCEPTÉS en amont n'a pas produit plus de
+  trades COMPLÉTÉS, une partie supplémentaire des signaux se heurte au
+  "un trade actif à la fois" plutôt que d'aboutir. Résultat rapporté tel
+  quel, pas ajusté a posteriori.
+
+### Candidats finaux — AUCUN ne qualifie, aucune validation consultée, aucun déploiement
+
+| Hyp. | Candidat final | n (train) | Moyenne | Borne basse corrigée (m=1) | Qualifié ? |
+|---|---|---|---|---|---|
+| H3 | MA200+Donchian(20) inchangé, stop ATR×20, confirmation croisée conservée | 205 | +0,0142R | -0,1078R | **Non** |
+| H5 | Structure+RSI inchangé, stop ATR×19, RSI conservé | 227 | -0,1086R | -0,2224R | **Non** |
+
+Critère appliqué exactement comme pré-enregistré (n≥150 ET borne basse
+corrigée >0, correction m=1 pour un candidat final unique par
+hypothèse) — **H3 est le résultat le plus proche d'un edge exploitable
+de toute la semaine** (espérance ponctuelle positive, volume suffisant)
+mais la borne basse corrigée reste négative : la variance sur 205 trades
+est encore trop grande pour exclure le hasard à 95%. Rapporté
+honnêtement comme un quasi-résultat, pas gonflé en succès. **Aucun
+fichier de stratégie modifié** — H3/H5 restent sur leur configuration
+actuelle en production.
+
+### Tests, déploiement
+
+4 nouveaux scripts de recherche ponctuels (aucune écriture DB, aucun
+appel réseau sauf le téléchargement HOUR_4 déjà journalisé séparément) :
+`evaluate_zero_cost_diagnostic.py`, `evaluate_refonte_step1_resolution.py`,
+`evaluate_refonte_step2_atr_stop.py`, `evaluate_refonte_step3_confluence.py`.
+Aucun changement à un module de production — pas de nouveaux tests
+pytest nécessaires (même statut que les scripts de recherche
+précédents, non soumis à l'exigence de couverture 100%). Suite complète
+re-vérifiée après le lot (aucune régression, aucun fichier de production
+modifié). Aucun redémarrage de process — comportement live strictement
+inchangé.
+
+---
+
 ## 2026-08-25 (suite 6) — Trois chantiers : squeeze Bollinger (H4), volume (H5), Station X vs H2 — aucun déploiement, écart CDC auto-déploiement assumé
 
 Pré-enregistrement complet dans `docs/HYPOTHESES.md` (25/08/2026, "trois

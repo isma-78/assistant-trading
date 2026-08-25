@@ -65,7 +65,13 @@ MAX_BARS_PER_REQUEST = 1000  # plafond dur mesuré le 24/08/2026 (error.invalid.
 THROTTLE_SECONDS = 8.0       # très large sous le seuil de 429 mesuré (16 requêtes rapprochées)
 SAFETY_MAX_DAYS_BACK = 800   # garde-fou, au-delà de la profondeur mesurée (~730j) — le broker s'arrête avant
 
-_RESOLUTION_MINUTES = {"HOUR": 60, "MINUTE_15": 15}
+# "HOUR_4" ajouté le 25/08/2026 (voir docs/HYPOTHESES.md, chantier de
+# refonte H2-H5, Phase 2 branche A — test de résolution 4h) — résolution
+# valide vérifiée empiriquement (error.invalid.resolution sur "HOUR4"/
+# "MINUTE_240", "HOUR_4" accepté), jamais dans ALL_RESOLUTIONS par
+# défaut (téléchargée explicitement via --resolutions HOUR_4 seulement
+# quand nécessaire, pas à chaque exécution du script).
+_RESOLUTION_MINUTES = {"HOUR": 60, "MINUTE_15": 15, "HOUR_4": 240}
 
 
 def _page_window(to_time: datetime, resolution: str) -> tuple:
