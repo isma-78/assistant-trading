@@ -266,6 +266,7 @@ def run_technical_strategy_loop(
     interval_seconds: int = 60,
     require_regime_confirmation: bool = False,
     startup_offset_seconds: int = 0,
+    confirming_resolution: Optional[str] = None,
 ) -> None:
     """Boucle continue générique d'une stratégie technique complémentaire
     (§2.11). Un seul point de variation par appelant : `source`,
@@ -297,6 +298,16 @@ def run_technical_strategy_loop(
     annulations, trailing, coupe-circuits) continue elle aussi à CHAQUE
     itération, comme avant cette révision : geler la gestion du risque
     serait dangereux, pas juste conservateur.
+
+    `confirming_resolution` (défaut None, 25/08/2026, voir
+    docs/HYPOTHESES.md "cycle 2") : résolution utilisée pour
+    `compute_index_regimes` (US30/US100), indépendante de `resolution`
+    (bougies propres de l'actif). None -> `resolution` réutilisée pour
+    les deux, comportement identique à avant ce paramètre (vérifié par
+    régression). Permet un candidat "entrée M15 / confirmation HOUR"
+    (H3/H4), rendu possible par le correctif d'alignement par horodatage
+    du 25/08/2026 dans `backtest_engine.py`. Sans effet quand
+    `require_regime_confirmation=False` (H1, H2, H5).
 
     `startup_offset_seconds` (défaut 0, 24/08/2026, voir
     docs/DECISIONS.md) : pause fixe unique avant le premier appel réseau
@@ -408,7 +419,7 @@ def run_technical_strategy_loop(
                 continue
 
             if require_regime_confirmation and _should_refresh_regime_context(last_regime_refresh_hour, now.hour):
-                index_regimes = compute_index_regimes(client, resolution)
+                index_regimes = compute_index_regimes(client, confirming_resolution or resolution)
                 regime_context = {asset: derive_confirmed_regime(asset, index_regimes) for asset in assets}
                 last_regime_refresh_hour = now.hour
                 logger.info("%s : contexte de régime rafraîchi -> %s", hypothesis_label, regime_context)

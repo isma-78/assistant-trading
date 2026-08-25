@@ -837,6 +837,39 @@ comparaison avant/après correctif) dans `docs/DECISIONS.md`.
   Option B).
 - 828 tests passent, 100% de couverture maintenue.
 
+## Palier P3 (suite) — Cycle 2 de l'évolution H3/H4/H5 : axe timeframe, résultat nul, infrastructure d'application automatique (§3.9 débloqué, 25/08/2026)
+
+Détail chiffré complet (8 candidats, tableau par hypothèse) dans
+`docs/DECISIONS.md`.
+
+- À la demande explicite d'Ismaël, le chantier d'évolution est
+  "débloqué" : timeframe devient un axe explorable (entrée + confirmation
+  croisée US30/US100 indépendamment), avec application automatique dès
+  validation — **écart assumé et journalisé au §3.9 du CDC** ("jamais
+  appliquée automatiquement"), couvert par l'autonomie déléguée du
+  16/08/2026.
+- **8 candidats testés (H3/H4/H5, H2 reportée), tous négatifs sur
+  l'entraînement** — correction Bonferroni intra-hypothèse appliquée (le
+  §3.9 l'exige explicitement pour comparaisons multiples), aucun n'a
+  qualifié, validation jamais consultée. Aucun paramètre live modifié.
+- **`src/hypothesis_params.py`** (nouveau, 100% couvert) : lecture
+  fail-safe de la table `rule_changes` déjà au schéma, application
+  UNIQUEMENT au démarrage de chaque `hypothesisN_executor.py` — jamais en
+  cours de run. H3/H4/H5 câblés (résolution + TP/RSI/Bollinger/stop selon
+  l'hypothèse). **Mécanisme construit et opérationnel, non exercé ce
+  cycle** (rien n'a validé).
+- `technical_strategy_executor.run_technical_strategy_loop` gagne
+  `confirming_resolution` (optionnel, défaut = `resolution`,
+  comportement inchangé sans argument explicite) — permet un timeframe
+  d'entrée différent de celui de la confirmation croisée pour H3/H4,
+  rendu possible par le correctif d'alignement du même jour.
+- **Pas de crontab pour la cadence trimestrielle** — décision explicite
+  après réflexion : l'étape GÉNÉRATION du §3.9 exige un raisonnement neuf
+  par cycle, pas une grille figée rejouée automatiquement. Prochain cycle
+  ~2026-11-25, H2 incluse.
+- 845 tests passent, 100% de couverture maintenue. Déployé, suite verte
+  sur le VPS, aucun redémarrage nécessaire (rien à appliquer).
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou

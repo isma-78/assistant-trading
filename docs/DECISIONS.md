@@ -12,6 +12,145 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-25 (suite) — Cycle 2 de l'évolution H3/H4/H5 : axe timeframe, résultat nul, infrastructure d'application automatique construite (§3.9 débloqué)
+
+Suite à la demande explicite d'Ismaël de « débloquer » le chantier
+d'évolution et faire varier les timeframes/paramètres, avec application
+automatique dès validation. Pré-enregistrement complet dans
+`docs/HYPOTHESES.md` (25/08/2026 "cycle 2") — candidats, correction
+statistique, portée, écarts CDC assumés — à lire en premier, pas répété
+ici en détail.
+
+### Deux écarts CDC explicitement assumés et journalisés
+
+1. **Application automatique sans confirmation d'Ismaël à chaque cycle**
+   — écart littéral au §3.9 ("Jamais appliquée automatiquement"),
+   remplacé par une validation déterministe (seuils figés avant tout
+   calcul, jamais un jugement LLM), couvert par l'autonomie déléguée du
+   16/08/2026.
+2. **Mécanisme rétrospectif (§2.11), pas prospectif (§3.9 littéral)** —
+   le §3.9 prescrit un test sur données POSTÉRIEURES à la génération de
+   l'hypothèse ; ce chantier (cycle 1 compris) teste sur de l'historique
+   déjà écoulé, découpé entraînement/validation. Assumé : le volume de
+   trades prospectifs réel ne permettrait pas de trancher à l'échelle de
+   temps voulue. Les deux garanties du §3.9 sont conservées sous une
+   autre forme : correction pour comparaisons multiples (ci-dessous) et
+   plafond de 3 hypothèses par cycle (H2 explicitement reportée au cycle
+   3 pour le respecter à la lettre, voir pré-enregistrement).
+
+### Résultat du cycle 2 (`logs/evaluate_timeframe_cycle.log`, 0 erreur)
+
+8 candidats testés (H3 : 3, H4 : 3, H5 : 2 — résolution d'entrée et/ou
+de confirmation croisée US30/US100, rendu possible par le correctif
+d'alignement par horodatage de ce même jour). Correction Bonferroni
+intra-hypothèse appliquée (borne basse d'un intervalle corrigé, pas
+juste la moyenne ponctuelle — z=2.128 pour H3/H4 (m=3), z=1.960 pour H5
+(m=2)) :
+
+| Hyp. | Candidat | Résolutions (entrée/confirm) | n (train) | Moyenne | Borne basse corrigée |
+|---|---|---|---|---|---|
+| H3 | A (réf.) | M15/M15 | 2009 | -0.0620R | -0.1108R |
+| H3 | B | HOUR/HOUR | 517 | -0.0978R | -0.1938R |
+| H3 | C | M15/HOUR | 1749 | -0.0812R | -0.1333R |
+| H4 | A (réf.) | M15/M15 | 2779 | -0.2894R | -0.3295R |
+| H4 | B | HOUR/HOUR | 811 | -0.1573R | -0.2353R |
+| H4 | C | M15/HOUR | 2539 | -0.2960R | -0.3375R |
+| H5 | A (réf.) | M15 | 2095 | -0.1934R | -0.2361R |
+| H5 | B | HOUR | 652 | -0.0765R | -0.1572R |
+
+**Les 8 candidats ont une moyenne ponctuelle négative** — la correction
+Bonferroni n'a rejeté aucun candidat positif-mais-fragile, il n'y en
+avait aucun à rejeter. **Aucun candidat qualifié pour aucune des 3
+hypothèses, validation jamais consultée** (règle anti-fuite respectée,
+identique au cycle 1). **Aucun paramètre live modifié, aucun fichier de
+stratégie modifié.**
+
+- Note qualitative : le passage en HOUR améliore systématiquement la
+  moyenne par rapport à M15 (H3 -0.062→reste négatif, H4 -0.289→-0.157,
+  H5 -0.193→-0.077) mais jamais assez pour franchir zéro — cohérent avec
+  l'intuition théorique du pré-enregistrement (moins de bruit en H1),
+  sans suffire à renverser le signe.
+- H4 reste, de loin, la plus négative des trois quel que soit le
+  timeframe — aucune configuration testée à ce jour (cycle 1 ou 2) ne
+  s'approche de zéro pour cette hypothèse.
+
+### Infrastructure d'application automatique — construite maintenant, opérationnelle, non exercée ce cycle
+
+**`src/hypothesis_params.py`** (nouveau, 100% couvert, 17 tests) :
+réutilise la table `rule_changes` déjà présente au schéma (§3.8) plutôt
+que d'en créer une nouvelle — `variable` = `"H{n}.<nom>"`,
+`ajustement_propose` = nouvelle valeur, `statut='applique'` pour un
+override actif. Trois fonctions : `apply_overrides` (setattr générique
+sur un module de stratégie, TP1/TP2/RSI_PERIOD/STOP_WIDTH_MULTIPLIER),
+`apply_bollinger_std_override` (cas particulier de
+`BOLLINGER_STD_MULTIPLIER`, paramètre par défaut lié à la définition de
+`compute_bollinger_bands`, même technique `__defaults__` que
+`scripts/evaluate_hypothesis_candidates.py` mais permanente),
+`get_resolution_override` (résolution d'entrée/confirmation, axes
+indépendants, confirmation par défaut = résolution d'entrée si non
+précisée séparément).
+
+**Appelé une seule fois, au DÉMARRAGE de chaque `hypothesisN_
+executor.py`** (jamais en cours de run — un override ne prend effet
+qu'après un redémarrage explicite, cohérent avec le principe
+"code-locked entre deux redémarrages", invariant #4) : H3, H4, H5
+câblés (`apply_overrides` + `get_resolution_override`, H4 en plus
+`apply_bollinger_std_override`). **H2 non câblée ce lot** (hors
+périmètre du cycle 2, reportée au cycle 3 avec elle). Fail-safe par
+construction (invariant #7) : base absente, table vide ou ligne
+malformée -> valeur codée en dur du module inchangée, jamais une
+exception qui bloquerait le démarrage d'un process de trading.
+
+**`src/technical_strategy_executor.run_technical_strategy_loop`** gagne
+un paramètre optionnel `confirming_resolution` (défaut `None` ->
+réutilise `resolution`, comportement inchangé par construction pour
+tout appelant qui ne le précise pas — H1/H2 non concernés). Permet un
+candidat "entrée M15 / confirmation HOUR" pour H3/H4, **rendu possible
+par le correctif d'alignement par horodatage de ce même jour** (avant
+ce correctif, mélanger deux résolutions pour les bougies propres et de
+confirmation aurait réintroduit exactement le bug de dérive d'index
+déjà corrigé).
+
+**Non exercé ce cycle** : aucune ligne `rule_changes` n'a été insérée
+(aucun candidat n'a validé) — les 5 hypothèses tournent donc exactement
+comme avant ce lot, vérifié par la suite de tests complète (845 tests,
+aucune régression) et un import direct des 3 modules modifiés sur le
+VPS.
+
+### Cadence trimestrielle — pas de crontab construit, décision documentée
+
+Le pré-enregistrement envisageait un crontab VPS relançant ce mécanisme
+tous les ~90 jours. Réalisation en le rédigeant : un cron ne peut
+mécaniser QUE l'étape TEST (déterministe) et l'application — jamais
+l'étape GÉNÉRATION du §3.9 ("formule une hypothèse AVEC justification
+causale explicite"), qui exige un raisonnement neuf par cycle. Rejouer
+indéfiniment la même grille de candidats déjà rejetés contre les mêmes
+données n'aurait aucune valeur. **Décision : pas de crontab.** La
+cadence trimestrielle est honorée par un cycle 3 avec de nouveaux
+candidats justifiés par écrit avant tout calcul, échéance indicative
+~2026-11-25, H2 incluse.
+
+### Notification
+
+Résumé du résultat envoyé sur Telegram immédiatement après l'exécution
+(candidats testés, résultat par hypothèse, aucune application) — vérifié
+en direct, envoi confirmé.
+
+### Tests, déploiement
+
+845 tests passent (828 avant ce lot, +17 nouveaux sur
+`hypothesis_params.py`). 100% de couverture maintenue sur tous les
+modules financiers critiques. Aucun diff sur `risk_engine.py`,
+`capital_manager.py`, `go_nogo.py`, `hypothesis2_strategy.py`,
+`hypothesis3_strategy.py`, `mean_reversion_strategy.py`,
+`hypothesis5_strategy.py`, la couche session, le garde-fou Option B.
+Déployé sur le VPS (git pull), suite complète verte, imports vérifiés en
+direct — **aucun redémarrage de process nécessaire** : le comportement
+des 6 process live est strictement inchangé par ce lot (fail-safe par
+défaut, rien à appliquer).
+
+---
+
 ## 2026-08-25 — Évolution entraînement/validation H2/H3/H4/H5 : résultat nul (aucun code stratégie modifié) ; bug d'alignement temporel trouvé et corrigé ; données H3/H4 rafraîchies
 
 Suite au pré-enregistrement complet dans `docs/HYPOTHESES.md` (24/08/2026

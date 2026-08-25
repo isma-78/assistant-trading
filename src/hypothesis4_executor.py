@@ -53,7 +53,9 @@ alerte, même précédent que hypothesis2_executor avant ses identifiants).
 docs/HYPOTHESES.md.
 """
 
+import src.mean_reversion_strategy as _h4_mod
 from src.executor import HYPOTHESIS4_SOURCE
+from src.hypothesis_params import apply_bollinger_std_override, apply_overrides, get_resolution_override
 from src.mean_reversion_strategy import evaluate_entry
 from src.technical_strategy_executor import run_technical_strategy_loop
 
@@ -80,12 +82,24 @@ def run_hypothesis4_loop(config, db_path: str, interval_seconds: int = 60, start
 
     `startup_offset_seconds=40` (24/08/2026, voir docs/DECISIONS.md) :
     échelonnement des 6 process de production sur la même IP, voir
-    docstring de `technical_strategy_executor.run_technical_strategy_loop`."""
+    docstring de `technical_strategy_executor.run_technical_strategy_loop`.
+
+    **Overrides du cycle d'évolution** (25/08/2026, voir
+    docs/HYPOTHESES.md "cycle 2") : mêmes principes que H3 (voir sa
+    docstring) — `STOP_WIDTH_MULTIPLIER` via `apply_overrides`,
+    `BOLLINGER_STD_MULTIPLIER` via son cas particulier dédié (paramètre
+    par défaut lié à la définition de `compute_bollinger_bands`, jamais
+    un simple setattr, voir docstring de
+    `hypothesis_params.apply_bollinger_std_override`)."""
+    apply_overrides(_h4_mod, "H4", db_path, ["STOP_WIDTH_MULTIPLIER"])
+    apply_bollinger_std_override("H4", db_path, _h4_mod)
+    resolution = get_resolution_override(db_path, "H4", "entree", "MINUTE_15")
+    confirming_resolution = get_resolution_override(db_path, "H4", "confirmation", resolution)
     run_technical_strategy_loop(
         config, db_path,
         source=HYPOTHESIS4_SOURCE,
         assets=HYPOTHESIS4_ASSETS,
-        resolution="MINUTE_15",
+        resolution=resolution,
         entry_fn=evaluate_entry,
         api_key=config.capital_api_key_hypothesis4,
         identifier=config.capital_identifier_hypothesis4,
@@ -98,6 +112,7 @@ def run_hypothesis4_loop(config, db_path: str, interval_seconds: int = 60, start
         interval_seconds=interval_seconds,
         require_regime_confirmation=True,
         startup_offset_seconds=startup_offset_seconds,
+        confirming_resolution=confirming_resolution,
     )
 
 

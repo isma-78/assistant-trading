@@ -44,8 +44,10 @@ un repli silencieux vers un autre jeu d'identifiants.
 docs/HYPOTHESES.md.
 """
 
+import src.hypothesis5_strategy as _h5_mod
 from src.executor import HYPOTHESIS5_SOURCE
 from src.hypothesis5_strategy import evaluate_entry
+from src.hypothesis_params import apply_overrides, get_resolution_override
 from src.technical_strategy_executor import run_technical_strategy_loop
 
 HYPOTHESIS5_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD"]
@@ -73,12 +75,21 @@ def run_hypothesis5_loop(config, db_path: str, interval_seconds: int = 60, start
 
     `startup_offset_seconds=50` (24/08/2026, voir docs/DECISIONS.md) :
     échelonnement des 6 process de production sur la même IP, voir
-    docstring de `technical_strategy_executor.run_technical_strategy_loop`."""
+    docstring de `technical_strategy_executor.run_technical_strategy_loop`.
+
+    **Overrides du cycle d'évolution** (25/08/2026, voir
+    docs/HYPOTHESES.md "cycle 2") : mêmes principes que H3 (voir sa
+    docstring) — RSI_PERIOD/TP1/TP2 via `apply_overrides`, résolution via
+    `get_resolution_override`. H5 n'a pas de confirmation croisée
+    (option C du 23/08/2026), aucun paramètre `confirming_resolution`
+    ici."""
+    apply_overrides(_h5_mod, "H5", db_path, ["RSI_PERIOD", "TP1_R_MULTIPLE", "TP2_R_MULTIPLE"])
+    resolution = get_resolution_override(db_path, "H5", "entree", "MINUTE_15")
     run_technical_strategy_loop(
         config, db_path,
         source=HYPOTHESIS5_SOURCE,
         assets=HYPOTHESIS5_ASSETS,
-        resolution="MINUTE_15",
+        resolution=resolution,
         entry_fn=evaluate_entry,
         api_key=config.capital_api_key_hypothesis5,
         identifier=config.capital_identifier_hypothesis5,

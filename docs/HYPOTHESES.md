@@ -2586,6 +2586,29 @@ Implémentation, résultats complets (tous les candidats), tests,
 déploiement de ce qui valide (le cas échéant), rapport honnête des échecs
 dans `docs/DECISIONS.md` — même discipline que le cycle 1.
 
+**Résultat (25/08/2026, `logs/evaluate_timeframe_cycle.log`) : les 8
+candidats ont une espérance ponctuelle NÉGATIVE sur l'entraînement — la
+correction Bonferroni n'a même pas eu besoin de rejeter un candidat
+positif-mais-fragile, aucun n'était positif pour commencer. Aucun
+candidat qualifié, validation jamais consultée, pour H3, H4 et H5.
+Détail chiffré complet dans `docs/DECISIONS.md`.**
+
+**Correction sur la cadence trimestrielle automatique** : la section
+ci-dessus envisageait un crontab VPS relançant ce mécanisme tous les
+~90 jours. En l'écrivant plus haut, avant de le construire, réalisation
+qu'un cron ne peut mécaniser QUE l'étape TEST (déterministe) et
+l'application automatique — jamais l'étape GÉNÉRATION du §3.9
+("Examine trades + contexte... formule une hypothèse AVEC justification
+causale explicite"), qui exige un raisonnement neuf à chaque cycle, pas
+une grille de candidats figée rejouée indéfiniment sur les mêmes
+données déjà rejetées. **Pas de crontab construit.** La cadence
+trimestrielle reste honorée par un prochain cycle 3, avec de nouveaux
+candidats à justification causale écrite avant tout calcul — prochaine
+échéance indicative : ~2026-11-25 (90 jours), incluant H2 (reportée
+ici). Le mécanisme d'application automatique (`hypothesis_params.py`),
+lui, est construit et opérationnel dès maintenant, prêt pour ce
+cycle-ci comme pour tout cycle futur.
+
 ---
 
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,

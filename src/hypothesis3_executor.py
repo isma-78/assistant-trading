@@ -47,8 +47,10 @@ devenu obsolète et a été retiré le même jour, voir docs/DECISIONS.md).
 le raisonnement (compte totalement séparé, aucun risque de collision).
 """
 
+import src.hypothesis3_strategy as _h3_mod
 from src.executor import HYPOTHESIS3_SOURCE
 from src.hypothesis3_strategy import evaluate_entry
+from src.hypothesis_params import apply_overrides, get_resolution_override
 from src.technical_strategy_executor import run_technical_strategy_loop
 
 HYPOTHESIS3_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD"]
@@ -74,12 +76,23 @@ def run_hypothesis3_loop(config, db_path: str, interval_seconds: int = 60, start
 
     `startup_offset_seconds=30` (24/08/2026, voir docs/DECISIONS.md) :
     échelonnement des 6 process de production sur la même IP, voir
-    docstring de `technical_strategy_executor.run_technical_strategy_loop`."""
+    docstring de `technical_strategy_executor.run_technical_strategy_loop`.
+
+    **Overrides du cycle d'évolution** (25/08/2026, voir
+    docs/HYPOTHESES.md "cycle 2") : appliqués une seule fois ici, au
+    démarrage — `apply_overrides` (TP1/TP2 de `hypothesis3_strategy`) et
+    `get_resolution_override` (résolution d'entrée et de confirmation,
+    indépendantes). Aucun effet tant qu'aucune ligne `rule_changes`
+    "H3.*" avec `statut='applique'` n'existe (fail-safe, comportement
+    actuel inchangé par défaut)."""
+    apply_overrides(_h3_mod, "H3", db_path, ["TP1_R_MULTIPLE", "TP2_R_MULTIPLE"])
+    resolution = get_resolution_override(db_path, "H3", "entree", "MINUTE_15")
+    confirming_resolution = get_resolution_override(db_path, "H3", "confirmation", resolution)
     run_technical_strategy_loop(
         config, db_path,
         source=HYPOTHESIS3_SOURCE,
         assets=HYPOTHESIS3_ASSETS,
-        resolution="MINUTE_15",
+        resolution=resolution,
         entry_fn=evaluate_entry,
         api_key=config.capital_api_key_hypothesis3,
         identifier=config.capital_identifier_hypothesis3,
@@ -92,6 +105,7 @@ def run_hypothesis3_loop(config, db_path: str, interval_seconds: int = 60, start
         interval_seconds=interval_seconds,
         require_regime_confirmation=True,
         startup_offset_seconds=startup_offset_seconds,
+        confirming_resolution=confirming_resolution,
     )
 
 
