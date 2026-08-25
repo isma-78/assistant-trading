@@ -477,6 +477,32 @@ def test_init_db_backfill_timing_layer_skips_table_without_source_column(tmp_pat
         conn.close()
 
 
+def test_init_db_migrates_anomalie_technique_column(tmp_path):
+    # trades.anomalie_technique (25/08/2026, voir docs/DECISIONS.md —
+    # positions H3/ETHUSD simultanées, garde-fou anti-doublon) : une base
+    # créée avant l'ajout de cette colonne doit la recevoir au prochain
+    # init_db(), NULL pour toutes les lignes existantes (aucun backfill
+    # nécessaire — contrairement à regime_type/timing_layer, aucune valeur
+    # rétroactive à déduire, un trade n'a une anomalie technique que si
+    # explicitement marqué comme tel).
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    conn.execute(
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, actif TEXT NOT NULL, statut TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    conn = get_connection(db_path)
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)")}
+        assert "anomalie_technique" in columns
+    finally:
+        conn.close()
+
+
 def test_init_db_is_idempotent(tmp_path):
     db_path = str(tmp_path / "test.db")
     init_db(db_path)

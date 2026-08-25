@@ -113,14 +113,14 @@ def test_compute_period_pnl_requires_timezone_aware_movement_timestamp():
 # Orchestration I/O (DB SQLite temporaire réelle)
 # ---------------------------------------------------------------------------
 
-def _close_trade(db_path, actif, source, r_multiple, ferme_at, cloture_reason=None):
+def _close_trade(db_path, actif, source, r_multiple, ferme_at, cloture_reason=None, anomalie_technique=None):
     with connection_scope(db_path) as conn:
         conn.execute(
             "INSERT INTO trades (source, actif, mode, direction, taille_initiale, "
             "stop_loss_initial, stop_loss_courant, risque_eur, pourcentage_risque_applique, "
-            "ouvert_at, ferme_at, r_multiple_total, statut, cloture_reason) "
-            "VALUES (?, ?, 'demo', 'long', 0.01, 1.0, 1.0, 10.0, 2.0, ?, ?, ?, 'ferme', ?)",
-            (source, actif, ferme_at, ferme_at, r_multiple, cloture_reason),
+            "ouvert_at, ferme_at, r_multiple_total, statut, cloture_reason, anomalie_technique) "
+            "VALUES (?, ?, 'demo', 'long', 0.01, 1.0, 1.0, 10.0, 2.0, ?, ?, ?, 'ferme', ?, ?)",
+            (source, actif, ferme_at, ferme_at, r_multiple, cloture_reason, anomalie_technique),
         )
 
 
@@ -157,6 +157,26 @@ def test_get_asset_metrics_excludes_stop_urgence_closures(tmp_path):
     _close_trade(db_path, "GOLD", "stationx", -100.0, "2026-08-19T00:00:00+00:00", cloture_reason="stop_urgence")
 
     m = get_asset_metrics(db_path, "GOLD", "stationx")
+    assert m.nb_trades == 1
+    assert m.esperance_r == pytest.approx(2.0)
+
+
+def test_get_asset_metrics_excludes_trades_flagged_anomalie_technique(tmp_path):
+    # 25/08/2026 (voir docs/DECISIONS.md) : positions H3/ETHUSD simultanées
+    # dues à une fenêtre de course dans le garde-fou anti-doublon —
+    # l'OUVERTURE de ces trades résulte d'un bug, pas d'un signal de
+    # stratégie réel. Exclu de l'espérance/l'éligibilité §2.4, même
+    # patron que l'exclusion stop_urgence ci-dessus (P&L réel non filtré
+    # ailleurs, ex. circuit_breaker_store, non testé ici).
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    _close_trade(db_path, "ETHUSD", "hypothesis3", 2.0, "2026-08-21T07:17:38+00:00")
+    _close_trade(
+        db_path, "ETHUSD", "hypothesis3", 2.5, "2026-08-21T07:18:09+00:00",
+        anomalie_technique="Position simultanée non bloquée (garde-fou anti-doublon, corrigé le 25/08/2026)",
+    )
+
+    m = get_asset_metrics(db_path, "ETHUSD", "hypothesis3")
     assert m.nb_trades == 1
     assert m.esperance_r == pytest.approx(2.0)
 

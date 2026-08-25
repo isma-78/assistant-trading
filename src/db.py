@@ -162,11 +162,23 @@ CREATE TABLE IF NOT EXISTS trades (
     exit_type TEXT,    -- ajout 23/08/2026 hors §4.5 : "trailing_pur" | "tp_partiel" | "tp_fixe", voir
                        -- docs/DECISIONS.md (sortie à prise de profit H2/H3) — dimension INDÉPENDANTE de
                        -- regime_type (l'une porte sur l'entrée, l'autre sur la sortie), jamais fusionnées.
-    timing_layer TEXT  -- ajout 23/08/2026 hors §4.5 : NULL | "aucune" | "session_multi_tf", voir
-                       -- docs/DECISIONS.md (couche session/multi-timeframe H2-H5) — dimension INDÉPENDANTE
-                       -- de regime_type/exit_type (porte sur QUAND/COMMENT le signal est généré). NULL pour
-                       -- H1/Station X (jamais concernées) ; "aucune" pour les trades H2-H5 antérieurs à
-                       -- cette couche (rétro-remplis) ; "session_multi_tf" pour les trades post-déploiement.
+    timing_layer TEXT,  -- ajout 23/08/2026 hors §4.5 : NULL | "aucune" | "session_multi_tf", voir
+                        -- docs/DECISIONS.md (couche session/multi-timeframe H2-H5) — dimension INDÉPENDANTE
+                        -- de regime_type/exit_type (porte sur QUAND/COMMENT le signal est généré). NULL pour
+                        -- H1/Station X (jamais concernées) ; "aucune" pour les trades H2-H5 antérieurs à
+                        -- cette couche (rétro-remplis) ; "session_multi_tf" pour les trades post-déploiement.
+    anomalie_technique TEXT  -- ajout 25/08/2026 hors §4.5 : NULL par défaut, texte explicatif si non-NULL.
+                             -- Dimension INDÉPENDANTE de cloture_reason (porte sur l'OUVERTURE du trade, pas
+                             -- sa clôture) et de regime_type/exit_type/timing_layer. Marque un trade dont
+                             -- l'existence même résulte d'un bug (pas d'un signal de stratégie réel) —
+                             -- voir docs/DECISIONS.md 25/08/2026 (positions H3/ETHUSD simultanées,
+                             -- garde-fou anti-doublon). `metrics.get_closed_trades_r_for_stats` EXCLUT tout
+                             -- trade avec cette colonne non-NULL (même patron que l'exclusion déjà en place
+                             -- pour cloture_reason='stop_urgence') — jamais compté dans l'espérance/
+                             -- l'éligibilité §2.4, jamais dans le garde-fou Option B (backtest, non concerné,
+                             -- sources différentes). `circuit_breaker_store.get_closed_trades_r` (risque réel)
+                             -- N'EXCLUT PAS ces trades : le P&L réel reste réel pour la gestion du risque,
+                             -- seule leur lecture comme SIGNAL DE PERFORMANCE STRATÉGIQUE est neutralisée.
 );
 
 CREATE TABLE IF NOT EXISTS trade_partials (
@@ -439,6 +451,7 @@ _COLUMN_MIGRATIONS = [
     ("trades", "regime_type", "TEXT"),
     ("trades", "exit_type", "TEXT"),
     ("trades", "timing_layer", "TEXT"),
+    ("trades", "anomalie_technique", "TEXT"),
 ]
 
 

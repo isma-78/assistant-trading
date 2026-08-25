@@ -12,6 +12,110 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-25 (suite 3) — Suites de l'incident ETHUSD/H3 : plafond de risque (§2.3) NON dépassé ; les 4 trades exclus des statistiques §2.4
+
+Deux vérifications demandées par Ismaël après le rapport de l'incident
+(entrée précédente).
+
+### 1. Le plafond d'exposition simultanée (§2.3, 10%) n'a PAS été dépassé — chiffres exacts
+
+**Non.** Vérifié par lecture de `risque_eur`/`pourcentage_risque_applique`
+des 4 trades et de `envelopes.capital_courant` :
+
+- Chaque position individuelle : 10,10€ / 10,02€ / 10,07€ / 10,08€ de
+  risque (2,00-2,02% de l'enveloppe ETHUSD/hypothesis3, 500€) —
+  **conforme au plafond par trade** (§2.3 : 2% par défaut, aucune des 4
+  n'a bénéficié du palier 4% — aucun actif ne remplissait les conditions
+  de bascule à cette date).
+- **Exposition cumulée au pic** (les 4 positions réellement ouvertes/
+  remplies simultanément, ~24h) : 10,10 + 10,02 + 10,07 + 10,08 =
+  **40,27€, soit 8,05% de l'enveloppe (500€)** — **sous le plafond de
+  10% (50€) de 9,73€ (1,95 point)**. Confirmé aussi par
+  `risk_decisions` : les 4 décisions (`signal_id` 83/84/85/86) montrent
+  `approved=1, reason=NULL` (« Entrée approuvée », jamais un rejet
+  motivé par le plafond d'exposition).
+
+**Mécanisme, vérifié en lisant le code, pas supposé** :
+`circuit_breaker_store.get_open_risk_eur` (utilisée par
+`evaluate_exposure_cap`, plafond codé en dur à `EXPOSURE_CAP_FRACTION =
+0.10` dans `circuit_breaker.py`) ne somme que les trades déjà
+`statut='ouvert'` — **pas `'en_attente'`**. Au moment où chacun des 4
+signaux a été validé, ses 3 « frères » précédents n'étaient pas encore
+comptés dans `open_risk_eur` (encore en attente de remplissage) : le
+plafond n'a donc pas activement empêché l'empilement, il n'a simplement
+pas eu l'occasion de le refuser dans ce cas précis. C'est du hasard
+favorable (2% × 4 = 8% < 10%), pas une preuve que le plafond aurait
+bloqué une 5ᵉ position — avec un dimensionnement à 2% par trade,
+jusqu'à 5 positions dupliquées auraient pu s'empiler avant que le
+plafond ne s'active (à supposer qu'elles soient toutes déjà `'ouvert'`
+au moment du calcul, ce qui n'était même pas le cas ici).
+
+**Point de vigilance journalisé, pas corrigé dans ce lot** (hors
+périmètre de la question posée — "confirme", pas "corrige") : ce gap
+dans `get_open_risk_eur` (ne compte pas les positions `'en_attente'`)
+est distinct du bug de déduplication déjà corrigé, mais de la même
+famille — désormais BEAUCOUP moins susceptible de se matérialiser
+puisque la cause racine (signaux dupliqués) est corrigée, mais reste
+une seconde ligne de défense imparfaite en théorie. À la charge
+d'Ismaël de décider si un correctif dédié (compter aussi `'en_attente'`
+dans `get_open_risk_eur`) est justifié séparément.
+
+### 2. Les 4 trades marqués et exclus des statistiques §2.4 — nouvelle colonne `trades.anomalie_technique`
+
+**Oui, ils comptaient de façon standard avant ce correctif** — aucune
+distinction n'existait. Corrigé :
+
+`src/db.py` : nouvelle colonne `trades.anomalie_technique` (TEXT,
+NULL par défaut), ajoutée à la fois au `CREATE TABLE` (nouvelles bases)
+et à `_COLUMN_MIGRATIONS` (bases existantes, `ALTER TABLE ADD COLUMN`,
+même patron que `regime_type`/`exit_type`/`timing_layer`) — dimension
+INDÉPENDANTE de `cloture_reason` (porte sur l'OUVERTURE du trade, pas sa
+clôture). Aucun backfill automatique nécessaire (contrairement à
+`regime_type`/`timing_layer`) : un trade n'a une anomalie que si
+explicitement marqué comme tel, jamais déduit.
+
+`src/metrics.py::get_closed_trades_r_for_stats` (alimente
+`confidence_scorer` §2.4 ET le dashboard) EXCLUT désormais tout trade
+avec `anomalie_technique` non-NULL — **même patron que l'exclusion déjà
+en place pour `cloture_reason='stop_urgence'`**. `circuit_breaker_store.
+get_closed_trades_r` (gestion du risque réel) N'EXCLUT PAS ces trades :
+le P&L réel reste réel pour le risque (ces trades ont vraiment gagné de
+l'argent, l'enveloppe a vraiment été créditée) — seule leur lecture
+comme SIGNAL DE PERFORMANCE STRATÉGIQUE est neutralisée, conformément à
+la demande d'Ismaël (« aucune décision future... ne les traite comme un
+signal de performance réelle de la stratégie »). Le garde-fou Option B
+(backtest) n'est pas concerné : il lit les sources `*_backtest`,
+entièrement disjointes des trades live.
+
+**Backfill appliqué** (`data/assistant_trading.db`, migration
+`init_db()` d'abord pour ajouter la colonne, puis `UPDATE` ciblé sur
+les 4 ids 26/27/28/29 par clé primaire, raison explicite écrite en
+base, pas un simple booléen).
+
+**Effet vérifié** (`confidence_scorer.compute_confidence_score`,
+ETHUSD/hypothesis3) :
+- **Avant exclusion** : n=9 trades comptés pour les stats (incluait les
+  4 de l'incident), espérance nette +87,65€ / trades bruts très
+  positifs à cause de l'incident.
+- **Après exclusion** : **n=4, espérance nette pondérée = -0,0268R,
+  P&L net cumulé = -0,71€** — cohérent avec le reste de H3 (négatif),
+  cohérent avec la conclusion du backtest. Non éligible (`eligible=
+  False`, comme avant, mais maintenant pour la bonne raison : volume
+  insuffisant ET plus aucune inflation artificielle du signe).
+
+### Tests, déploiement
+
+2 nouveaux tests (`tests/test_db.py::test_init_db_migrates_anomalie_
+technique_column`, `tests/test_metrics.py::test_get_asset_metrics_
+excludes_trades_flagged_anomalie_technique`). 849 tests passent (847
+avant ce lot), 100% de couverture maintenue sur `db.py`/`metrics.py`.
+Déployé sur le VPS, migration appliquée sur la base de production,
+backfill effectué, suite complète re-vérifiée verte après déploiement.
+Aucun redémarrage de process nécessaire (lecture seule côté live,
+aucun des 6 process n'écrit `anomalie_technique`).
+
+---
+
 ## 2026-08-25 (suite 2) — Investigation demandée par Ismaël : écart entre trades réels et backtest — BUG RÉEL TROUVÉ (positions simultanées non bloquées, H3/ETHUSD)
 
 Demande explicite d'Ismaël : expliquer avec des chiffres vérifiés

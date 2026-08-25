@@ -193,13 +193,23 @@ def get_closed_trades_r_for_stats(db_path: str, actif: str, source: str) -> List
     """Comme circuit_breaker_store.get_closed_trades_r, mais EXCLUT les
     trades clos par /stop_urgence (voir docstring du module) — jamais
     réutilisée par le coupe-circuit, qui a besoin de connaître TOUTE
-    perte réalisée, y compris un arrêt d'urgence."""
+    perte réalisée, y compris un arrêt d'urgence.
+
+    EXCLUT aussi tout trade avec `anomalie_technique` non-NULL (ajout
+    25/08/2026, voir docs/DECISIONS.md — positions H3/ETHUSD simultanées
+    dues à une fenêtre de course dans le garde-fou anti-doublon,
+    corrigée le même jour) : un trade dont l'OUVERTURE résulte d'un bug
+    n'est pas un signal de performance de la stratégie, même patron que
+    l'exclusion stop_urgence ci-dessus. Même non-réutilisation par
+    circuit_breaker_store : le P&L réel reste réel pour le risque, seule
+    sa lecture comme performance stratégique est neutralisée ici."""
     normalized = _normalize_source(source)
     with connection_scope(db_path) as conn:
         rows = conn.execute(
             "SELECT ferme_at, r_multiple_total, source FROM trades "
             "WHERE actif = ? AND statut = 'ferme' AND r_multiple_total IS NOT NULL "
-            "AND (cloture_reason IS NULL OR cloture_reason != 'stop_urgence')",
+            "AND (cloture_reason IS NULL OR cloture_reason != 'stop_urgence') "
+            "AND anomalie_technique IS NULL",
             (actif,),
         ).fetchall()
     return [(row["ferme_at"], row["r_multiple_total"]) for row in rows if _normalize_source(row["source"]) == normalized]
