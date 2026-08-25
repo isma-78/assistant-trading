@@ -117,7 +117,7 @@ comme avant ce lot, vérifié par la suite de tests complète (845 tests,
 aucune régression) et un import direct des 3 modules modifiés sur le
 VPS.
 
-### Cadence trimestrielle — pas de crontab construit, décision documentée
+### Cadence — pas de crontab construit, décision documentée ; corrigée à 10 jours le 25/08/2026
 
 Le pré-enregistrement envisageait un crontab VPS relançant ce mécanisme
 tous les ~90 jours. Réalisation en le rédigeant : un cron ne peut
@@ -125,10 +125,29 @@ mécaniser QUE l'étape TEST (déterministe) et l'application — jamais
 l'étape GÉNÉRATION du §3.9 ("formule une hypothèse AVEC justification
 causale explicite"), qui exige un raisonnement neuf par cycle. Rejouer
 indéfiniment la même grille de candidats déjà rejetés contre les mêmes
-données n'aurait aucune valeur. **Décision : pas de crontab.** La
-cadence trimestrielle est honorée par un cycle 3 avec de nouveaux
-candidats justifiés par écrit avant tout calcul, échéance indicative
-~2026-11-25, H2 incluse.
+données n'aurait aucune valeur. **Décision : pas de crontab.**
+
+**Corrigé le 25/08/2026 (même jour, instruction explicite d'Ismaël) :
+cadence 10 jours, pas trimestrielle.** Prochaine échéance **2026-09-04**
+(remplace ~2026-11-25). **Troisième écart CDC assumé** (voir
+`docs/HYPOTHESES.md` "cycle 2" pour le détail complet) : le §3.9 écarte
+littéralement le mensuel ("à faible volume de trades, une hypothèse ne
+peut pas se trancher en 30 jours") — 10 jours va plus loin encore.
+Nuance qui rend cet écart défendable : cet argument vise un mécanisme
+PROSPECTIF (accumuler des trades réels), ce chantier est RÉTROSPECTIF
+(deuxième écart déjà journalisé) — chaque cycle rejoue l'historique déjà
+disponible, pas une accumulation de nouveaux trades prospectifs. Ce qui
+reste pleinement contraignant à 10 jours : **un cycle sans justification
+théorique neuve doit conclure "rien à tester ce cycle-ci"**, jamais
+inventer une justification pour se conformer au calendrier — règle
+écrite en détail dans `docs/HYPOTHESES.md`, avec la liste explicite de ce
+qui compte comme "neuf" (volume de trades réels significativement accru,
+observation de marché nouvelle avec justification écrite, instruction
+d'Ismaël, résultat d'investigation). Aucun mécanisme automatique ne
+déclenche ce contrôle — `CronCreate` est local à la session et expire
+avant 10 jours, pas fiable pour une échéance inter-session ; le
+2026-09-04 est une date documentée à vérifier, pas un déclenchement
+garanti.
 
 ### Notification
 

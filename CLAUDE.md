@@ -863,10 +863,18 @@ Détail chiffré complet (8 candidats, tableau par hypothèse) dans
   comportement inchangé sans argument explicite) — permet un timeframe
   d'entrée différent de celui de la confirmation croisée pour H3/H4,
   rendu possible par le correctif d'alignement du même jour.
-- **Pas de crontab pour la cadence trimestrielle** — décision explicite
-  après réflexion : l'étape GÉNÉRATION du §3.9 exige un raisonnement neuf
-  par cycle, pas une grille figée rejouée automatiquement. Prochain cycle
-  ~2026-11-25, H2 incluse.
+- **Pas de crontab** — décision explicite après réflexion : l'étape
+  GÉNÉRATION du §3.9 exige un raisonnement neuf par cycle, pas une grille
+  figée rejouée automatiquement.
+- **Cadence corrigée à 10 jours le 25/08/2026** (instruction explicite
+  d'Ismaël, remplace le trimestriel) — prochaine échéance **2026-09-04**.
+  Troisième écart CDC assumé (§3.9 écarte littéralement le mensuel ;
+  défendable ici car le mécanisme est rétrospectif, pas prospectif — voir
+  `docs/DECISIONS.md`/`docs/HYPOTHESES.md`). Règle explicite : un cycle
+  sans justification théorique neuve conclut "rien à tester ce
+  cycle-ci", jamais une justification inventée pour le calendrier.
+  Aucun déclenchement automatique fiable (`CronCreate` expire avant 10
+  jours) — échéance à vérifier manuellement.
 - 845 tests passent, 100% de couverture maintenue. Déployé, suite verte
   sur le VPS, aucun redémarrage nécessaire (rien à appliquer).
 

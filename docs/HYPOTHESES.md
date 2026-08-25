@@ -2601,13 +2601,65 @@ l'application automatique — jamais l'étape GÉNÉRATION du §3.9
 ("Examine trades + contexte... formule une hypothèse AVEC justification
 causale explicite"), qui exige un raisonnement neuf à chaque cycle, pas
 une grille de candidats figée rejouée indéfiniment sur les mêmes
-données déjà rejetées. **Pas de crontab construit.** La cadence
-trimestrielle reste honorée par un prochain cycle 3, avec de nouveaux
-candidats à justification causale écrite avant tout calcul — prochaine
-échéance indicative : ~2026-11-25 (90 jours), incluant H2 (reportée
-ici). Le mécanisme d'application automatique (`hypothesis_params.py`),
-lui, est construit et opérationnel dès maintenant, prêt pour ce
-cycle-ci comme pour tout cycle futur.
+données déjà rejetées. **Pas de crontab construit.** Le mécanisme
+d'application automatique (`hypothesis_params.py`), lui, est construit
+et opérationnel dès maintenant, prêt pour ce cycle-ci comme pour tout
+cycle futur.
+
+**Correction de cadence — 25/08/2026, instruction explicite d'Ismaël :
+10 jours, pas trimestriel.** Remplace l'échéance ~2026-11-25 ci-dessus
+par **2026-09-04 (10 jours après le cycle 2)**. **Troisième écart CDC,
+explicitement assumé** : le §3.9 dit littéralement « Cadence
+trimestrielle (et non mensuelle) : à faible volume de trades, une
+hypothèse ne peut pas se trancher en 30 jours » — 10 jours est encore
+plus rapproché que le mensuel que le CDC écarte explicitement pour cette
+raison. Nuance qui rend cet écart défendable plutôt qu'aveugle : cet
+argument du CDC vise un test PROSPECTIF (accumuler assez de nouveaux
+trades réels pour trancher), or ce mécanisme est RÉTROSPECTIF (§2.11,
+déjà journalisé comme deuxième écart ci-dessus) — chaque cycle rejoue
+l'historique déjà existant, il n'attend pas l'accumulation de nouveaux
+trades prospectifs pour avoir un échantillon suffisant. La contrainte de
+volume du §3.9 ne s'applique donc pas de la même façon ici. **Ce qui
+reste pleinement contraignant, à 10 jours comme à 90** : l'étape
+GÉNÉRATION exige un raisonnement neuf, jamais une grille rejouée
+mécaniquement — voir la règle explicite ci-dessous.
+
+### Ce qu'un cycle à 10 jours doit faire quand il n'y a rien de neuf à proposer
+
+Un cycle qui n'a aucune nouvelle justification théorique à écrire **doit
+conclure "rien à tester ce cycle-ci"**, journalisé comme tel dans
+`docs/DECISIONS.md` (même statut qu'un résultat négatif — une absence de
+candidat n'est pas un échec de la démarche, c'est le résultat honnête
+quand rien de nouveau n'a changé). Ce qui compte comme "neuf",
+concrètement — au moins UNE des conditions suivantes doit être vraie
+pour qu'un cycle propose des candidats :
+- Un volume de trades RÉELS (pas backtest) significativement plus
+  important qu'au cycle précédent est apparu sur une hypothèse/actif
+  donné, permettant un nouveau regard causal sur un comportement observé
+  en direct (pas seulement en rétrospectif).
+- Une observation de marché ou de régime nouvelle, avec une
+  justification causale écrite AVANT tout calcul (même exigence que les
+  cycles 1/2).
+- Une instruction explicite d'Ismaël pointant une piste précise.
+- Un résultat d'investigation (ex. l'écart live/backtest demandé le
+  25/08/2026, voir `docs/DECISIONS.md`) révèle un axe non encore
+  exploré.
+
+**Ce qui NE justifie PAS un nouveau candidat** : le simple fait que 10
+jours se sont écoulés. Rejouer la même grille déjà rejetée (cycles 1/2 :
+19 candidats négatifs sur H2-H5) sans justification neuve serait
+exactement le "tester 20 idées en fait gagner une par hasard" que le
+§3.9 met en garde contre — inventer une justification a posteriori pour
+se conformer au calendrier est explicitement écarté ici, par écrit,
+avant que la tentation ne se présente.
+
+**Aucun mécanisme automatique ne déclenche ce contrôle** (`CronCreate`
+de cette session est strictement local à la session en cours et expire
+de toute façon avant 10 jours — jamais une solution fiable pour une
+échéance qui doit survivre au-delà d'une conversation). L'échéance du
+2026-09-04 est une date documentée, à vérifier à la prochaine
+conversation sur ce sujet — pas un déclenchement garanti sans
+intervention d'Ismaël.
 
 ---
 
