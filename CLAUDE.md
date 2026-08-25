@@ -811,6 +811,32 @@ pour de vrai sur la base de production. Détail chiffré complet
   pause** — décision explicite d'Ismaël, en attente d'avoir vu l'effet
   de cette comparaison avant de bâtir dessus.
 
+## Palier P3 (suite) — Évolution entraînement/validation H2-H5 : résultat nul, bug d'alignement corrigé (25/08/2026)
+
+Détail chiffré complet (11 candidats, tableau espérance par candidat,
+comparaison avant/après correctif) dans `docs/DECISIONS.md`.
+
+- **Bug réel trouvé** : `backtest_engine.replay_hypothesis` alignait les
+  bougies de l'actif et les séries de confirmation de régime (US30/US100,
+  utilisées par H3/H4) par position dans la liste, pas par horodatage —
+  ces séries n'ont pas le même nombre de bougies en pratique. Corrigé
+  (pointeur monotone par horodatage), données H3/H4 en production purgées
+  et régénérées avec le correctif.
+- **Évolution H2/H3/H4/H5 (11 candidats testés au total sur
+  l'entraînement seul) : AUCUN n'a une espérance positive** — la période
+  validation n'a donc jamais été consultée pour aucune hypothèse (règle
+  anti-fuite pré-enregistrée respectée). **Aucun fichier de stratégie
+  modifié.**
+- H4/H5 restent en pause pour ce chantier, sans nouvelle tentative
+  prévue (limite fixée par avance). H2/H3 restent explorables si de
+  nouvelles hypothèses théoriques émergent.
+- Effet du correctif d'alignement sur les données H3/H4 déjà en
+  production : conclusion qualitative inchangée pour H4 (toujours
+  négative partout, amplitude quasi identique) ; un seul changement de
+  signe (H3/GOLD, désormais légèrement positif et libéré du garde-fou
+  Option B).
+- 828 tests passent, 100% de couverture maintenue.
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou

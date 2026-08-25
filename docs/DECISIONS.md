@@ -12,6 +12,161 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-25 — Évolution entraînement/validation H2/H3/H4/H5 : résultat nul (aucun code stratégie modifié) ; bug d'alignement temporel trouvé et corrigé ; données H3/H4 rafraîchies
+
+Suite au pré-enregistrement complet dans `docs/HYPOTHESES.md` (24/08/2026
+soir, méthode entraînement 2/3 / validation 1/3, anti-fuite : un seul
+candidat par hypothèse choisi sur l'entraînement seul, H1 et les couches
+partagées hors périmètre — voir cette entrée pour le détail, pas répété
+ici).
+
+### Bug réel trouvé en préparant l'évaluation, pas en cherchant un bug
+
+En construisant `scripts/evaluate_hypothesis_candidates.py`,
+`backtest_engine.replay_hypothesis` alignait `own_bars` (bougies de
+l'actif) et les séries de confirmation de régime (US30/US100, utilisées
+par H3/H4 via `require_regime_confirmation=True`) **par position dans la
+liste**, jamais par horodatage. Hypothèse implicite fausse : que les deux
+séries ont le même nombre de bougies. Faux en pratique — heures de marché
+différentes par instrument (ex. EURUSD MINUTE_15 = 54455 bougies vs US30
+MINUTE_15 = 52948 sur la même période ; écart encore plus marqué pour
+BTCUSD/ETHUSD, qui tradent 24/7 contre les horaires boursiers de
+US30/US100). Un pas d'indexation dérive silencieusement au fil du temps :
+la fenêtre de confirmation de régime lue à l'instant t de l'actif ne
+correspondait plus, après quelques milliers de bougies, à la fenêtre
+réellement contemporaine de US30/US100.
+
+**Corrigé** (`src/backtest_engine.py`) : `_advance_confirming_pointer`
+(pointeur monotone, avance tant que `series[pointer].time_utc <=
+as_of_time`) + `_trailing_window` (fenêtre glissante sur ce pointeur,
+plus sur un index de position). État `confirming_pointers` par série dans
+`replay_hypothesis`, remplace l'ancien slicing `[t+1-lookback:t+1]`.
+7 nouveaux tests (`tests/test_backtest_engine.py` :
+`test_advance_confirming_pointer_stops_before_future_bar`,
+`_includes_bar_at_exact_time`, `_never_goes_backward`, `_empty_series`,
+`test_trailing_window_respects_lookback`, `_pointer_less_than_lookback`,
+`test_replay_regime_confirmation_handles_mismatched_confirming_length`).
+828 tests passent, 100% de couverture maintenue sur `backtest_engine`.
+Seuls H3/H4 utilisent `confirming_bars` — H1/H2/H5 non affectés par ce
+bug. Commit `f067da3`.
+
+**Conséquence directe** : les données `hypothesis3_backtest`/
+`hypothesis4_backtest` déjà en base de production (calculées la veille
+avec l'alignement erroné, voir entrée 24/08/2026 soir) étaient
+potentiellement faussées. Purge puis régénération avec l'alignement
+corrigé (voir section "Rafraîchissement" ci-dessous).
+
+### Évaluation entraînement/validation : résultat nul sur les 4 hypothèses explorables
+
+`scripts/evaluate_hypothesis_candidates.py` (nouveau, outil de recherche
+ponctuel sans écriture DB ni appel réseau, même patron que
+`calibrate_pip_value.py`) : rejoue chaque candidat (H2 : 2 candidats, H3 :
+3, H4 : 3, H5 : 3 — 11 au total, tous listés avec leur justification
+théorique dans `docs/HYPOTHESES.md`) sur la période ENTRAÎNEMENT
+uniquement (bougies antérieures au 01/12/2025), espérance nette pondérée
+sur les 8 actifs (`statistics.fmean`). Un candidat qualifie si espérance
+> 0 ET n ≥ `PHASE_B_MIN_TRADES_BACKTEST` (150) — seuil déjà existant,
+aucun nouveau seuil inventé, conformément à la règle fixée dans le
+pré-enregistrement.
+
+**Résultat (`logs/evaluate_candidates.log`) : les 11 candidats, sur les 4
+hypothèses, ont une espérance nette NÉGATIVE sur l'entraînement** :
+
+| Hypothèse | Candidat | Variation testée | n (pooled) | Espérance |
+|---|---|---|---|---|
+| H2 | A (baseline) | — | 9 | -0.2896R |
+| H2 | B | TP1=0.5R / TP2=1.5R | 9 | -0.3393R |
+| H3 | A (baseline) | — | 2009 | -0.0620R |
+| H3 | B | TP1=0.5R / TP2=1.5R | 2760 | -0.0911R |
+| H3 | C | TP1=1.5R / TP2=3.0R | 1463 | -0.0211R |
+| H4 | A (baseline) | — | 2779 | -0.2894R |
+| H4 | B | écart-type Bollinger 2.5 | 1195 | -0.2368R |
+| H4 | C | multiple de stop ×1.5 | 2516 | -0.2019R |
+| H5 | A (baseline) | — | 2095 | -0.1934R |
+| H5 | B | RSI période 9 | 2262 | -0.2182R |
+| H5 | C | TP1=0.5R / TP2=1.5R | 2381 | -0.1993R |
+
+**Aucun candidat n'a qualifié → la période VALIDATION n'a jamais été
+consultée, pour aucune des 4 hypothèses.** C'est le comportement attendu
+de la règle anti-fuite pré-enregistrée, pas un abandon en cours de route :
+la validation n'a de sens que pour confirmer un choix déjà fait sur
+l'entraînement seul, jamais pour chercher parmi plusieurs candidats.
+
+**Conséquence directe, assumée par le pré-enregistrement** :
+- **Aucun fichier de stratégie modifié** (`hypothesis2_strategy.py`,
+  `hypothesis3_strategy.py`, `mean_reversion_strategy.py`,
+  `hypothesis5_strategy.py` — 0 diff dans ce lot, vérifié).
+- **H4 et H5 restent en pause pour ce chantier, sans nouvelle tentative**
+  (limite fixée par avance dans le pré-enregistrement : pas de relance
+  indéfinie tant qu'aucun nouveau signal empirique n'apparaît).
+- H2/H3 : aucune amélioration trouvée dans le budget de variables déjà
+  alloué (§2.11), mais restent explorables si de nouvelles données ou de
+  nouvelles hypothèses théoriques émergent — rien n'est fermé
+  définitivement pour ces deux-là, contrairement à H4/H5.
+- Note H2 : n=9 sur l'entraînement entier (2 candidats) — volume trop
+  faible pour tirer une conclusion statistique forte au-delà de "rien
+  trouvé jusqu'ici", déjà signalé pour ce couple hypothèse/volume dans
+  les entrées précédentes.
+
+### Rafraîchissement des données H3/H4 en base de production (correctif d'alignement)
+
+Purge puis régénération de `hypothesis3_backtest`/`hypothesis4_backtest`
+(`scripts/run_retrospective_backtest.py --hypothesis H3,H4`, alignement
+corrigé, `slippage_multiplier=1.0` — même hypothèse de coût que la
+donnée déjà en production, seule variable changée = le correctif
+d'alignement). Purge confirmée par comptage exact avant régénération : H3
+1734 trades/signals/market_snapshots/raw_messages + 8 envelopes ; H4 2005
+de chaque + 8 envelopes. Régénération : exit 0, 0 erreur
+(`logs/backtest_replay_h3h4_refresh.log`).
+
+**Effet du correctif, comparé au jeu précédent (entrée 24/08/2026 soir,
+suite 3)** :
+- Volumes de trades sensiblement différents par actif (attendu — la
+  fenêtre de confirmation de régime change si l'alignement change), avec
+  l'écart le plus marqué sur BTCUSD/ETHUSD (cohérent avec l'hypothèse du
+  bug : ce sont les actifs dont les horaires de marché divergent le plus
+  de US30/US100).
+- **Conclusion qualitative inchangée, plutôt renforcée que contredite** :
+  H4 reste négative sur les 6 couples avec assez de données, avec une
+  amplitude très proche de l'ancien jeu (nouveau : -0.05R à -0.49R ;
+  ancien : -0.06R à -0.49R à 100% de slippage) — le bug d'alignement
+  n'expliquait donc PAS la sévérité observée sur H4.
+- **Seul changement de signe constaté** : H3/GOLD passe en territoire
+  légèrement positif (+0.0056R, n=332, phase B, désormais `eligible`) —
+  jusque-là bloqué par le garde-fou Option B, maintenant libre. Aucun
+  autre couple H3/H4 ne change de signe.
+- Espérances H3 post-correctif (`compute_confidence_score`, seuils
+  backtest) : GOLD +0.0056R (n=332) · EURUSD -0.1440R (n=305) · GBPUSD
+  -0.1500R (n=325) · USDJPY -0.1643R (n=294) · BTCUSD -0.1687R (n=446) ·
+  ETHUSD -0.0907R (n=450). H4 : GOLD -0.0463R (n=382) · EURUSD -0.2700R
+  (n=430) · GBPUSD -0.3702R (n=454) · USDJPY -0.2531R (n=354) · BTCUSD
+  -0.4901R (n=559) · ETHUSD -0.4689R (n=596). US30/US100 : 0 trade pour
+  H3 et H4 (déjà le cas avant le correctif, sévérité de la confluence
+  structurelle sur ces deux actifs déjà documentée).
+
+**Statut du garde-fou Option B post-rafraîchissement** (vérifié en direct
+sur la base de production, `_check_backtest_confidence_gate`) :
+- H3 : GOLD/US100/US30 libres, EURUSD/GBPUSD/USDJPY/BTCUSD/ETHUSD
+  bloqués.
+- H4 : US100/US30 libres, GOLD/EURUSD/GBPUSD/USDJPY/BTCUSD/ETHUSD
+  bloqués.
+- Seul changement effectif par rapport à la veille : H3/GOLD passe de
+  bloqué à libre. Le reste du blocage 24/40 (entrée 24/08/2026 soir,
+  suite 3) est inchangé dans son principe (H4/H5 largement bloqués,
+  quelques couples GOLD/US30/US100 libres selon l'hypothèse).
+
+### Tests, non-régression
+
+828 tests passent (821 avant ce lot), 100% de couverture maintenue sur
+tous les modules financiers critiques et `backtest_engine`. Aucun diff
+sur `risk_engine.py`, `capital_manager.py`, `hypothesis2_strategy.py`,
+`hypothesis3_strategy.py`, `mean_reversion_strategy.py`,
+`hypothesis5_strategy.py` (vérifié explicitement — c'est le point
+central de ce chantier : rien à changer côté stratégies puisqu'aucun
+candidat n'a validé).
+
+---
+
 ## 2026-08-24 (soir, suite 3) — Notification Option B, fenêtre sans notification (traçabilité), comparaison 100%/50% slippage
 
 Suite au premier rejeu réel du backtest (24/08/2026, voir entrée
