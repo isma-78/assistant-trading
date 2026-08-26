@@ -3148,6 +3148,56 @@ Implémentation, scripts, tests de non-régression dans
 
 ---
 
+## 2026-08-26 — PRÉ-ENREGISTREMENT : rejeu de la Branche A (H3, H5) sans BTCUSD
+
+Écrit avant tout calcul. Demande explicite d'Ismaël, suite directe du
+chantier de refonte du 25/08/2026 : BTCUSD identifié en Phase 1 comme
+systématiquement l'actif le plus pénalisé en coût absolu (spread moyen
+~62 unités de prix, dominant le calcul du multiple d'ATR des deux
+hypothèses au chantier précédent — ATR×20 pour H3, ATR×19 pour H5).
+H3 avait atteint +0,0142R sur l'entraînement (n=205) sans qualifier,
+borne basse encore négative (-0,1078R).
+
+**Portée exacte, reprise de la demande** : étapes 1 (résolution
+HOUR/HOUR_4) et 2 (stop ATR calibré coût/R<5%) UNIQUEMENT, PAS l'étape 3
+(réduction de confluence) — non redemandée, et déjà rejetée pour les
+deux hypothèses au chantier précédent sur les 8 actifs (retrait dégrade
+volume ET espérance dans les deux cas) ; rien n'indique que retirer
+BTCUSD changerait cette conclusion structurelle sur les 7 actifs
+restants, donc pas retestée sans le redemander explicitement.
+
+**7 actifs** : GOLD, US100, US30, EURUSD, GBPUSD, USDJPY, ETHUSD —
+BTCUSD exclu de bout en bout (backtest ET calibration du coût, pas
+seulement du backtest final).
+
+**Étape 1** : identique à la méthode du chantier précédent — MINUTE_15
+(actuel) vs HOUR vs HOUR_4, coût §2.6 inchangé (nette), ENTRAÎNEMENT
+seul, correction Bonferroni m=3 (z≈2,1285).
+
+**Étape 2** : multiple d'ATR(14) RECALIBRÉ à partir des coûts mesurés en
+Phase 1 pour les 7 actifs SEULEMENT (BTCUSD retiré du calcul du "pire
+cas", pas seulement de la moyenne) — méthode de calibration identique
+(besoin de stop ≥ 20× le coût en unités de prix pour un ratio <5%,
+maximum retenu sur les 7 actifs, arrondi au 0,5 supérieur). Déclencheur
+INCHANGÉ (régime+Donchian pour H3, structure+RSI pour H5), TP1(1R)/TP2(2R)
+inchangés en multiples de R. Candidat unique (m=1, z≈1,6449).
+
+**Critère de qualification, identique** : n≥`PHASE_B_MIN_TRADES_BACKTEST`
+(150) ET (moyenne − z×SE) > 0 sur l'entraînement. Si qualifié : un seul
+essai sur la validation (n≥`PHASE_A_MIN_TRADES_BACKTEST`=60 ET
+espérance nette > 0). **Déploiement automatique en démo si qualifié sur
+l'entraînement ET validé** — même écart CDC assumé qu'au chantier
+précédent (§3.9, autonomie déléguée du 16/08/2026), pas reformulé ici.
+
+**Si aucun candidat ne qualifie même sans BTCUSD** : documenté comme
+confirmation supplémentaire que H3/H5 ont un edge trop marginal pour
+être converti en stratégie exploitable dans leur forme actuelle — pas
+de nouvel essai forcé, conformément à l'instruction explicite.
+
+Résultat complet dans `docs/DECISIONS.md`.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4, #5, ou du backtest rétrospectif — jamais une modification de
 ce qui précède.*
