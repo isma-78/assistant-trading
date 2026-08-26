@@ -156,8 +156,24 @@ def run_one_hypothesis(
             print(f"  {asset} : historique insuffisant ({len(own_bars)} bougies) — ignoré.")
             continue
 
+        # Bug réel trouvé le 26/08/2026 (voir docs/DECISIONS.md, investigation
+        # des rejets en direct) : l'exclusion `asset not in ("US30", "US100")`
+        # laissait `confirming_bars=None` pour ces deux actifs, alors que
+        # `regime_confirmation.py` (ligne ~52 : "US30 et US100 confirmés l'un
+        # par l'autre, jamais par eux-mêmes") les confirme bien via l'AUTRE
+        # indice, exactement comme en direct — `derive_confirmed_regime` fait
+        # déjà l'auto-exclusion en interne (`_indices_confirming`), aucun
+        # filtre supplémentaire n'est nécessaire ici. Avec `confirming_bars=
+        # None`, `_historical_regime` recevait deux fenêtres vides,
+        # `confirmed_regime` restait `None` en permanence, et AUCUN signal ne
+        # pouvait jamais être confirmé pour H3/H4 sur US30/US100 (0 trade
+        # backtest persisté pour ces deux couples, garde-fou Option B no-op
+        # en direct dessus). Toujours construire `confirming_bars` quand
+        # `require_regime` est vrai, même pattern que
+        # `scripts/evaluate_zero_cost_diagnostic.py` (jamais touché par ce
+        # bug, d'où ses résultats non nuls pour H4/US100 et H4/US30).
         confirming_bars: Optional[Dict[str, List[HistoricalBar]]] = None
-        if require_regime and asset not in ("US30", "US100"):
+        if require_regime:
             confirming_bars = {"US30": _load_bars("US30", resolution), "US100": _load_bars("US100", resolution)}
 
         result = replay_hypothesis(
