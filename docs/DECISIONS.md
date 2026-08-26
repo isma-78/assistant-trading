@@ -12,6 +12,75 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-26 — Rejeu de la Branche A (H3, H5) sans BTCUSD : ni l'un ni l'autre ne qualifie, H3 empire
+
+Pré-enregistrement complet dans `docs/HYPOTHESES.md` (26/08/2026) — à
+lire en premier. Demande explicite d'Ismaël, suite directe du chantier
+du 25/08 : BTCUSD (spread moyen ~62 unités de prix) identifié comme
+l'actif dominant le calcul du multiple d'ATR (H3 ×20, H5 ×19).
+Portée : étapes 1 (résolution) et 2 (stop ATR) uniquement, sur les 7
+actifs restants (GOLD, US100, US30, EURUSD, GBPUSD, USDJPY, ETHUSD) —
+étape 3 (réduction de confluence) non redemandée, déjà rejetée pour les
+deux hypothèses au chantier précédent.
+
+### Étape 1 (résolution) — même conclusion que la veille
+
+`scripts/evaluate_refonte_sans_btc_step1.py`. Aucune résolution ne
+qualifie pour H3 ni H5 (HOUR_4 à +0,1350R pour H3 et +0,0437R pour H5,
+mais n=101 et n=112, tous deux < 150). MINUTE_15 conservée pour les
+deux, comme avec BTCUSD.
+
+### Étape 2 (stop ATR recalibré) — RÉSULTAT NÉGATIF, y compris une dégradation pour H3
+
+`scripts/evaluate_refonte_sans_btc_step2.py`. Calibration recalculée sur
+les 7 actifs seulement (BTCUSD retiré du calcul du pire cas, pas
+seulement de la moyenne) :
+
+- **H3** : pire cas devenu **ETHUSD** (multiple brut requis 17,066),
+  multiple retenu **17,5** (contre 20,0 avec BTCUSD — baisse marginale,
+  pas la chute attendue, ETHUSD prend le relais juste derrière BTCUSD).
+  Entraînement : **n=201, moyenne=-0,0389R**, borne basse=-0,1622R — NE
+  QUALIFIE PAS. Validation NON consultée.
+- **H5** : pire cas devenu **ETHUSD** (multiple brut requis 18,633),
+  multiple retenu **19,0** (INCHANGÉ par rapport au calcul avec BTCUSD —
+  ETHUSD était déjà quasiment aussi contraignant). Entraînement :
+  **n=193, moyenne=-0,0816R**, borne basse=-0,2062R — NE QUALIFIE PAS.
+  Validation NON consultée.
+
+### Constat honnête, pas anticipé avant calcul : retirer BTCUSD a DÉGRADÉ H3
+
+**H3 passe de +0,0142R (n=205, avec BTCUSD) à -0,0389R (n=201, sans
+BTCUSD)** — le retrait de l'actif le plus coûteux a fait EMPIRER
+l'espérance globale, pas l'inverse. Explication factuelle : BTCUSD ne
+contribuait que 4 trades sur les 205 au stop ATR×20 (n=205 avec BTCUSD
+vs n=201 sans — écart cohérent), mais ces quelques trades étaient
+suffisamment gagnants pour tirer la moyenne pondérée vers le haut plus
+que leur coût ne la tirait vers le bas. L'intuition naïve ("retirer
+l'actif le plus cher améliore le résultat") ne se vérifie pas ici —
+rapporté tel quel, pas ajusté après coup pour coller à l'attente
+initiale.
+
+### Conclusion — confirmation supplémentaire, aucun nouvel essai
+
+Conformément à l'instruction explicite d'Ismaël : **ni H3 ni H5 ne
+qualifient, même après retrait de l'actif le plus pénalisant en coût —
+confirmation supplémentaire que ces deux hypothèses ont un edge trop
+marginal pour être converti en stratégie exploitable dans leur forme
+actuelle.** Aucun nouvel essai forcé. Aucun fichier de stratégie
+modifié, aucun déploiement (la règle d'auto-déploiement de ce
+chantier — écart CDC au §3.9, identique au chantier précédent — n'a
+trouvé aucun candidat qualifiant à appliquer).
+
+### Tests, déploiement
+
+2 nouveaux scripts de recherche ponctuels (aucune écriture DB, aucun
+appel réseau) : `evaluate_refonte_sans_btc_step1.py`,
+`evaluate_refonte_sans_btc_step2.py`. Aucun changement à un module de
+production. Suite de tests complète non affectée (aucun fichier
+`src/` modifié). Aucun redémarrage de process.
+
+---
+
 ## 2026-08-25 (suite 7) — Chantier de refonte H2-H5 : diagnostic coût/edge (Phase 1) et refonte par branches (Phase 2)
 
 Pré-enregistrement complet dans `docs/HYPOTHESES.md` (25/08/2026,

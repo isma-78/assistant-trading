@@ -3196,6 +3196,18 @@ de nouvel essai forcé, conformément à l'instruction explicite.
 
 Résultat complet dans `docs/DECISIONS.md`.
 
+**Résultat (26/08/2026)** : **NI H3 NI H5 NE QUALIFIENT sans BTCUSD.**
+H5 reste négatif (-0,0816R, n=193). **H3 empire même** : -0,0389R
+(n=201) contre +0,0142R (n=205) AVEC BTCUSD — retirer l'actif le plus
+coûteux a RETIRÉ AUSSI ses quelques trades (4 sur 205) qui pesaient
+positivement sur le pool, plus que ce qu'il coûtait en cher (voir
+`docs/DECISIONS.md` pour le détail). Le multiple d'ATR ne baisse que
+marginalement (H3 : 20→17,5 ; H5 : 19→19, inchangé) car ETHUSD, pas
+loin derrière BTCUSD, prend le relais comme pire cas. **Confirmation
+supplémentaire, conformément à l'instruction : H3/H5 ont un edge trop
+marginal pour être converti en stratégie exploitable dans leur forme
+actuelle — aucun nouvel essai forcé.**
+
 ---
 
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
