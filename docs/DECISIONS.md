@@ -12,6 +12,91 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-27 (suite 2) — Pré-enregistrement fidélité (Volet 2), spec étape 3 normalisée par le spread (Volet 3), clôture honnête GOLD (Volet 4), coupe transversale gardée fermée (Volet 5)
+
+Suite de `feb9679`. Volet 1 (vérification de l'instrumentation sur les
+premiers trades démo clôturés) reste bloquant et n'a pas encore de
+données — voir entrée séparée dès qu'un trade réel aura clôturé.
+Volets 2 à 5 traités maintenant, aucun ne dépend de données forward.
+
+### Volet 2 — pré-enregistrement écrit AVANT tout regard sur le forward
+
+Fait dans `docs/HYPOTHESES.md` (27/08/2026, entrée dédiée) : design
+apparié (par trade démo clôturé, retrouver ce que le backtest aurait
+produit pour ce même signal, comparer les deux R sur la paire — jamais
+deux moyennes agrégées, à cause du biais de sélection par ordre
+d'arrivée du plafond §2.3 déjà chiffré par l'audit H2 le même jour :
+10/19 signaux éliminés par ce seul canal). n minimum 30 paires, seuil
+de décision fixé (CI 95% bootstrap par blocs calendaires excluant zéro
+ET magnitude ≥ 0,03R → simulateur infidèle, sinon fidèle). **Prérequis
+opérationnel identifié, pas encore traité** : `data/historical/*.json`
+s'arrête au 26/08/2026 — `download_historical_data.py` devra être
+relancé pour couvrir la fenêtre forward avant que la première paire
+puisse être calculée. Aucune donnée forward regardée pour écrire cette
+entrée.
+
+### Volet 3 — étape 3 : mesurer le RATIO coût de sortie / spread, jamais le coût absolu
+
+Corrige la spécification de l'étape 3 écrite le 27/08/2026 matin
+(section "Vérification 3" de l'entrée précédente) : au nouveau débit
+(~147 décisions/jour mesurées après déploiement de l'étape 1, contre
+~33/jour avant), 30 trades clôturés seront atteints en 1 à 4 jours —
+mais un pool brut de 30 R-multiples sur 8 actifs au spread hétérogène
+(0,000086 en unités de prix pour EURUSD à 61,9 pour BTCUSD, rapporté le
+25/08/2026) ne mesure rien de cohérent : un coût absolu de 0,5 point est
+négligeable sur BTCUSD, écrasant sur EURUSD.
+
+**Grandeur à mesurer, désormais fixée : `coût_sortie_mesuré /
+spread_moyen_de_l'actif`** (sans dimension, comparable et poolable entre
+actifs) — jamais le coût absolu en unités de prix ni en R directement
+tant que cette normalisation n'a pas été appliquée. `coût_sortie_mesuré`
+vient de `src.causal_decomposition` (étape 2, déjà déployée) sur les
+trades dont `trade_partials.prix_sortie_reel` est renseigné ;
+`spread_moyen_de_l'actif` = moyenne de `market_snapshots.spread` (déjà
+alimentée en direct depuis le 24/08/2026, voir §2.6) sur la même
+fenêtre. Même règle inchangée depuis le 26/08/2026 : l'absence de
+mesure n'est jamais un motif d'allègement d'un coût — si le ratio n'est
+pas mesurable pour un actif (trop peu de sorties réelles), ce couple
+reste simplement hors du pool, jamais imputé à zéro.
+
+### Volet 4 — H1/GOLD : clôture honnête, plus de "en attente"
+
+Remplace la formulation du 27/08/2026 matin ("consigné en attente de
+données futures") par une clôture explicite, chiffre et raisonnement
+inchangés : **233 trades sur ~7,5 ans (2017-05 → 2026-08) = ~31
+trades/an. Atteindre n=208 (seuil suffisant si l'effet vrai est 0,18R)
+demanderait ~6,7 ans de forward — et H1 ne trade PAS GOLD en direct
+(hors de sa liste blanche live, voir palier P2.5), l'accumulation n'a
+donc même pas commencé.** Candidat **CLOS, faute de données
+testables** — pas "en attente", une piste sans échéance concrète
+redeviendrait à tort une piste vivante dans six mois. Rouvrable
+uniquement si GOLD est un jour explicitement ajouté à la liste blanche
+live de H1 (décision distincte, non prise ici) ET qu'assez d'années de
+données démo/live s'accumulent ensuite.
+
+### Volet 5 — coupe transversale (nouveaux actifs) : gardée fermée, note seule
+
+Aucun test lancé. Noté pour mémoire : le seul axe de données encore
+totalement vierge du projet est la coupe transversale au-delà des 8
+actifs de la liste blanche (univers Capital.com plus large). Fermé tant
+que le Volet 2 (fidélité du simulateur) n'a pas rendu son verdict — si
+le backtest ne prédit pas la réalité, un balayage de N actifs sur
+backtest ne prouverait rien. S'il est un jour ouvert, ce sera par une
+**prédiction unique et directionnelle pré-enregistrée** (ex. "l'espérance
+nette de H1 croît avec la persistance de tendance de l'actif et décroît
+avec son coût/R"), jamais par un balayage exploratoire de N actifs —
+qui reproduirait exactement l'erreur de sélection post-hoc déjà
+commise sur GOLD (Volet 4 ci-dessus, m=30 couples, 2 faux positifs
+attendus sous H0).
+
+### Ce que ce chantier ne fait pas
+
+Aucun passage au réel. Aucun nouveau paramètre de stratégie. Aucun
+regard sur les données forward avant l'exécution du Volet 2. Aucun
+redémarrage de process.
+
+---
+
 ## 2026-08-27 (suite) — Déploiement étapes 0/2, vérifications puis déploiement étape 1, retrait de H2 du réel, blocage confirmé sur H1/GOLD
 
 Suite du commit `14fb4e9`, feu vert explicite d'Ismaël pour la mise en

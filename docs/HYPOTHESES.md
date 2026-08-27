@@ -3605,6 +3605,110 @@ relancé tel quel.
 
 ---
 
+## 2026-08-27 — PRÉ-ENREGISTREMENT : fidélité du simulateur de backtest, design apparié, fenêtre forward démarrant au déploiement de l'étape 1
+
+Écrit AVANT tout regard sur la moindre donnée forward (aucun trade
+démo post-déploiement n'a été inspecté au moment d'écrire cette entrée
+— voir `docs/DECISIONS.md`, la vérification d'instrumentation du même
+jour porte sur des lignes individuelles pour un contrôle de bug, jamais
+sur une distribution ou une moyenne, elle ne consomme donc pas ce
+holdout). Demande explicite d'Ismaël : la fenêtre qui commence
+maintenant est le DERNIER holdout propre du projet — 2017-2018 corrompu,
+2019→2024-06-14 brûlé par un rejeu sans filtre de date (voir
+`docs/DECISIONS.md`, Volet 4 H1/GOLD du même jour), 2024-06-14→
+aujourd'hui déjà regardé à de multiples reprises cette semaine (Phase 1,
+Branche A, diagnostics H1-H5). Doit être étiquetée avant de s'accumuler.
+
+### Ce que ce test N'EST PAS
+
+Ce n'est PAS une recherche d'edge, ni une mesure d'espérance d'aucune
+hypothèse. C'est un test de **fidélité de simulation** — même statut que
+la correction du modèle de coûts du 26/08/2026 (§2.11, ne consomme
+aucune variable de stratégie). Question unique : **le backtest
+rétrospectif prédit-il la réalité démo ?** Toutes les clôtures/décisions
+de ces deux dernières semaines (H1, H3, H4, H5, seuils invariants,
+Option B) reposent sur des chiffres de backtest dont la seule validation
+empirique à ce jour porte sur l'ENTRÉE (47 remplissages réels, 26/08/2026)
+— jamais sur la sortie, jamais sur le trajet complet d'un trade.
+
+### Pourquoi un design APPARIÉ, pas une comparaison de deux moyennes
+
+Le backtest (`backtest_engine.replay_hypothesis`) simule une position à
+la fois PAR ACTIF. Le live applique en plus le plafond d'exposition
+simultanée §2.3 (10% de l'enveloppe, TOUS actifs et hypothèses
+confondus), qui sélectionne les signaux qui deviennent des trades PAR
+ORDRE D'ARRIVÉE, jamais par mérite — chiffré le 27/08/2026 (audit
+mécanique H2, Chantier 3) : 10 signaux sur 19 (53%) éliminés par ce seul
+canal. Comparer "espérance backtest" à "espérance démo" comparerait donc
+deux populations de trades structurellement différentes — un écart
+observé ne distinguerait jamais "le simulateur ment" de "le live trade
+un sous-ensemble différent de signaux". **Le design apparié supprime ce
+biais par construction** : pour CHAQUE trade démo clôturé, on retrouve
+la décision que le backtest aurait prise pour ce MÊME signal (même
+actif, même horodatage d'entrée, même direction, même stop) et on
+compare les deux R-multiples sur cette paire précise — jamais deux
+populations agrégées.
+
+### Protocole
+
+1. **Identification de la paire** : pour un trade démo clôturé (actif,
+   `ouvert_at`, direction, `prix_entree_prevu`, `stop_loss_initial`,
+   source), rejouer EXACTEMENT la même entrée via `backtest_engine`
+   (même fonction d'entrée que la source concernée, même modèle de
+   coûts déjà en production, même résolution) sur les bougies RÉELLES
+   couvrant cette fenêtre (nécessite l'historique téléchargé jusqu'à
+   aujourd'hui — prérequis opérationnel à vérifier avant tout calcul,
+   pas encore fait : les fichiers `data/historical/*.json` actuels
+   s'arrêtent au 26/08/2026, `download_historical_data.py` devra être
+   relancé pour couvrir la fenêtre forward avant que ce protocole soit
+   exécutable).
+2. **Écart apparié** = `r_multiple_total` (démo, réel) − R que le
+   backtest aurait produit pour ce même trade (même entrée, suivi
+   jusqu'à sa propre sortie simulée sur les mêmes bougies réelles
+   suivantes). Sous "le simulateur est fidèle", cet écart a une
+   espérance nulle — aucune direction attendue a priori.
+3. **n minimum fixé AVANT tout calcul : 30 paires.** Choix : "quelques
+   dizaines" suffisent par construction (la variance de l'écart apparié
+   est structurellement plus faible que celle des R bruts — les
+   composantes communes aux deux jambes de la paire s'annulent), 30 est
+   le seuil déjà utilisé ailleurs dans le projet pour une première
+   lecture provisoire (Phase A live, `confidence_scorer`) — pas un choix
+   arbitraire nouveau.
+4. **Règle de décision, fixée maintenant** :
+   - Borne du CI à 95% (bootstrap par blocs calendaires, même fonction
+     que `evolution_engine.compute_calendar_block_bootstrap_lower_bound`,
+     appliquée ici aux écarts appariés plutôt qu'aux R bruts) qui
+     **exclut zéro** ET dont la magnitude **≥ 0,03R** (plancher de
+     matérialité, cohérent avec le plancher de bruit déjà utilisé pour
+     l'affinage le 27/08/2026 — un biais significatif mais inférieur à
+     ce plancher n'est pas actionnable, même si statistiquement réel) →
+     **SIMULATEUR DÉCLARÉ INFIDÈLE.** Conséquence : toute conclusion
+     passée basée sur un chiffre de backtest (H1, H3, H4, H5, seuils
+     invariants, garde-fou Option B) devient suspecte — priorité
+     absolue à un chantier de recalibration du simulateur (le biais de
+     remplissage des ordres limites déjà signalé comme non mesuré est
+     le premier candidat à investiguer) avant toute nouvelle conclusion
+     appuyée sur `backtest_engine`.
+   - CI incluant zéro, OU excluant zéro mais magnitude < 0,03R →
+     **SIMULATEUR DÉCLARÉ FIDÈLE** (au niveau de précision testable ici).
+     Les conclusions déjà actées restent valides, `backtest_engine`
+     continue d'être utilisé tel quel pour toute recherche future.
+   - Sous n=30 paires accumulées : **pas de verdict**, continuer à
+     accumuler, aucune conclusion intermédiaire.
+5. **Aucune analyse d'espérance sur données forward** (démo ou
+   backtest) tant que ce verdict n'est pas rendu — invariant explicite
+   de ce chantier, à respecter par toute session future.
+
+### Statut d'exécution
+
+**Pré-enregistré, non exécuté** — 0 trade démo post-déploiement
+disponible au moment d'écrire cette entrée (voir `docs/DECISIONS.md`).
+Prérequis opérationnel identifié ci-dessus (rafraîchir `data/
+historical/`) à traiter avant le premier calcul. Résultat à documenter
+dans `docs/DECISIONS.md`, jamais une modification de cette entrée.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4, #5, ou du backtest rétrospectif — jamais une modification de
 ce qui précède.*
