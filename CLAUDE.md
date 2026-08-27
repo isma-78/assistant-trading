@@ -996,6 +996,41 @@ dans `docs/DECISIONS.md`.
 - 4 scripts de recherche ponctuels, aucun module de production modifié,
   aucun redémarrage nécessaire.
 
+## Palier P3 (suite) — Session Cowork (hors VPS) : moteur d'évolution par lot (26/08/2026)
+
+Session distincte de celle qui opère sur le VPS — accès uniquement au
+dépôt local Windows d'Ismaël (device bridge), PAS à `data/historical/`
+ni au VPS. Détail complet dans `docs/DECISIONS.md`/`docs/HYPOTHESES.md`.
+
+- Demande d'Ismaël ("chaque hypothèse doit trader, analyser, ajuster, et
+  retrader") tranchée en mode **par lot statistique**, jamais par trade
+  individuel, déclenchement gardé **manuel** (pas de cron) — cohérent
+  avec les décisions déjà prises le 25/08/2026.
+- **`src/evolution_engine.py`** (nouveau, critique, 100% couvert, 45
+  tests) : généralise `scripts/evaluate_hypothesis_candidates.py`
+  (jusqu'ici lecture seule) en un moteur qui écrit réellement dans
+  `rule_changes` (le côté "écriture" n'existait pas encore, seul
+  `hypothesis_params.py` — lecture — était construit). Refuse tout
+  candidat sans justification théorique écrite (invariant #10 appliqué
+  au niveau du type). **`scripts/run_evolution_cycle.py`** (nouveau,
+  CLI) l'utilise.
+- **Chantier H1 ouvert et pré-enregistré** (`docs/HYPOTHESES.md`) :
+  US30 abandonné (Branche B, pas d'edge même brut) ; USDJPY/GBPUSD/
+  EURUSD gardés, poolés (pas de paramétrage par-actif), candidat
+  résolution HOUR_4 à tester. **Non exécuté** — `data/historical/`
+  absent du dépôt local, à lancer sur le VPS
+  (`python scripts/run_evolution_cycle.py --hypothesis H1 --dry-run`).
+- 5 ramifications ouvertes (rapport VPS 26/08/2026 19:43) triées :
+  H1/Option B confirmé être la conception d'origine du 24/08/2026, pas
+  un oubli (décision de l'en sortir à trancher explicitement par
+  Ismaël) ; fix H4 prêt à déployer (accès VPS requis) ; H1 refonte
+  tranchée (ci-dessus) ; bug régime H3 pas quantifiable sans le VPS ;
+  H2 confirmé passif.
+- Nouveau variable "tendance de marché" demandé par Ismaël : PAS
+  construit (théorie concrète manquante, budget H2/H3 sous le plafond
+  de 5 à reconfirmer par la session VPS — H4 à 4/5 et H5 à 5/5 sont
+  déjà sans marge, à ne pas toucher).
+
 ## Ce qu'il ne faut jamais faire
 
 - Passer `CAPITAL_ENVIRONMENT` en `live` manuellement — seul le verrou
@@ -1018,3 +1053,12 @@ dans `docs/DECISIONS.md`.
   écart trouvé au final, voir `docs/DECISIONS.md`) : tout test manuel de
   la plateforme à l'avenir doit se faire sur un **compte démo Capital.com
   séparé**, jamais celui-ci — pas besoin de le re-vérifier à chaque fois.
+- **Utiliser des bougies antérieures au 2019-01-01, quel que soit
+  l'actif ou la résolution** (constrainte permanente, 26/08/2026 soir,
+  voir `docs/HYPOTHESES.md`) — 2017-2018 portent 23-59% de spreads
+  négatifs (ask < bid) sur les 8 actifs de la liste blanche, mesuré sur
+  HOUR_4 mais probable sur toute résolution partageant la même source de
+  données brute Capital.com. Un spread négatif transforme un coût en
+  gain artificiel dans le modèle §2.6 — toute mesure de spread
+  historique, toute recalibration de coût, tout backtest doit démarrer
+  au 2019-01-01. Ne pas re-découvrir cette limite à chaque session.

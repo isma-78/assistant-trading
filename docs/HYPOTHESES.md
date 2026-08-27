@@ -3210,6 +3210,343 @@ actuelle — aucun nouvel essai forcé.**
 
 ---
 
+## 2026-08-26 (suite) — PRÉ-ENREGISTREMENT : chantier de refonte H1, actifs du diagnostic Phase 1
+
+Écrit avant tout nouveau calcul (le diagnostic Phase 1 lui-même, cité
+ci-dessous, a déjà tourné avant cette entrée — mesure, pas sélection,
+même statut que les diagnostics zéro-coût H2-H5 du 25/08/2026). Ouvre
+le chantier resté en attente depuis le diagnostic H1 (§2.6, garde-fou
+Option B) : demande explicite d'Ismaël, session Cowork du 26/08/2026.
+
+### Rappel du diagnostic Phase 1 (déjà exécuté, `scripts/evaluate_h1_zero_cost_diagnostic.py`)
+
+Sur les 4 couples H1 actuellement bloqués en direct par le garde-fou
+Option B (USDJPY, US30, GBPUSD, EURUSD — résolution HOUR, trailing
+Donchian(20) pur, `is_donchian_trailing=True`) : espérance BRUTE (coûts
+forcés à zéro) comparée à l'espérance nette actuelle, mêmes bougies,
+même logique d'entrée. **USDJPY/GBPUSD/EURUSD : edge brut positif**
+(coût structurel, edge réel masqué par le modèle de coût §2.6) —
+**US30 : pas d'edge réel même à coût nul.**
+
+### Décision de branche — PAR ACTIF, comme le diagnostic, mais SANS paramétrage par-actif dans le rejeu
+
+Distinction importante : la décision d'inclure ou d'exclure un actif du
+pool est prise actif par actif (comme le diagnostic) ; le rejeu de la
+Branche A, lui, reste **poolé sur les actifs retenus**, jamais un jeu de
+paramètres différent par actif — cohérent avec la décision explicite du
+25/08/2026 ("PAS de paramétrage par-actif dans ce chantier").
+
+- **US30 : Branche B, abandon sans reparamétrage** — même règle
+  pré-enregistrée que H4 (25/08/2026) : espérance brute déjà négative,
+  aucun modèle de coût ne peut rendre positif ce qui est négatif avant
+  coût. Retiré du pool de ce chantier. Reste dans la liste blanche H1
+  pour Station X / les autres mécanismes (rien d'autre ne change) — ce
+  chantier ne modifie QUE le pool utilisé par `run_evolution_cycle.py
+  --hypothesis H1`.
+- **USDJPY, GBPUSD, EURUSD : Branche A, refonte** — un edge brut réel
+  existe, le problème est structurellement le coût, exactement le
+  diagnostic qui a mené H3/H5 à leur propre Branche A le 25/08/2026.
+
+### Candidat — résolution HOUR_4, justification théorique écrite avant tout calcul
+
+**Théorie** : le coût par trade (spread + financement, §2.6) est
+sensiblement fixe en valeur absolue par franchissement, alors qu'un
+stop Donchian(20) calculé sur des bougies 4h est mécaniquement plus
+large qu'un stop calculé sur des bougies 1h (canal de 20 bougies plus
+large en temps couvert) — le ratio coût/R devrait baisser, au prix d'un
+débit de trades plus faible. **Jamais testé pour H1** avant cette
+entrée (H1 exclue de tous les chantiers H2-H5 par construction) —
+contrairement à H3/H5 où cet axe timeframe a déjà été testé et a déjà
+échoué : pas une répétition d'un test déjà négatif, une première mesure
+pour H1.
+
+- **A (référence)** : configuration actuelle inchangée (résolution
+  HOUR, Donchian(20), trailing pur).
+- **B_HOUR_4** : résolution d'entrée HOUR_4 uniquement, régime/canal
+  Donchian(20) inchangés en nombre de bougies (donc mécaniquement plus
+  large en temps), TP inchangé (H1 n'a pas de TP, trailing pur).
+
+**Un seul candidat non-référence (m=2 avec 'A')** — pas de correction
+Bonferroni au-delà de m=2, cohérent avec la discipline de prudence déjà
+appliquée aux cycles H4/H5 (un seul nouvel axe à la fois).
+
+### Découpage temporel, seuils — identiques à tous les chantiers précédents
+
+CUTOFF `2025-12-01T00:00:00` (entraînement < cutoff, validation ≥
+cutoff), seuils `PHASE_B_MIN_TRADES_BACKTEST` (150) sur l'entraînement,
+`PHASE_A_MIN_TRADES_BACKTEST` (60) sur la validation, un seul essai de
+validation pour le candidat retenu sur l'entraînement seul — voir
+`src/evolution_engine.py` (nouveau, construit dans cette même session,
+généralise mécaniquement ce protocole).
+
+### Déploiement si qualifié
+
+**Automatique** (`rule_changes.statut='applique'` directement), même
+écart CDC déjà assumé pour H2-H5 depuis le 25/08/2026 — pas une
+nouvelle dérogation. `hypothesis_params.get_resolution_override`
+existe déjà et lit `H1.resolution_entree` ; `trend_executor.py` doit
+être redémarré pour qu'un override devienne effectif (jamais en cours
+de run, invariant #4) — geste manuel, jamais automatique lui non plus.
+
+### Ce que ce chantier NE fait PAS
+
+- Ne touche pas au pool Station X, ni à GOLD/US100/BTCUSD/ETHUSD pour
+  H1 (hors périmètre du diagnostic Phase 1, qui ne portait que sur les
+  4 couples bloqués par Option B).
+- Ne réintroduit pas de paramétrage par-actif.
+- Ne retire pas H1 du garde-fou Option B (question séparée, non
+  tranchée ici — voir `docs/DECISIONS.md`, 26/08/2026).
+
+### Statut d'exécution
+
+**Pré-enregistré, PAS exécuté** — `data/historical/` n'existe que sur
+le VPS, absent du dépôt local utilisé pour écrire cette entrée (voir
+`docs/DECISIONS.md`). À exécuter sur le VPS :
+`python scripts/run_evolution_cycle.py --hypothesis H1 --dry-run`
+(puis sans `--dry-run` si le rapport qualifie). Résultat à documenter
+dans une entrée séparée, jamais une modification de celle-ci.
+
+---
+
+## 2026-08-26 (suite 2) — PRÉ-ENREGISTREMENT : H3/HOUR_4, test confirmatoire unique sur hors-échantillon pur (2019-2024)
+
+Chantier prioritaire demandé explicitement par Ismaël, distinct du
+chantier H1/HOUR_4 ci-dessus (**celui-ci est déclaré CADUC par Ismaël,
+non exécuté, non construit dessus — superseded par une entrée dédiée
+future**). Portée : H3 uniquement, résolution HOUR_4 uniquement, aucun
+autre axe, aucun nouveau paramètre de stratégie (déclencheur MA200 +
+Donchian(20) + confirmation de régime croisée strictement inchangé,
+budget de variables §2.11 non consommé).
+
+**Note de séquencement, honnête** : les critères ci-dessous (fenêtres,
+seuil MDE, règle de décision) ont été fixés par échange écrit avec
+Ismaël AVANT tout calcul sur le hors-échantillon — mais cette entrée
+elle-même n'a été committée dans ce fichier qu'après l'exécution du
+test (rapportée avec le résultat dans `docs/DECISIONS.md`), pas avant
+comme la discipline du chantier l'exige littéralement. Écart de
+procédure assumé et signalé, pas caché : la substance du
+pré-enregistrement (règle mécanique, aucune marge d'interprétation au
+moment de voir le résultat) a été respectée, la forme (écrit dans ce
+fichier avant calcul) non.
+
+### Trois constats vérifiés avant d'agir (revue quantitative externe d'Ismaël)
+
+1. **Puissance statistique** : MDE = 2,485×sigma/√n (95% unilatéral,
+   80% puissance). Confirmé par calcul indépendant : à n=150, sigma=1,
+   MDE=0,203R ; les espérances brutes M15 de H3 (+0,0237R) et H5
+   (+0,0139R) auraient exigé ~11 000 et ~32 000 trades. Toute la
+   recherche H3-H5 de la semaine (M15, n≤~450 par couple) portait sur
+   des effets 10 à 15× sous son propre seuil de détection.
+2. **HOUR_4 rejeté sur la taille, jamais le mérite** : +0,1341R (n=121,
+   25/08, avec BTCUSD) et +0,1350R (n=101, 26/08, sans BTCUSD) — les
+   deux fois rejeté explicitement sur n<`PHASE_B_MIN_TRADES_BACKTEST`
+   (150), jamais sur le signe.
+3. **Le stop ATR×20 a détruit l'échantillon** (Branche A, étape 2) :
+   n 2934→205 (-93%), MDE 0,046R→0,174R. Axe abandonné, pas rejoué ici.
+
+Les trois confirmés par calcul indépendant — aucun n'était faux.
+
+### Levier 1 (historique étendu) — suffisant, Levier 2 non nécessaire
+
+`scripts/download_historical_data.py --resolutions HOUR_4
+--max-days-back 4000` (option ajoutée, comportement par défaut
+inchangé) : limite RÉELLE Capital.com (`error.prices.not-found`),
+identique sur les 8 actifs : **2017-01-29** (vs les ~2 ans utilisés
+jusqu'ici). Profondeur obtenue : GOLD 14797, US100 14765, US30 14756,
+EURUSD 14980, GBPUSD 14901, USDJPY 14903, BTCUSD 20373, ETHUSD 20327
+bougies. Largement suffisant — Levier 2 (élargir l'univers d'actifs)
+non nécessaire tant que le Levier 1 suffit (voir porte de puissance
+ci-dessous, confirmé après coup : sigma mesuré 1,0668 < 1,17, seuil
+au-delà duquel Ismaël avait indiqué que le Levier 2 redeviendrait
+nécessaire).
+
+**Vérification bid/ask obligatoire (Ismaël) : 2017-2018 corrompus,
+universellement sur les 8 actifs.** Spread réel (`openPrice.ask -
+openPrice.bid`) mesuré année par année : 2017 a 23-59% de spreads
+NÉGATIFS selon l'actif (ex. US30 moyenne -413, BTCUSD -830 — un ask
+sous le bid, impossible physiquement, transforme le coût en gain
+artificiel dans le modèle §2.6) ; 2018 reste contaminé (17-24% de
+spreads négatifs sur la plupart des actifs) ; 2019 est propre partout
+(0-1 point négatif sur ~1600-2200, moyennes cohérentes avec 2024+).
+Bid/ask sont bien DISTINCTS (pas de bougies synthétiques) — le problème
+est la fiabilité du couple, pas son absence.
+
+**Conséquence, fenêtre corrigée** (écart au découpage initialement
+proposé par Ismaël, 2017-01-29 → 2024-06-13, à cause de cette
+découverte, validé par échange écrit avant tout calcul sur le
+hors-échantillon) :
+- **2017-01-29 → 2018-12-31 : EXCLUE**, aucune donnée de coût fiable.
+- **2019-01-01 → 2024-06-13 : HORS-ÉCHANTILLON PUR**, jamais consultée
+  par aucune session cette semaine. Un seul passage.
+- **2024-06-14 → aujourd'hui : DONNÉES BRÛLÉES**, déjà regardées à
+  plusieurs reprises cette semaine (Branche A, Phase 1, etc.) — ne
+  servent plus à rien statistiquement pour ce test, sauf à estimer
+  sigma (paramètre de nuisance, pas l'effet lui-même, voir ci-dessous).
+
+### Porte de puissance — règle de décision fixée AVANT de connaître sigma/n
+
+`scripts/_measure_h3_hour4_sigma.py` (ponctuel, aucune écriture DB) :
+sigma(R) mesuré sur les trades H3/HOUR_4 de la fenêtre BRÛLÉE
+(2024-06-14→2025-12-01, jamais le hors-échantillon — sigma est un
+paramètre de nuisance, l'estimer sur des données déjà vues préserve le
+holdout intact). n reproduit=112 (vs 121 documenté le 25/08 — écart dû
+à la borne basse exacte du calcul, 2024-06-14 ici contre l'historique
+HOUR_4 disponible à l'époque, ~2024-05-15 ; moyenne quasi identique,
++0,1345R vs +0,1341R documenté, cohérence confirmée).
+
+n projeté pour le hors-échantillon (2019-01-01→2024-06-13), **deux
+méthodes indépendantes convergentes** : (a) taux de trades/jour
+calendaire mesuré sur la fenêtre brûlée (112/535j=0,2094/j) × durée du
+hors-échantillon (1991j) = 417 ; (b) ratio du nombre de bougies HOUR_4
+sur les 8 actifs entre les deux fenêtres (76291/20503=3,721) × n
+brûlé (112) = 417. **n projeté = 417.**
+
+**Règle de décision, fixée avant tout calcul sur le holdout** : si
+MDE(sigma mesuré, n=417) < 0,1341R → test valide, un seul essai, résultat
+rapporté quel qu'il soit ; si ≥ 0,1341R → test sous-dimensionné, ARRÊT,
+holdout jamais consulté. Aucune interprétation d'un quasi-succès comme
+succès partiel dans les deux cas.
+
+**Calcul** : sigma mesuré=1,0668 ; MDE=2,485×1,0668/√417=**0,1298R**
+< 0,1341R (target) → **test VALIDE, marge de seulement 3,3%** (bien
+inférieure à la marge de 1,8× initialement espérée — signalé comme tel
+avant de lancer, pas après). Sigma critique correspondant (au-delà
+duquel le test aurait échoué la porte) : 1,102 — sigma mesuré (1,0668)
+en dessous, donc Levier 2 confirmé non nécessaire.
+
+### Protocole du test unique
+
+`scripts/_h3_hour4_holdout_test.py` (ponctuel, aucune écriture DB,
+aucun appel réseau). H3, 8 actifs pooled (avec BTCUSD — l'exclusion
+BTCUSD était un axe séparé, non repris ici), résolution HOUR_4, coût
+§2.6 inchangé (nette, slippage_multiplier=1.0), confirmation de régime
+croisée US30/US100 (bougies de la même fenêtre uniquement, aucun
+lookback antérieur à 2019-01-01 — accepte un léger sous-régime
+d'amorçage MA200/Donchian en tout début de fenêtre plutôt que de
+toucher aux données 2018 contaminées, même pour du warm-up d'indicateur
+seul). Fenêtre : 2019-01-01T00:00:00 → 2024-06-13T00:00:00, UN SEUL
+passage. Espérance nette année par année rapportée obligatoirement
+(2018 choc de vol hors-fenêtre, 2020 COVID et 2022 choc de taux
+couverts). Aucun réglage, aucun candidat alternatif, aucune répétition.
+
+Résultat complet dans `docs/DECISIONS.md`.
+
+---
+
+## 2026-08-26 (suite 3) — PRÉ-ENREGISTREMENT : recalibration du modèle de coûts §2.6 sur les exécutions réelles
+
+Chantier prioritaire demandé explicitement par Ismaël. **Correction de
+FIDÉLITÉ DE SIMULATION, pas un paramètre de stratégie** : ne consomme
+aucune variable au budget §2.11 — `backtest_engine.py` modélise
+l'exécution d'ordres déjà fixés par §2.6/§2.8, elle ne change aucun
+déclencheur, stop ou TP d'aucune hypothèse. À ne jamais recompter dans
+un futur budget de variables.
+
+### Vérification du défaut AVANT toute mesure (demandée avant la méthode)
+
+Confirmé dans le code (`src/backtest_engine.py`) : `entry_execution_
+price` facture `open_ask + spread×1,0` (= mid + 1,5 spread) ;
+`exit_execution_price` facture `level − spread/2 − spread×1,0` (= level
+− 1,5 spread). Total 3,0 spreads/aller-retour, comptés depuis le mid.
+
+**Lecture d'Ismaël partiellement confirmée, partiellement infirmée** :
+- **Entrée = ordre LIMITE, confirmé** (`executor.open_signal` ->
+  `client.place_limit_order`, §2.8). Un ordre limite ne peut pas
+  s'exécuter plus mal que son prix — charger un slippage défavorable
+  dessus n'est pas justifiable.
+- **Sortie TP = PAS un ordre limite qui repose chez le broker,
+  INFIRMÉ.** Vérifié dans `executor._apply_management_action` : TP1,
+  TP2, TP final ET stop utilisent tous le MÊME mécanisme,
+  `client.close_position(deal_id, size=...)` — un ordre MARCHÉ envoyé
+  réactivement par le bot après détection (polling), jamais un ordre
+  limite/TP posé à l'avance chez le broker. Seule exception : un stop
+  GARANTI (`guaranteed_stop=True`) s'exécute automatiquement côté
+  broker au prix exact garanti, sans polling (confirmé par l'incident
+  du 21/08/2026, `error.not-found.dealId` documenté). **Les deux jambes
+  de sortie (TP et stop non garanti) sont donc structurellement de même
+  nature — market — et retiennent, à ce stade, la même justification
+  pour un slippage possible.** Seule l'entrée est prouvée non-slippable.
+
+**Découverte supplémentaire, bloquante pour la mesure des sorties** :
+`trade_partials.prix_sortie` est TOUJOURS `action.exit_price`, calculé
+par `_evaluate_position_management` à partir des bougies AVANT l'appel
+`close_position` — la valeur de retour de cet appel (qui contient le
+prix réel côté broker) n'est jamais capturée ni écrite en base. **Le
+système n'enregistre donc aucun prix de sortie réel, ni en démo ni en
+réel, structurellement, indépendamment du compte utilisé.** Mesurer un
+"écart réel" sur les sorties depuis la base actuelle renverrait
+toujours exactement zéro par construction — un zéro qui ne dit rien sur
+le slippage réel, à ne surtout pas confondre avec une mesure.
+Uniquement le côté ENTRÉE (`trades.prix_entree_reel`, alimenté par une
+lecture réelle de `get_open_positions()`) est mesurable.
+
+### Méthode de mesure (le seul côté mesurable : l'entrée)
+
+`trades.prix_entree_reel` vs `trades.prix_entree_prevu` (prix limite
+demandé) et vs le mid au signal (`market_snapshots.bid`/`ask` du même
+`signal_id`) — n, médiane, moyenne, écart-type, p90, par actif et en
+unités de fraction du spread moyen de l'actif. **Caveat obligatoire,
+répété ici pour qu'aucune session future ne l'oublie** : ces fills
+viennent d'un compte DÉMO — la mesure est une BORNE BASSE du coût réel,
+jamais un calibrage au plus juste.
+
+### Règle de décision, fixée AVANT de voir un seul chiffre
+
+- **Jambe ENTRÉE** (mesurable, structurellement non-slippable) : coût
+  retenu = MAX(0, écart moyen défavorable mesuré). Aucun crédit pour un
+  remplissage favorable même si mesuré (rester conservateur, ne jamais
+  calibrer au plus juste comme demandé). Si un écart défavorable non
+  nul est mesuré (anomalie potentielle : gap, requote), il sera
+  multiplié par 2 comme marge de sécurité démo->réel avant d'entrer
+  dans le modèle — même règle que ci-dessous, pour rester cohérent.
+- **Jambes TP et STOP non garanti** (non mesurables, structurellement
+  de même nature market) : **aucune réduction du coût actuel** —
+  l'absence de mesure n'est jamais un motif pour alléger un coût, dans
+  aucun sens. Le terme `spread × slippage_multiplier` existant sur
+  `exit_execution_price` est conservé TEL QUEL (inchangé). Seul
+  `entry_execution_price` est corrigé.
+- **Stop GARANTI** : déjà sans slippage par construction contractuelle
+  (le broker garantit le prix exact) — `exit_execution_price` ne
+  distingue pas aujourd'hui garanti/non garanti ; cette distinction est
+  hors périmètre de ce chantier (le modèle actuel, conservateur, majore
+  légèrement le coût des sorties sur stop garanti — écart signalé, pas
+  corrigé ici, pas un défaut prioritaire puisqu'il va dans le sens
+  conservateur).
+- Si l'écart mesuré sur l'entrée est nul partout (résultat probable et
+  attendu, un ordre limite démo remplit typiquement exactement à son
+  niveau) : cela CONFIRME que retirer le terme de slippage sur
+  `entry_execution_price` est justifié, pas un signe que la donnée
+  démo est inexploitable — contrairement aux jambes de sortie, ici
+  l'absence de slippage mesuré est la conclusion structurellement
+  attendue, pas un artefact d'instrumentation.
+
+### Conséquence rétroactive, actée avant de calculer quoi que ce soit
+
+Tout chiffre NET produit entre le 24/08 et le 26/08 (Phase 1 diagnostic
+H2-H5, Branche A H3/H5 toutes étapes, holdout H3/HOUR_4 de ce soir,
+toute donnée `*_backtest` persistée) est invalidé par ce changement —
+listé, pas effacé, dans `docs/DECISIONS.md`. Le tableau coût/R du 25/08
+sera au minimum reproduit avec le modèle corrigé.
+
+### Contrainte permanente, pas une note de passage (Ismaël, 26/08 soir)
+
+**Toute mesure de spread historique, toute recalibration, tout backtest
+démarre au 2019-01-01, jamais avant.** Les bougies 2017-2018 portent
+23-59% de spreads négatifs (ask < bid) sur les 8 actifs — un spread
+négatif transforme un coût en gain artificiel dans ce modèle. Règle
+valable pour toute session future, pas seulement ce chantier.
+
+### Étapes suivantes (voir `docs/DECISIONS.md` pour les résultats)
+
+Mesure -> correction de `backtest_engine.py` (100% de couverture,
+tests écrits avec le code) -> régénération des données `*_backtest` ->
+comparaison des couples (hypothèse, actif) qui changent de statut côté
+garde-fou Option B -> **aucun déploiement sans l'accord explicite
+d'Ismaël** (ce changement modifie le comportement réel des ordres en
+direct, écart assumé à la règle d'auto-déploiement du 25/08).
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4, #5, ou du backtest rétrospectif — jamais une modification de
 ce qui précède.*

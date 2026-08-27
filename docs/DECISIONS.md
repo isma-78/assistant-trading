@@ -12,6 +12,427 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-26 (suite 4) — Recalibration du modèle de coûts §2.6 : défaut confirmé (partiellement), corrigé, données Option B régénérées en isolation (PAS déployé)
+
+Pré-enregistrement complet dans `docs/HYPOTHESES.md` (26/08/2026, suite
+3) — méthodologie, règle de décision fixée avant tout chiffre, à lire
+en premier. Chantier prioritaire d'Ismaël. **Correction de fidélité de
+simulation, aucune variable de stratégie consommée (§2.11).**
+
+### Défaut confirmé, mais pas exactement comme décrit — lecture corrigée
+
+`entry_execution_price`/`exit_execution_price` facturaient bien 3,0
+spreads/aller-retour comme démontré par Ismaël. **Entrée = ordre limite
+confirmé** (§2.8) — un ordre limite ne peut pas s'exécuter plus mal que
+son prix, le slippage chargé dessus n'était pas justifié. **Mais la
+sortie TP N'EST PAS un ordre limite qui repose chez le broker,
+contrairement à la lecture d'Ismaël** : vérifié dans
+`executor._apply_management_action`, TP1/TP2/TP final ET stop non
+garanti utilisent tous `client.close_position(deal_id, ...)` — un ordre
+MARCHÉ envoyé réactivement après détection par polling, jamais un ordre
+limite posé à l'avance. Seul un stop GARANTI s'exécute automatiquement
+côté broker au prix exact (confirmé par l'incident du 21/08/2026). Les
+deux jambes de sortie (TP et stop non garanti) restent donc de nature
+market, structurellement slippables — **seule l'entrée a été corrigée**.
+
+**Découverte bloquante pour toute mesure des sorties** : le prix réel
+de fermeture n'est jamais capturé en base
+(`trade_partials.prix_sortie` = valeur théorique pré-calculée, la
+réponse de `close_position` n'est jamais lue) — aucune mesure empirique
+possible sur les sorties, ni en démo ni en réel. Conformément à la
+règle pré-enregistrée : aucune réduction de coût sur ces jambes,
+l'absence de mesure n'étant jamais un motif d'allègement.
+
+### Mesure sur la seule jambe mesurable — entrée, 47 remplissages réels (compte démo)
+
+`trades.prix_entree_reel` vs `trades.prix_entree_prevu` (prix limite
+demandé), trades réels uniquement (`source NOT LIKE '%_backtest'`) :
+**0/47 remplissages pires que le prix limite demandé** (36 meilleurs,
+11 exacts), mean=-0,347 (unités de prix, hétérogènes par actif),
+confirmant à 100% l'argument structurel. Conformément à la règle
+pré-enregistrée (aucun crédit pour le favorable, coût retenu = MAX(0,
+écart défavorable) = **0**) : le terme de slippage est retiré de
+`entry_execution_price`, la base (`open_ask`/`open_bid`, demi-spread
+structurel) reste inchangée. Caveat démo répété : ce zéro confirme la
+structure (attendu), ce n'est pas un signe d'inexploitabilité de la
+donnée démo — contrairement aux jambes de sortie où le zéro serait un
+artefact d'instrumentation, pas une mesure.
+
+### Correctif appliqué — `src/backtest_engine.py`, 100% de couverture
+
+`entry_execution_price(direction, bar)` : perd son paramètre
+`slippage_multiplier` (n'a plus de sens sur un ordre limite), retourne
+`open_ask`/`open_bid` sans ajout. `exit_execution_price` **inchangée**
+(sorties toujours market, coût conservé). Seul appelant interne mis à
+jour (`replay_hypothesis`). Tests réécrits en même temps
+(`tests/test_backtest_engine.py`) : 2 tests remplacés (remplissage
+exact au bid/ask, aucun slippage), 1 test obsolète supprimé (multiplicateur
+de slippage sur l'entrée n'existe plus). **894 tests passent, 100% de
+couverture sur `backtest_engine.py` (158/158 lignes) vérifiée
+explicitement après modification.**
+
+### Régénération des données Option B — en environnement ISOLÉ, PRODUCTION NON TOUCHÉE
+
+Conformément à la consigne explicite ("ne déploie rien sans mon
+accord"), la régénération n'a PAS touché `data/assistant_trading.db` en
+production : environnement `/home/assistant/costfix_staging/` créé sur
+le VPS (code corrigé + copie de la base + `data/historical/` en lien
+symbolique, jamais le répertoire live), purge des lignes
+`source LIKE '%_backtest'` sur cette COPIE uniquement, régénération via
+`scripts/run_retrospective_backtest.py --hypothesis H1,H2,H3,H4,H5` sur
+la copie. Snapshot avant/après via `scripts/_option_b_status_snapshot.py`
+(nouveau, lecture seule) sur les 40 couples (5 hypothèses × 8 actifs) :
+
+**2 couples changent de statut, bloqué -> autorisé, aucun dans l'autre
+sens** :
+- **H1/BTCUSD** : -0,0148R -> **+0,0229R** (n=381) — débloqué.
+- **H4/GOLD** : -0,0463R -> **+0,0004R** (n=382) — débloqué (quasiment
+  à zéro, à surveiller si ce couple redevient négatif au prochain
+  rafraîchissement, ne pas le traiter comme un edge solide).
+
+**Tous les autres couples déjà bloqués le restent** — le modèle de
+coûts était réellement biaisé, mais n'explique qu'une fraction des
+rejets Option B sur H1 : USDJPY, US30, EURUSD, GBPUSD, US100 restent
+négatifs et bloqués après correction (USDJPY passe de -0,0226R à
+-0,0078R, proche de zéro mais toujours négatif). **Les bilans pondérés
+H3/H4/H5 restent tous négatifs après correction** (H3 -0,1012R->
+-0,0721R, H4 -0,2878R->-0,2352R, H5 -0,2092R->-0,1600R) — **aucune des
+trois clôtures de cette semaine n'est remise en cause**, seule
+l'ampleur du négatif diminue.
+
+`/home/assistant/costfix_staging/` laissé en place sur le VPS pour
+inspection ou réutilisation, n'affecte rien en production. Aucun
+déploiement, aucun redémarrage de process.
+
+### Conséquence rétroactive — chiffres NET invalidés, listés
+
+Tout chiffre NET (pas les BRUTS, indépendants du coût) produit entre le
+24/08 et le 26/08 est invalidé par ce changement, non effacé :
+- Phase 1 diagnostic H2-H5 du 25/08 (tableau coût/R complet) —
+  **reproduit ci-dessous avec le modèle corrigé**.
+- Branche A H3/H5, étapes 1-3 (résolution HOUR/HOUR_4, stop ATR calibré,
+  rejeu sans BTCUSD) — non reproduites (clôtures déjà actées, confirmées
+  toujours valides par les bilans pondérés ci-dessus).
+- Diagnostic zéro-coût H1 du 26/08 (USDJPY/GBPUSD/EURUSD edge brut
+  positif, US30 non) — le BRUT est inchangé par construction, non
+  affecté, conclusion de branche intacte.
+- Holdout H3/HOUR_4 de ce soir (n=496, net=+0,0130R) — verdict
+  d'échec inchangé (voir contrôle forensique ci-dessous), non rejoué
+  (un seul essai de validation, déjà consommé, jamais un second).
+- Toutes les données `*_backtest` en production (alimentant Option B
+  en direct) — régénération faite en isolation ci-dessus, **pas encore
+  appliquée en production, en attente d'accord**.
+
+### Tableau coût/R du 25/08, reproduit avec le modèle corrigé
+
+`scripts/evaluate_zero_cost_diagnostic.py` (inchangé, corrigé
+automatiquement par le fix de `backtest_engine.py`), même
+configuration (2 ans, 8 actifs, coûts réels vs nuls) :
+
+**Bilans pondérés (n≥10)** : H2 aucune donnée exploitable ; **H3
+net=-0,0721R** (était -0,1012R) / brut=+0,0237R inchangé, n=2908 (était
+2934, écart mineur dû au prix d'entrée légèrement différent changeant
+quelques validations à la marge) ; **H4 net=-0,2352R** (était -0,2878R)
+/ brut=-0,0199R inchangé, n=4151 ; **H5 net=-0,1600R** (était -0,2092R)
+/ brut=+0,0139R inchangé, n=3109. Le BRUT ne bouge jamais (indépendant
+du modèle de coût, contrôle de cohérence) — seul le NET s'améliore,
+d'environ +0,03 à +0,05R selon le couple, jamais assez pour inverser
+une clôture déjà actée.
+
+### Contrôle forensique gratuit — H3/HOUR_4, brut vs net déjà connu
+
+Demandé explicitement, **PAS un nouveau test, ne rouvre pas le
+verdict** : espérance BRUTE (coûts nuls, `slippage_multiplier=0.0` +
+bougies synthétiques bid=ask=mid) sur EXACTEMENT la même fenêtre
+holdout [2019-01-01, 2024-06-13) :
+
+**n=489, mean_BRUT=+0,1450R** (vs n=496, mean_NET=+0,0130R déjà
+rapporté, calculé avec l'ANCIEN modèle non corrigé — non recalculé ici,
+ce chiffre net reste celui qui fait foi pour le verdict). Écart
+brut-net ≈ 0,132R/trade. **Diagnostic : une bonne part de l'échec vient
+bien du coût** (comme pour H3/H4/H5 sur M15), mais le NET connu
+(+0,0130R, sous l'ancien modèle) était déjà loin de la cible
+pré-enregistrée (+0,1341R) — même avec le modèle de coût corrigé, le
+gain attendu (~1 spread de moins par aller-retour sur l'entrée
+seulement, un ordre de grandeur bien inférieur à l'écart de 0,132R
+observé ici, qui inclut aussi le coût de sortie jamais corrigé) ne
+suffirait vraisemblablement pas à combler l'écart. **H3/HOUR_4 reste
+clos, conformément à la règle "un seul essai, aucune réouverture".**
+
+### Tests, déploiement
+
+`tests/test_backtest_engine.py` mis à jour avec le code (2 tests
+réécrits, 1 supprimé), 894 tests passent, 100% de couverture sur
+`backtest_engine.py` vérifiée. 4 nouveaux scripts ponctuels (aucun
+n'écrit sur la base de production : `_option_b_status_snapshot.py`
+lecture seule, les 3 autres tournent contre la copie isolée ou en
+mémoire pure). **Aucun déploiement** : `src/backtest_engine.py` corrigé
+reste committé côté dépôt local uniquement à ce stade (voir note git
+plus bas), jamais poussé sur le VPS live, jamais utilisé par un des 6
+process en production — écart explicite à la règle d'auto-déploiement
+du 25/08, demandé par Ismaël pour ce chantier spécifiquement.
+
+### Note git, inchangée depuis l'entrée précédente
+
+`.git/index.lock` toujours présent (session Cowork parallèle ou résidu
+figé) — aucun commit tenté sur les fichiers partagés
+(`CLAUDE.md`/`docs/HYPOTHESES.md`/`docs/DECISIONS.md`). Le fix de
+`src/backtest_engine.py` et les scripts ponctuels associés sont propres
+et prêts à committer séparément dès que le lock est résolu.
+
+---
+
+## 2026-08-26 (suite 3) — H3/HOUR_4 : historique étendu à 2017, données 2017-2018 corrompues, test confirmatoire unique NÉGATIF
+
+Pré-enregistrement complet dans `docs/HYPOTHESES.md` (26/08/2026, suite
+2) — à lire en premier pour la méthodologie, les 3 constats vérifiés et
+la règle de décision fixée avant calcul. Chantier prioritaire
+d'Ismaël, session VPS (accès `data/historical/` et base de production).
+**Distinct et sans lien avec le chantier H1/HOUR_4 de la session Cowork
+ci-dessous, déclaré CADUC par Ismaël — non exécuté, non touché.**
+
+### Levier 1 — historique réel 4-5× plus profond que supposé
+
+`error.prices.not-found` réel (jamais un plafond artificiel) atteint le
+**2017-01-29 sur les 8 actifs**, contre les ~2 ans utilisés toute la
+semaine (plafond `SAFETY_MAX_DAYS_BACK=800` jamais franchi jusqu'ici sur
+HOUR_4 spécifiquement — supposition non vérifiée, maintenant vérifiée).
+`scripts/download_historical_data.py` : ajout d'un paramètre
+`--max-days-back` (défaut = comportement inchangé) pour ce test ponctuel,
+sans toucher au comportement par défaut des autres résolutions déjà
+mesurées (~730j réels).
+
+**Vérification bid/ask (obligatoire, Ismaël) : 2017 et 2018 corrompus,
+universellement sur les 8 actifs** — spreads NÉGATIFS sur 23-59% des
+bougies 2017 (ask < bid, impossible, ex. US30 moyenne -413, BTCUSD
+-830), 17-24% encore en 2018 ; 2019+ propre partout (0-1 point négatif
+sur ~1600-2200, cohérent avec le spread 2024+ déjà mesuré). Bid/ask
+distincts (pas de bougies synthétiques) — le problème est la fiabilité
+du couple, pas son absence. **Fenêtre corrigée en conséquence** (écart
+au découpage initialement proposé par Ismaël, validé par échange écrit
+avant tout calcul sur le hors-échantillon) : hors-échantillon pur
+ramené de [2017-01-29, 2024-06-13) à **[2019-01-01, 2024-06-13)**,
+2017-2018 purement exclue (ni entraînement, ni test).
+
+### Porte de puissance — sigma mesuré sur données brûlées, gate franchie de justesse
+
+sigma(R)=**1,0668** mesuré sur H3/HOUR_4, fenêtre brûlée
+2024-06-14→2025-12-01 (n=112, moyenne +0,1345R — cohérent avec le
++0,1341R documenté le 25/08, écart de n dû à la borne de calcul exacte).
+n projeté pour le hors-échantillon corrigé : **417**, par deux méthodes
+indépendantes convergentes (taux de trades/jour calendaire, et ratio du
+nombre de bougies HOUR_4 sur les 8 actifs entre les deux fenêtres — les
+deux donnent 417 à la bougie près). **MDE=2,485×1,0668/√417=0,1298R
+< 0,1341R (cible) → test valide, mais marge de seulement 3,3%**, très
+inférieure au 1,8× espéré initialement — signalé avant de lancer le
+test, pas après. Sigma critique 1,102, sous le sigma mesuré 1,0668 :
+confirmé, **Levier 2 (élargir l'univers d'actifs) non nécessaire**.
+
+### Résultat du test unique — NÉGATIF, un seul passage, aucune répétition
+
+`scripts/_h3_hour4_holdout_test.py`, fenêtre [2019-01-01, 2024-06-13),
+H3, 8 actifs pooled (avec BTCUSD), coût §2.6 inchangé, régime croisé
+inchangé, aucun réglage :
+
+**n=496 (réel, contre 417 projeté), moyenne=+0,0130R, stdev=1,0453,
+SE=0,0469.** Très loin de la cible +0,1341R — l'IC à 95%
+(+0,0130 ± 1,96×0,0469 = [-0,0789R ; +0,1049R]) exclut même la borne
+haute de l'effet recherché. Avec le n réel (496, meilleur que projeté),
+le MDE atteint est 0,1167R — encore plus fin que prévu — et le résultat
+observé (+0,0130R) reste très en dessous, ce n'est pas un résultat
+"limite" faute de puissance, c'est un résultat franchement nul avec une
+puissance confirmée suffisante.
+
+**Par actif** : GOLD -0,0217R (n=49), US100 +0,0530R (n=64), US30
++0,0488R (n=58), EURUSD -0,1844R (n=64), GBPUSD -0,0534R (n=51), USDJPY
+-0,0910R (n=41), BTCUSD +0,1252R (n=84), ETHUSD +0,1064R (n=85) — signe
+mixte, crypto porte l'essentiel du positif, FX majoritairement négatif
+(même patron que toute la semaine sur les autres hypothèses).
+
+**Par année (obligatoire, non-stationnarité)** : 2019 -0,0419R (n=85),
+**2020 +0,2112R (n=100)**, **2021 -0,2337R (n=91)**, 2022 +0,0307R
+(n=95), 2023 +0,0177R (n=90), 2024 (partiel, 5,5 mois) +0,1620R (n=35).
+**Signe instable d'une année sur l'autre, amplitude ±0,23R — le
++0,1341R découvert sur la fenêtre brûlée n'est pas un edge stable, c'est
+vraisemblablement un artefact de petit échantillon (n=112-121) amplifié
+par un sous-régime favorable (2020/2024), pas une caractéristique
+structurelle de H3/HOUR_4.**
+
+### Conclusion — échec, pas un quasi-succès, aucun nouvel essai
+
+Conformément à la règle fixée avant calcul : un résultat sous le seuil
+est un échec, pas un encouragement, quelle que soit sa proximité avec
+zéro. **H3/HOUR_4 ne réplique pas hors-échantillon. Axe clos, un seul
+essai de validation consommé, aucune répétition, aucun réglage
+alternatif tenté.** H3 reste sur MINUTE_15, aucun changement de
+résolution. Ceci s'ajoute à la confirmation déjà actée le 26/08 (rejeu
+sans BTCUSD) : H3 n'a pas d'edge exploitable identifié cette semaine,
+sur aucun des axes essayés (résolution M15/HOUR/HOUR_4, stop ATR,
+retrait BTCUSD).
+
+### Écart de procédure signalé, pas caché
+
+Le pré-enregistrement `docs/HYPOTHESES.md` (règles, fenêtres, seuil MDE,
+règle de décision mécanique) a été fixé par échange écrit avec Ismaël
+avant tout calcul sur le hors-échantillon — mais committé dans le
+fichier après l'exécution du test, pas avant comme la discipline
+l'exige littéralement. La substance (aucune marge d'interprétation au
+moment de voir le résultat) a été respectée ; la forme (écrit avant
+calcul) non. Signalé explicitement plutôt que corrigé silencieusement.
+
+### Tests, déploiement
+
+2 scripts ponctuels (`scripts/_measure_h3_hour4_sigma.py`,
+`scripts/_h3_hour4_holdout_test.py`, aucune écriture DB), 1 paramètre
+CLI ajouté à `scripts/download_historical_data.py` (`--max-days-back`,
+défaut inchangé). Suite de tests complète re-vérifiée après le
+changement de `scripts/download_historical_data.py` : 867 tests
+passent, aucune régression (aucun test n'existe sur ce script, pattern
+"script ponctuel" déjà établi). Aucun fichier `src/` modifié pour ce
+chantier. **Aucun déploiement** — écart explicite à la règle
+d'auto-déploiement du 25/08, demandé par Ismaël pour ce chantier
+spécifiquement (changement de résolution sur historique élargi, pas un
+ajustement de paramètre).
+
+---
+
+## 2026-08-26 (suite 2) — Session Cowork (hors VPS) : moteur d'évolution par lot construit, chantier H1 pré-enregistré, 5 ramifications triées
+
+Session distincte de celle qui tourne sur le VPS (celle-ci n'a accès
+qu'au dépôt local d'Ismaël, PAS au VPS ni à `data/historical/`,
+gitignored — voir note technique en fin d'entrée). Point de départ :
+Ismaël demande que chaque hypothèse "trade, analyse son résultat,
+ajuste sa stratégie et retrade", avec timeframe mobile, confluences
+réduites sur la base des simulations, et un "modèle de tendance de
+marché" basé sur l'historique.
+
+### Décision tranchée avec Ismaël
+
+**Mode "par lot, statistique", jamais "par trade"** : ajuster après
+chaque trade individuel revient à apprendre du bruit (un edge réel de
+55% perd quand même près d'un trade sur deux) — précisément ce que
+l'invariant #10 est censé empêcher. **Déclenchement gardé manuel**, pas
+de cron : cohérent avec la décision déjà prise le 25/08/2026
+("l'étape GÉNÉRATION du §3.9 exige un raisonnement neuf par cycle, pas
+une grille figée rejouée automatiquement") — ce chantier automatise le
+CALCUL (sélection statistique, écriture `rule_changes`), jamais le
+choix des candidats testés ni la décision de lancer un cycle.
+
+### Constat fait en lisant le dépôt avant d'écrire du code
+
+Ce que la demande décrit existe déjà et vient d'échouer pour H3/H4/H5,
+littéralement le jour même (voir l'entrée du dessus, "sans BTCUSD") :
+timeframe, largeur de stop et réduction de confluence ont tous les
+trois été testés, avec découpage entraînement/validation et correction
+de Bonferroni — aucun candidat ne qualifie. **Aucun nouvel essai forcé
+sur ces trois axes pour H3/H4/H5** : les retester sans idée théorique
+neuve serait de la comparaison multiple non corrigée (p-hacking), pas
+une itération légitime.
+
+### Construit dans cette session
+
+- **`src/evolution_engine.py`** (nouveau, module critique, 100%
+  couvert, 45 tests avec `tests/test_hypothesis_params.py`) — généralise
+  le protocole déjà pratiqué à la main dans
+  `scripts/evaluate_hypothesis_candidates.py` (entraînement seul pour
+  sélectionner, un seul essai de validation, correction Bonferroni) en
+  un moteur réutilisable qui **écrit** dans `rule_changes` — jusqu'ici
+  seulement un côté "lecture" existait (`hypothesis_params.py`, appliqué
+  au redémarrage), aucun code n'écrivait encore dans cette table.
+  `CandidateSpec` refuse de se construire sans justification théorique
+  non vide dès qu'il porte un override (invariant #10 appliqué au niveau
+  du type, pas seulement documenté).
+- **`scripts/run_evolution_cycle.py`** (nouveau) — CLI utilisant ce
+  moteur, `evaluate_hypothesis_candidates.py` reste inchangé
+  (lecture seule, stdout). Premier cas d'usage pré-enregistré : H1.
+  Support d'un sous-ensemble d'actifs par hypothèse (nécessaire pour
+  H1, voir ci-dessous), sans réintroduire de paramétrage par-actif
+  (décision du 25/08/2026 maintenue : les actifs retenus restent
+  poolés).
+
+### Chantier H1 ouvert (répond à la ramification "H1 — décision de
+refonte pas prise")
+
+Pré-enregistrement complet dans `docs/HYPOTHESES.md` (entrée suivante).
+Résumé : sur les 4 couples actuellement bloqués par le garde-fou Option
+B (`evaluate_h1_zero_cost_diagnostic.py`, déjà exécuté avant cette
+session), USDJPY/GBPUSD/EURUSD ont un edge BRUT positif (coût
+structurel, comme H3/H5), US30 n'en a pas même brut. **US30 retiré du
+pool (Branche B, abandon, comme H4)** ; **USDJPY/GBPUSD/EURUSD gardés
+pour tester la résolution HOUR_4** (Branche A, théorie : coût relatif
+plus faible sur bougie 4h pour un stop Donchian(20) équivalent — jamais
+testé pour H1 jusqu'ici, contrairement à H3/H5 où cet axe timeframe a
+déjà échoué). **Non exécuté** — voir limite technique ci-dessous.
+
+### Nouveau variable "tendance de marché" (demande d'Ismaël) : PAS construit
+
+Nécessite une justification théorique concrète (quel indicateur : pente
+de MA longue ? ADX ? volatilité réalisée ?) qu'Ismaël n'a pas encore
+donnée, et une vérification précise du budget restant avant d'y
+toucher : **H4 (4/5) et H5 (5/5) n'ont plus de marge** (5/5 = plafond,
+confirmé plusieurs fois le 25/08/2026) — aucune nouvelle variable pour
+ces deux sans en retirer une d'abord. H2/H3 ont probablement de la
+marge (dernier chiffre confirmé sous l'ancien modèle : 2/3 chacun,
+jamais retesté sous le plafond corrigé à 5) mais ce chiffre mérite
+d'être reconfirmé par la session VPS avant tout calcul — pas fait ici
+pour ne pas avancer un budget non vérifié.
+
+### Les 5 "ramifications ouvertes" (rapport de la session VPS, 26/08/2026 19:43) — triage
+
+1. **H1 dans le scope du garde-fou Option B** — Ismaël affirme que "ça
+   ne devrait jamais être le cas". Vérifié dans `docs/HYPOTHESES.md`
+   (24/08/2026, section "Mécanisme d'influence sur le live") : le
+   garde-fou a été conçu et documenté dès l'origine pour couvrir
+   explicitement les 5 sources hypothèse nommément, y compris
+   `hypothesis` (H1) — jamais Station X. **Ce n'est pas un oubli de
+   scope, c'est la conception d'origine.** Si H1 doit en sortir
+   aujourd'hui, c'est une nouvelle décision qui revient sur un choix
+   déjà fait consciemment, pas un correctif — à trancher explicitement
+   par Ismaël, pas décidé ici (ça changerait le comportement réel des
+   ordres H1 en direct).
+2. **Fix H4/US100/US30 (commit `6e6469d`) prêt, déploiement bloqué** —
+   nécessite un accès VPS (`git pull` + redémarrage) que cette session
+   n'a pas. Aucune raison technique de ne pas déployer (tests verts) —
+   à faire par Ismaël ou la session VPS sans attendre davantage.
+3. **H1 — décision de refonte** — TRANCHÉE ci-dessus (chantier ouvert,
+   pré-enregistré, prêt à exécuter sur le VPS).
+4. **Bug de régime H3/US30 et H3/US100 (identique à H4), pas quantifié**
+   — nécessite les données réelles du VPS pour être mesuré, pas
+   actionnable depuis cette session.
+5. **H2 : rien en attente** — confirmé passif, aucune action requise.
+
+### Limite technique de cette session — importante
+
+`data/historical/*.json` (bougies téléchargées, utilisées par tous les
+backtests) est dans `.gitignore` et n'existe QUE sur le VPS — le dépôt
+local d'Ismaël (connecté à cette session Cowork) ne le contient pas.
+**Rien de ce qui précède n'a pu être exécuté ici** : le moteur et le
+script sont écrits, testés (couche pure, avec des doubles pour la
+donnée historique), prêts, mais jamais lancés sur de vraies données.
+**À exécuter sur le VPS** après `git pull` :
+```
+python scripts/run_evolution_cycle.py --hypothesis H1 --dry-run
+```
+puis, si le rapport est satisfaisant, sans `--dry-run` pour écrire
+réellement dans `rule_changes` (redémarrage de `trend_executor` requis
+ensuite pour que `hypothesis_params.py` applique l'override — voir sa
+docstring, jamais en cours de run).
+
+### Vérification effectuée dans cette session
+
+`pytest tests/test_evolution_engine.py tests/test_hypothesis_params.py
+tests/test_backtest_engine.py tests/test_risk_engine.py
+tests/test_capital_manager.py tests/test_go_nogo.py
+tests/test_confidence_scorer.py` : 131 tests passent, 100% sur
+`evolution_engine.py`. Suite complète (`tests/`) non exécutable dans
+cette session (le lanceur en arrière-plan est tué avec le shell qui l'a
+lancé, contrainte de l'environnement, pas du code) — aucune régression
+possible par construction : seuls deux fichiers ont été AJOUTÉS
+(`src/evolution_engine.py`, `scripts/run_evolution_cycle.py`), aucun
+fichier existant modifié.
+
+---
+
 ## 2026-08-26 — Rejeu de la Branche A (H3, H5) sans BTCUSD : ni l'un ni l'autre ne qualifie, H3 empire
 
 Pré-enregistrement complet dans `docs/HYPOTHESES.md` (26/08/2026) — à

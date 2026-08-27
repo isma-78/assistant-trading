@@ -112,22 +112,29 @@ def bar_from_raw(raw: dict) -> Optional[HistoricalBar]:
 # Modèle de coûts — voir docs/HYPOTHESES.md pour la justification
 # ---------------------------------------------------------------------------
 
-def entry_execution_price(direction: str, bar: HistoricalBar, slippage_multiplier: float = SLIPPAGE_SPREAD_MULTIPLIER) -> float:
+def entry_execution_price(direction: str, bar: HistoricalBar) -> float:
     """Prix d'entrée simulé = ouverture de `bar` (la bougie SUIVANT celle
     qui a déclenché le signal, décision pré-enregistrée), payé au bid/ask
-    réel (pas le mid) PLUS slippage forfaitaire (multiplicateur du spread
-    de cette même bougie) — toujours défavorable.
+    réel (pas le mid) — SANS slippage supplémentaire.
 
-    `slippage_multiplier` (défaut = `SLIPPAGE_SPREAD_MULTIPLIER`,
-    24/08/2026, voir docs/DECISIONS.md) : paramétrable pour comparer
-    plusieurs hypothèses de coût côte à côte (ex. 1.0 vs 0.5) sans
-    modifier la constante par défaut ni le comportement des appelants
-    existants qui ne le précisent pas."""
-    slippage = bar.spread_open * slippage_multiplier
+    Corrigé le 26/08/2026 (voir docs/DECISIONS.md, recalibration §2.6) :
+    l'entrée est un ordre LIMITE (§2.8, `executor.open_signal` ->
+    `client.place_limit_order`), jamais un ordre marché — un ordre
+    limite ne peut, par construction, s'exécuter plus mal que son prix.
+    Mesuré sur 47 remplissages réels (compte démo) : 0 remplissage pire
+    que le prix limite demandé, 36 meilleurs, 11 exacts — aucun crédit
+    pris pour le favorable (règle de décision pré-enregistrée,
+    conservatrice), mais le terme de slippage défavorable, lui,
+    n'a plus de justification et est retiré. Ancien paramètre
+    `slippage_multiplier` supprimé (n'a plus de sens ici) — reste
+    significatif uniquement sur `exit_execution_price` (sorties TP/stop
+    non garanti, ordres MARCHÉ réels via `client.close_position`,
+    jamais des ordres limite posés chez le broker, voir docstring de
+    cette fonction)."""
     if direction == "long":
-        return round(bar.open_ask + slippage, 8)
+        return round(bar.open_ask, 8)
     if direction == "short":
-        return round(bar.open_bid - slippage, 8)
+        return round(bar.open_bid, 8)
     raise ValueError(f"direction inconnue : {direction!r}")
 
 
@@ -139,7 +146,18 @@ def exit_execution_price(
     valeur mid — calculée par une stratégie sur des Candle en mid), ajusté
     par le demi-spread réel de la bougie de sortie (franchissement bid/ask
     autour du niveau) PLUS slippage forfaitaire — toujours défavorable.
-    `slippage_multiplier` : voir entry_execution_price."""
+
+    INCHANGÉ par la recalibration du 26/08/2026 (voir docs/DECISIONS.md) :
+    contrairement à l'entrée, TP et stop non garanti sont RÉELLEMENT des
+    ordres marché en direct (`executor._apply_management_action` ->
+    `client.close_position`, jamais un ordre limite/TP posé à l'avance
+    chez le broker — vérifié dans le code, pas supposé). Le prix de
+    sortie réel n'est de plus jamais capturé en base
+    (`trade_partials.prix_sortie` = valeur théorique, la réponse de
+    `close_position` n'est pas lue) : aucune mesure empirique possible
+    sur cette jambe, ni en démo ni en réel — le terme de slippage est
+    donc conservé tel quel, l'absence de mesure n'étant jamais un motif
+    pour l'alléger."""
     slippage = exit_bar_spread * slippage_multiplier
     half_spread = exit_bar_spread / 2
     if direction == "long":  # sortie = vente
@@ -367,7 +385,7 @@ def replay_hypothesis(
         if not decision.approved:
             continue
 
-        executed_entry_price = entry_execution_price(signal.direction, execution_bar, slippage_multiplier)
+        executed_entry_price = entry_execution_price(signal.direction, execution_bar)
         entry_date = _parse_date(execution_bar.time_utc)
 
         state = OpenTradeState(

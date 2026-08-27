@@ -88,7 +88,7 @@ def _page_window(to_time: datetime, resolution: str) -> tuple:
     return from_time, to_time
 
 
-def download_one(client: CapitalClient, epic: str, resolution: str, now: datetime) -> list:
+def download_one(client: CapitalClient, epic: str, resolution: str, now: datetime, max_days_back: int = SAFETY_MAX_DAYS_BACK) -> list:
     """Télécharge tout l'historique disponible pour (epic, resolution),
     ordre chronologique (plus ancienne bougie en premier). Écrit
     progressivement sur disque après chaque page."""
@@ -97,7 +97,7 @@ def download_one(client: CapitalClient, epic: str, resolution: str, now: datetim
     days_back = 0
     output_path = OUTPUT_DIR / f"{epic}_{resolution}.json"
 
-    while days_back < SAFETY_MAX_DAYS_BACK:
+    while days_back < max_days_back:
         from_time, to_time_window = _page_window(to_time, resolution)
         params = {
             "resolution": resolution,
@@ -144,6 +144,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets", default=",".join(ALL_ASSETS))
     parser.add_argument("--resolutions", default=",".join(ALL_RESOLUTIONS))
+    parser.add_argument(
+        "--max-days-back", type=int, default=SAFETY_MAX_DAYS_BACK,
+        help="Garde-fou de profondeur (jours), voir SAFETY_MAX_DAYS_BACK — "
+             "surchageable pour vérifier empiriquement une profondeur réelle "
+             "sur une résolution jamais testée à fond (ex. HOUR_4, 26/08/2026, "
+             "voir docs/HYPOTHESES.md). Comportement par défaut inchangé.",
+    )
     args = parser.parse_args()
 
     assets = [a.strip() for a in args.assets.split(",") if a.strip()]
@@ -160,7 +167,7 @@ def main() -> None:
     for resolution in resolutions:
         for epic in assets:
             print(f"-- {epic} / {resolution} --")
-            points = download_one(client, epic, resolution, now)
+            points = download_one(client, epic, resolution, now, max_days_back=args.max_days_back)
             print(f"  {epic}/{resolution} : {len(points)} bougies au total.")
 
     print("Terminé.")

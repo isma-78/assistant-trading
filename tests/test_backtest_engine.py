@@ -133,36 +133,26 @@ def test_historical_bar_spread_open():
 # Modèle de coûts
 # ---------------------------------------------------------------------------
 
-def test_entry_execution_price_long_pays_ask_plus_slippage():
+def test_entry_execution_price_long_pays_ask_no_slippage():
+    # Recalibre le 26/08/2026 (voir docs/DECISIONS.md) : l'entree est un
+    # ordre LIMITE (paye au pire son propre prix), jamais un ordre marche
+    # - aucun slippage supplementaire, confirme sur 47 remplissages reels
+    # (0 pire que le prix limite demande).
     bar = _bar("t", 100.0, 100.0, 100.0, 100.0, spread=0.2)
     price = entry_execution_price("long", bar)
-    expected = bar.open_ask + bar.spread_open * SLIPPAGE_SPREAD_MULTIPLIER
-    assert price == pytest.approx(expected)
-    assert price > bar.open_ask  # toujours défavorable
+    assert price == pytest.approx(bar.open_ask)
 
 
-def test_entry_execution_price_short_receives_bid_minus_slippage():
+def test_entry_execution_price_short_receives_bid_no_slippage():
     bar = _bar("t", 100.0, 100.0, 100.0, 100.0, spread=0.2)
     price = entry_execution_price("short", bar)
-    expected = bar.open_bid - bar.spread_open * SLIPPAGE_SPREAD_MULTIPLIER
-    assert price == pytest.approx(expected)
-    assert price < bar.open_bid
+    assert price == pytest.approx(bar.open_bid)
 
 
 def test_entry_execution_price_unknown_direction_raises():
     bar = _bar("t", 100.0, 100.0, 100.0, 100.0)
     with pytest.raises(ValueError):
         entry_execution_price("sideways", bar)
-
-
-def test_entry_execution_price_custom_slippage_multiplier():
-    # 24/08/2026 (voir docs/DECISIONS.md) : comparaison 100% vs 50% du
-    # spread pour re-evaluer la degradation observee sur H4/H5.
-    bar = _bar("t", 100.0, 100.0, 100.0, 100.0, spread=0.2)
-    price_full = entry_execution_price("long", bar, slippage_multiplier=1.0)
-    price_half = entry_execution_price("long", bar, slippage_multiplier=0.5)
-    assert price_half < price_full  # slippage moindre -> moins defavorable pour un long
-    assert price_half == pytest.approx(bar.open_ask + bar.spread_open * 0.5)
 
 
 def test_exit_execution_price_long_below_level():
