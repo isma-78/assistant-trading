@@ -79,6 +79,7 @@ from src.risk_engine import (
     compute_r_multiple,
     compute_weighted_r_multiple,
 )
+from src.causal_decomposition import compute_trade_causal_decomposition, persist_trade_causal_decomposition
 from src.trade_analyzer import analyze_closed_trade
 from src.trade_features_store import record_align_matinale_for_trade
 from src.trend_strategy import DONCHIAN_PERIOD, compute_trailing_stop_channel
@@ -1397,6 +1398,22 @@ def _apply_management_action(
                 format_trade_closed_notification(state.asset, source_label, r_multiple_total, raison_label, pnl_eur),
             )
 
+        # Attribution causale (27/08/2026, voir docs/DECISIONS.md) : même
+        # discipline best-effort que analyze_closed_trade ci-dessous — la
+        # clôture est déjà journalisée, un échec ici ne perd que
+        # l'attribution de CE trade, jamais son P&L réel. None tant que
+        # `trade_partials.prix_sortie_reel` n'est pas encore renseigné
+        # (aucune jambe de sortie n'a de prix réel avant ce déploiement).
+        try:
+            decomposition = compute_trade_causal_decomposition(db_path, state.trade_id)
+            if decomposition is not None:
+                persist_trade_causal_decomposition(db_path, state.trade_id, decomposition, now)
+        except Exception:
+            logger.exception(
+                "Échec de l'attribution causale pour le trade %s — clôture déjà journalisée, sans impact",
+                state.trade_id,
+            )
+
         # La clôture est déjà journalisée ci-dessus avant cet appel :
         # un échec ici (LLM, réseau, garde-fou) ne doit jamais remettre
         # en cause l'enregistrement du trade fermé, seule l'analyse
@@ -1529,6 +1546,20 @@ def force_close_all_open_trades(
 # verrouillé par code, pas par discipline ; ici, il n'existe simplement
 # aucun chemin de code vers l'URL réelle).
 _DEMO_BASE_URL = "https://demo-api-capital.backend-capital.com/api/v1"
+
+# Échelonnement INTRA-cycle (27/08/2026, voir docs/DECISIONS.md) — distinct
+# de `startup_offset_seconds` (décalage UNIQUE au démarrage du process,
+# 24/08/2026) : celui-ci répartit les signaux traités au sein d'UN MÊME
+# cycle, sur UN MÊME process. Motivé par le déblocage du garde-fou Option B
+# en démo (étape 1) : `_check_backtest_confidence_gate` court-circuitait
+# jusqu'ici ~90% des signaux de H1 avant tout appel broker (798/1027
+# décisions sur 7 jours mesurées avant déploiement, dont 584 pour H1 seul)
+# — sans ce délai, un cycle qui débloque plusieurs signaux d'un coup
+# enverrait autant de `get_price_snapshot()`/`place_limit_order()`
+# consécutifs, hors de toute protection retry (seuil de 429 mesuré à 16
+# requêtes rapprochées, voir 24/08/2026). 1 seconde : arbitraire mais
+# largement suffisant pour rester sous ce seuil même à pleine charge.
+INTER_SIGNAL_PROCESSING_DELAY_SECONDS = 1.0
 
 
 def run_executor_loop(config, db_path: str, interval_seconds: int = 30, startup_offset_seconds: int = 0) -> None:
@@ -1689,6 +1720,7 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30, startup_
                     config.telegram_bot_token, config.telegram_chat_id,
                     environment=config.capital_environment,
                 )
+                time.sleep(INTER_SIGNAL_PROCESSING_DELAY_SECONDS)
 
             manage_open_trades(
                 db_path, client, risk_engine, envelope_managers, envelope_ids,

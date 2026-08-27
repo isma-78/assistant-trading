@@ -12,6 +12,199 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-27 (suite) — Déploiement étapes 0/2, vérifications puis déploiement étape 1, retrait de H2 du réel, blocage confirmé sur H1/GOLD
+
+Suite du commit `14fb4e9`, feu vert explicite d'Ismaël pour la mise en
+œuvre totale des 3 premiers volets. Quatrième volet (H1/GOLD)
+conditionné à une vérification bloquante — voir section 4.
+
+### 1. Volet 2 — trois vérifications AVANT déploiement de l'étape 1
+
+**Vérification 1 — la branche "réel" est structurellement inatteignable,
+`environment` vient UNIQUEMENT de `config.capital_environment`.**
+Recherche exhaustive (`grep -rn "backend-capital.com\|CapitalClient("`) :
+**toute** construction de `CapitalClient` dans `src/`/`scripts/` (5
+occurrences : `executor.py:1543`, `technical_strategy_executor.py:346`,
+`download_historical_data.py:160`, `_fetch_incremental_gap.py:30`, plus
+les calibrations ponctuelles) utilise littéralement `_DEMO_BASE_URL`
+codée en dur — aucune ne lit `config.capital_environment` pour choisir
+une URL. Aucune URL "live" n'existe nulle part dans le code. Recherche
+`grep -rn "CAPITAL_ENVIRONMENT\|capital_environment" src/*.py` :
+exactement UNE lecture de la variable d'environnement
+(`config.py:130`, dans `load_config()`, appelée une seule fois au
+démarrage du process, jamais relue ensuite — docstring de la fonction
+l'exige explicitement), et exactement DEUX endroits qui la transmettent
+à `open_signal` (`executor.py:1690`, `technical_strategy_executor.py:456`),
+tous deux `environment=config.capital_environment` littéral, sur le
+MÊME objet `config` construit une fois au démarrage de la boucle.
+Aucune commande `control_bot`, aucune table DB, aucun mécanisme ne
+permet de la modifier en cours de run. **Conclusion : même si
+`CAPITAL_ENVIRONMENT=live` était positionné par erreur dans `.env`, le
+garde-fou durci s'appliquerait, mais AUCUN ordre ne pourrait
+structurellement atteindre l'API réelle** (double verrou : le garde-fou
+ET l'absence de tout chemin de code vers l'URL live).
+
+**Vérification 2 — débit de signaux et marge de rate-limiting.** Mesuré
+sur `risk_decisions` en production, 7 derniers jours : **798 rejets
+`backtest_confidence_gate` sur 1027 décisions totales (77,7%)**,
+répartis H1(`hypothesis`)=584, H5=111, H3=93, H4=10, H2=0. Ces 798
+signaux ne déclenchaient JUSQU'ICI aucun appel broker
+(`_check_backtest_confidence_gate` court-circuite avant
+`get_price_snapshot`, bénéfice de rate-limit déjà noté en passant le
+24/08/2026). Une fois le bypass démo actif, ils l'atteindront TOUS.
+Par source, volume qui atteindra désormais l'appel broker (avant →
+après) : **H1 : 9/semaine → 593/semaine (×66)**, H5 : 0 → 111/semaine
+(quasi nul → ~16/jour), H3 : 106 → 199 (×1,9), H4 : 52 → 62 (×1,2), H2 :
+inchangé (quasi nul). Total process confondus : 229 → 1027/semaine
+(×4,5). Le seuil de 429 déjà mesuré le 24/08/2026 est de **16 requêtes
+rapprochées** — un cycle qui débloquerait plusieurs signaux H1 d'un coup
+(5 actifs évalués dans le même cycle de 30s) s'en approcherait
+dangereusement, sans aucune protection retry sur `get_price_snapshot`/
+`place_limit_order` (le retry existant, `src/retry.py`, ne couvre que la
+sonde de connectivité et le rafraîchissement du contexte de régime
+croisé H3/H4, jamais `open_signal`). **Marge jugée insuffisante pour H1
+et H5 spécifiquement.**
+
+**Correctif appliqué avant déploiement** : `INTER_SIGNAL_PROCESSING_
+DELAY_SECONDS = 1.0` (nouvelle constante, `executor.py` et
+`technical_strategy_executor.py`, dupliquée comme `_DEMO_BASE_URL` —
+même motif, aucun couplage entre les deux modules) — un `time.sleep(1.0)`
+après chaque `open_signal()` dans la boucle `for signal_row in
+pending_signals`. Distinct de `startup_offset_seconds` (décalage UNIQUE
+au démarrage, 24/08/2026) : celui-ci étale les signaux traités DANS un
+même cycle, sur un même process — le mécanisme qui manquait pour ce cas
+précis. Pas de test dédié (boucle orchestration, même régime de
+couverture que le reste de `run_executor_loop`/`run_technical_strategy_
+loop`) — vérifié qu'aucun test existant n'exerce le corps de la boucle
+avec plusieurs signaux (tous mockent la fonction entière ou s'arrêtent
+sur `ConfigError` avant la boucle), donc aucun ralentissement introduit
+dans la suite.
+
+**Vérification 3 — spécification de l'étape 3, écrite en toutes
+lettres.** Ajoutée ici, formellement, avant tout déploiement :
+
+> **Les données démo collectées après le déploiement de l'étape 1 (gate
+> débloqué) servent UNIQUEMENT à calibrer le modèle de coûts (§2.6,
+> coût de sortie réel, taux de remplissage des ordres limite) — JAMAIS
+> à estimer une espérance, JAMAIS à évaluer si une hypothèse "marche".
+> Motif : une fois le garde-fou levé, le filtre qui domine la
+> sélection des signaux qui deviennent réellement des trades n'est plus
+> la qualité du signal, c'est la contrainte "une position à la fois"
+> (`backtest_engine`/`technical_strategy_executor`) et le plafond
+> d'exposition simultanée (§2.3, 10% de l'enveloppe) — deux mécanismes
+> qui sélectionnent PAR ORDRE D'ARRIVÉE, jamais par mérite. L'audit
+> mécanique H2 du 27/08/2026 vient de chiffrer précisément ce canal :
+> 10 signaux sur 19 (53%) éliminés par la seule contrainte de position
+> déjà ouverte, sur un échantillon où TOUS les signaux "libres" sont
+> devenus des trades (0% de perte ultérieure) — la sélection se fait
+> donc entièrement en amont, sur l'arrivée, pas sur la qualité. Un
+> échantillon de trades démo post-déblocage n'est PAS un échantillon
+> aléatoire de "tous les signaux que la stratégie aurait générés" : il
+> est biaisé vers les signaux qui arrivent quand aucune position n'est
+> déjà ouverte — un biais de sélection non caractérisé, de direction
+> inconnue a priori. Toute future tentation de calculer une espérance
+> sur ces trades démo (même avec un grand n) doit être refusée pour ce
+> motif, pas seulement pour insuffisance d'échantillon.**
+
+### 2. Déploiement — étapes 0, 1, 2 (une seule fenêtre de déploiement)
+
+Poussé sur `origin/main` (GitHub) puis `git pull` sur le VPS
+(`/home/assistant/assistant-trading`) : 3 commits appliqués
+(`6e6469d`→`b1d5655`→`14fb4e9`, plus le correctif d'échelonnement
+intra-cycle de cette session). Modifications VPS locales non commitées
+avant pull (`scripts/backup_and_sync.sh` chmod +x,
+`scripts/download_historical_data.py` déjà identique au contenu entrant)
+mises de côté (`git stash`) avant le pull, réappliquées après sans
+conflit réel (le contenu de `download_historical_data.py` était déjà
+strictement identique à celui apporté par `b1d5655` — stash vidé de ce
+hunk, `backup_and_sync.sh` chmod repris intact). Suite de tests
+complète rejouée sur le VPS après pull : **929 tests passent**, 100% de
+couverture confirmée sur les modules critiques.
+
+`init_db()` (appelé au démarrage de chacun des 6 process) applique
+automatiquement les migrations de schéma (`trade_partials.
+prix_sortie_reel`/`broker_executed_at`, table `trade_causal_
+decomposition`) — pas de script de migration séparé à lancer.
+
+Les 6 process (tmux : `telegram_listener`, `executor_loop`,
+`trend_executor`, `hypothesis2_executor`, `hypothesis3_executor`,
+`hypothesis4_executor`, `hypothesis5_executor`, `control_bot`)
+redémarrés proprement, un par un, sessions tmux préservées — tous
+confirmés vivants après redémarrage (`pgrep -f`, watchdog non déclenché).
+
+### 3. Vérification post-déploiement
+
+Voir la section dédiée ci-dessous, ajoutée après la fenêtre
+d'observation qui suit le redémarrage — remplie une fois les premiers
+trades réels clôturés avec la nouvelle instrumentation.
+
+### 4. Volet 3 — H2 sort du réel
+
+Règle d'arrêt pré-enregistrée (24/08/2026, audit H2 27/08/2026) : 19
+signaux bruts sur ~473 000 bougies M15 sur 2,2 ans (2024-06-14 →
+aujourd'hui, seule profondeur M15 disponible) → extrapolation linéaire
+sur 2019-2024.06 (1990 jours, même méthode que H1/H3) : ~0,0112 trade
+complété/jour mesuré → **~22 trades complétés projetés sur la fenêtre
+totale, très loin des 1000 requis pour toute conclusion statistique**.
+**H2 est retirée du pool éligible au réel** — décision journalisée ici,
+aucun code de production modifié pour l'appliquer (H2 n'a de toute
+façon jamais eu de chemin vers le réel, voir vérification 1 ci-dessus ;
+cette décision porte sur l'ÉLIGIBILITÉ FUTURE, pas sur un retrait
+technique immédiat). **`hypothesis2_executor` continue de tourner en
+démo, sans aucun garde-fou** (déjà vrai pour toutes les sources depuis
+le déploiement de l'étape 1 ci-dessus — H2 n'a pas de traitement
+spécial). **Aucune modification de `ict_strategy.py`/`hypothesis2_
+strategy.py`** — le déclencheur (confluence FVG/Fibonacci) reste
+strictement inchangé, conformément à l'instruction explicite (tout
+assouplissement serait un chantier de stratégie séparé, pré-enregistré).
+
+### 5. Volet 4 — H1/GOLD : vérification bloquante, chantier ARRÊTÉ
+
+**Fenêtre réelle sur laquelle les 233 trades H1/GOLD ont été calculés,
+vérifiée dans le code avant tout autre calcul** : `scripts/run_
+retrospective_backtest.py::_load_bars` ne filtre AUCUNE date — il lit
+`GOLD_HOUR.json` intégralement et le rejoue en entier via `replay_
+hypothesis`. Ce fichier remonte à **2017-05-01** (confirmé, 54 411
+bougies). **La fenêtre de calcul couvre donc 2017-05-01 → 2026-08-26,
+qui INCLUT intégralement 2019-01-01 → 2024-06-14.**
+
+Fait supplémentaire, vérifié en creusant (les 233 trades eux-mêmes
+tombent tous entre 2024-05-30 et 2026-08-20, ZÉRO trade complété avant
+— répartition 2024:67/2025:101/2026:65) : même si aucun trade n'a été
+PRODUIT avant 2024-05-30, le CALCUL a bien évalué `trend_strategy.
+evaluate_entry` bougie par bougie sur toute la période 2017-2024
+incluse — le fait qu'elle n'ait produit aucun trade complété est
+lui-même une information tirée du holdout (pas neutre : on sait
+désormais que H1/GOLD n'aurait rien tradé sur 2019-2024.06 avec cette
+configuration, ce qui est déjà un résultat, pas une fenêtre vierge).
+
+**Conformément à la règle fixée par Ismaël avant ce chantier : le
+holdout est brûlé pour GOLD. Aucun test propre n'est possible.**
+Candidat consigné **"en attente de données futures"** — aucune
+pré-enregistrement, aucun calcul de puissance, aucun test exécuté.
+**Chantier H1/GOLD arrêté ici.**
+
+Les chiffres déjà fournis par Ismaël (n=233, SE=0,0685R, moyenne
++0,1826R, 2,67 erreurs-types ; balayage de 30 couples → 1,5 faux
+positifs attendus sous H0, P(≥2 passent)=0,446 ; Bonferroni m=30 :
+z=2,9352, moyenne requise +0,2010R, borne basse corrigée -0,0184R, NE
+PASSE PAS) restent la référence : **ce candidat n'est de toute façon pas
+validé statistiquement**, indépendamment du problème de fenêtre — les
+deux raisons se cumulent, aucune ne dépend de l'autre. Rien à faire de
+plus tant qu'une fenêtre non contaminée n'existe pas pour GOLD (elle
+n'existera qu'après de nouvelles données futures, jamais en revenant
+sur 2019-2024.06).
+
+### Tests, déploiement
+
+929 tests passent au total (928 avant ce chantier), 100% de couverture
+maintenue. Fichiers modifiés dans cette session :
+`src/executor.py`/`src/technical_strategy_executor.py` (délai
+intra-cycle, câblage `causal_decomposition` sur la clôture complète),
+`tests/test_executor.py` (+1 test de câblage bout en bout).
+
+---
+
 ## 2026-08-27 — Chaîne complète (débloquer/mesurer/attribuer/affiner/promouvoir) : H1 clos (edge négatif net, axe résolution fermé), audit H2, étapes 0-2 codées et testées (PAS déployées), étape 1 durcie (2/30 couples passent), étapes 3/5 bloquées ou différées
 
 Session longue, deux demandes successives d'Ismaël traitées à la suite :

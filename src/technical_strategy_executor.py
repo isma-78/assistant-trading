@@ -109,6 +109,16 @@ CANDLE_COUNT = MA_PERIOD + 20
 # fonctions publiques.
 _DEMO_BASE_URL = "https://demo-api-capital.backend-capital.com/api/v1"
 
+# Échelonnement INTRA-cycle (27/08/2026, voir docs/DECISIONS.md,
+# executor.INTER_SIGNAL_PROCESSING_DELAY_SECONDS pour le raisonnement
+# complet) — dupliqué plutôt qu'importé, même motif que _DEMO_BASE_URL
+# ci-dessus. H5 en particulier passe de ~0 à ~111 signaux/semaine
+# atteignant get_price_snapshot() une fois le garde-fou Option B
+# débloqué en démo (798 rejets mesurés sur 7 jours avant déploiement,
+# toutes hypothèses confondues) — ce délai évite qu'un cycle qui
+# débloque plusieurs signaux d'un coup les envoie tous consécutivement.
+INTER_SIGNAL_PROCESSING_DELAY_SECONDS = 1.0
+
 
 def _next_synthetic_msg_id() -> int:
     """Identifiant synthétique pour raw_messages.telegram_msg_id — ce
@@ -455,6 +465,7 @@ def run_technical_strategy_loop(
                     config.telegram_bot_token, config.telegram_chat_id,
                     environment=config.capital_environment,
                 )
+                time.sleep(INTER_SIGNAL_PROCESSING_DELAY_SECONDS)
 
             manage_open_trades(
                 db_path, client, risk_engine, envelope_managers, envelope_ids,

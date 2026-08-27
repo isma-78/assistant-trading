@@ -1375,6 +1375,45 @@ def test_manage_open_trades_captures_real_exit_price_from_close_position(tmp_pat
         conn.close()
 
 
+def test_manage_open_trades_persists_causal_decomposition_on_full_close(tmp_path):
+    # 27/08/2026 (voir docs/DECISIONS.md) : une clôture complète doit
+    # déclencher l'attribution causale (best-effort, même patron que
+    # analyze_closed_trade) dès que prix_entree_prevu est connu.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_prevu, prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-xyz', 'station_x', 'GOLD', 'demo', 'short', 0.01, 101.0, 101.0, 102.0, 102.0, 10.0, 2.0, "
+            "'2026-08-16T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 102.0, "offer": 102.2, "marketStatus": "TRADEABLE"}}
+    client.get_prices.return_value = {"prices": []}  # stop touché (short, prix monte)
+    client.close_position.return_value = {"level": 102.1, "executed_at": "2026-08-27T09:00:00", "confirmation": {}}
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="stationx")
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("GOLD", "stationx"): envelope_manager}, envelope_ids={("GOLD", "stationx"): envelope_id},
+    )
+
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute("SELECT * FROM trade_causal_decomposition WHERE trade_id = ?", (trade_id,)).fetchone()
+        assert row is not None
+        assert row["cout_entree"] == pytest.approx(0.0)  # remplissage exact au prix prévu
+        assert row["cout_sortie"] == pytest.approx(0.1)  # sortie réelle défavorable (short, rachat à 102.1 > 102.0 théorique)
+    finally:
+        conn.close()
+
+
 def test_manage_open_trades_closes_full_tp_h4_and_updates_envelope(tmp_path):
     # Bout en bout Hypothèse #4 : take_profit chargé depuis signals.take_profit
     # (jamais tp1/tp2, restés NULL) -> _load_open_trade_state -> dispatch
