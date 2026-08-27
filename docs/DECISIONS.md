@@ -108,35 +108,67 @@ lettres.** Ajoutée ici, formellement, avant tout déploiement :
 
 ### 2. Déploiement — étapes 0, 1, 2 (une seule fenêtre de déploiement)
 
-Poussé sur `origin/main` (GitHub) puis `git pull` sur le VPS
-(`/home/assistant/assistant-trading`) : 3 commits appliqués
-(`6e6469d`→`b1d5655`→`14fb4e9`, plus le correctif d'échelonnement
-intra-cycle de cette session). Modifications VPS locales non commitées
-avant pull (`scripts/backup_and_sync.sh` chmod +x,
-`scripts/download_historical_data.py` déjà identique au contenu entrant)
-mises de côté (`git stash`) avant le pull, réappliquées après sans
-conflit réel (le contenu de `download_historical_data.py` était déjà
-strictement identique à celui apporté par `b1d5655` — stash vidé de ce
-hunk, `backup_and_sync.sh` chmod repris intact). Suite de tests
-complète rejouée sur le VPS après pull : **929 tests passent**, 100% de
-couverture confirmée sur les modules critiques.
+Poussé sur `origin/main` (GitHub, `6e6469d..d092656`) puis `git pull`
+sur le VPS (`/home/assistant/assistant-trading`). Modification locale
+non commitée (`scripts/backup_and_sync.sh` chmod +x) mise de côté
+(`git stash`) avant le pull, réappliquée après sans conflit (le fast-
+forward ne touchait pas ce fichier). **Un blocage réel rencontré et
+résolu** : 5 scripts ponctuels non trackés sur le VPS
+(`scripts/_h3_hour4_holdout_gross.py`, `_h3_hour4_holdout_test.py`,
+`_measure_h3_hour4_sigma.py`, `_option_b_status_snapshot.py`,
+`evaluate_h1_zero_cost_diagnostic.py` — écrits directement sur le VPS le
+26/08/2026, jamais commités) entraient en collision avec les mêmes
+fichiers apportés par le commit `b1d5655`. Vérifié `diff` fichier par
+fichier AVANT toute suppression : **contenu strictement identique** aux
+versions entrantes — supprimés en confiance, `git pull` a ensuite
+appliqué un fast-forward propre (`4c65d2d..d092656`, 32 fichiers). Suite
+de tests complète rejouée sur le VPS après pull : **929 tests passent**,
+100% de couverture confirmée sur les modules critiques.
 
 `init_db()` (appelé au démarrage de chacun des 6 process) applique
 automatiquement les migrations de schéma (`trade_partials.
 prix_sortie_reel`/`broker_executed_at`, table `trade_causal_
 decomposition`) — pas de script de migration séparé à lancer.
 
-Les 6 process (tmux : `telegram_listener`, `executor_loop`,
+**6 process redémarrés** (tmux, un par un, `Ctrl-C` puis relance dans la
+même session — sessions tmux préservées) : `executor_loop`,
 `trend_executor`, `hypothesis2_executor`, `hypothesis3_executor`,
-`hypothesis4_executor`, `hypothesis5_executor`, `control_bot`)
-redémarrés proprement, un par un, sessions tmux préservées — tous
-confirmés vivants après redémarrage (`pgrep -f`, watchdog non déclenché).
+`hypothesis4_executor`, `hypothesis5_executor` — les seuls qui importent
+`executor.py`/`technical_strategy_executor.py` sur le chemin affecté.
+**`telegram_listener` et `control_bot` délibérément NON redémarrés** :
+aucun des deux n'appelle `open_signal`/`_check_backtest_confidence_gate`
+(capture de messages et commandes de contrôle uniquement), redémarrage
+inutile. Tous les 6 confirmés vivants avec un PID neuf (`ps aux`),
+watchdog (`logs/watchdog_cron.log`) confirmant `'up'` sur les 3 cycles de
+5 minutes suivants, aucune alerte. Un 404 `error.not-found.dealId`
+observé sur `hypothesis3_executor` juste après redémarrage
+(`update_position_stop` sur une position déjà fermée côté broker par un
+stop garanti) — motif déjà documenté (21/08/2026), fail-safe existant
+("passage au suivant"), process resté vivant, sans lien avec ce
+déploiement.
 
-### 3. Vérification post-déploiement
+### 3. Vérification post-déploiement — EN ATTENTE, honnêtement
 
-Voir la section dédiée ci-dessous, ajoutée après la fenêtre
-d'observation qui suit le redémarrage — remplie une fois les premiers
-trades réels clôturés avec la nouvelle instrumentation.
+Surveillé ~10 minutes après redémarrage (sondage toutes les 60s,
+`risk_decisions`/`trades`/`trade_partials.prix_sortie_reel`/
+`trade_causal_decomposition`) : **aucun signal, aucun trade ouvert ou
+clos depuis le redémarrage à ce stade** — attendu, les signaux se
+déclenchent aux clôtures de bougies (HOUR/M15), pas en continu ; H1 lui-
+même n'atteint que ~3,5 signaux/heure en moyenne mesurée. Ce qui EST
+déjà vérifié : les 6 process tournent avec le nouveau code (PID neufs,
+watchdog propre), les tests passent sur le VPS. Ce qui reste À VÉRIFIER
+dès que possible (premier signal réel post-déploiement) : (1) le
+garde-fou ne bloque plus aucun signal démo (`risk_decisions.reason =
+'backtest_confidence_gate'` doit rester à zéro pour toute source
+hypothèse à partir de maintenant) ; (2) `trade_partials.prix_sortie_reel`/
+`broker_executed_at` se peuplent sur la première clôture réelle
+(confirmerait au passage que Capital.com renvoie bien un
+`dealReference` pour un DELETE — hypothèse non vérifiée empiriquement,
+voir section Étape 0 du 27/08/2026 matin) ; (3) `trade_causal_
+decomposition` gagne une ligne à cette même clôture. **Ne pas
+considérer le déploiement comme validé tant que ces 3 points n'ont pas
+été observés sur un vrai trade** — à compléter dans une prochaine
+entrée, jamais en modifiant celle-ci.
 
 ### 4. Volet 3 — H2 sort du réel
 
