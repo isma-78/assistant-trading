@@ -39,6 +39,7 @@ Deux couches, même convention que risk_engine.py/backtest_engine.py :
 """
 
 import math
+import random
 import statistics
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -74,6 +75,58 @@ def compute_lower_bound(r_values: List[float], z: float) -> Optional[float]:
     mean = statistics.fmean(r_values)
     stdev = statistics.stdev(r_values)
     return mean - z * (stdev / math.sqrt(n))
+
+
+def compute_calendar_block_bootstrap_lower_bound(
+    r_values: List[float],
+    timestamps: List[str],
+    confidence: float = 0.95,
+    n_resamples: int = 2000,
+    seed: int = 0,
+) -> Optional[float]:
+    """Borne basse par bootstrap par blocs calendaires (mois), critère de
+    promotion au RÉEL durci (27/08/2026, voir docs/DECISIONS.md) — plus
+    conservateur que `compute_lower_bound` (normale asymptotique) : ne
+    suppose ni normalité, ni indépendance intra-mois (auto-corrélation
+    plausible entre trades d'un même régime de marché), seulement
+    l'indépendance ENTRE mois (blocs). Rééchantillonne des MOIS entiers,
+    jamais des trades individuels, pour préserver toute dépendance
+    interne à un mois.
+
+    `timestamps[i]` doit être un timestamp ISO 8601 dont les 7 premiers
+    caractères forment "AAAA-MM" (même convention que `ferme_at` en
+    base). Déterministe (RNG explicitement seedée) pour un résultat
+    reproductible d'un appel à l'autre sur les mêmes données.
+
+    None si moins de 2 blocs calendaires distincts (le bootstrap par
+    blocs est indéfini avec un seul bloc — jamais traité comme
+    qualifiant faute de pouvoir le calculer, même contrat que
+    `compute_lower_bound`)."""
+    if len(r_values) != len(timestamps):
+        raise ValueError("r_values et timestamps doivent avoir la même longueur")
+    if not r_values:
+        return None
+
+    blocks: Dict[str, List[float]] = {}
+    for r, ts in zip(r_values, timestamps):
+        blocks.setdefault(ts[:7], []).append(r)
+    block_values = list(blocks.values())
+    if len(block_values) < 2:
+        return None
+
+    rng = random.Random(seed)
+    num_blocks = len(block_values)
+    resampled_means: List[float] = []
+    for _ in range(n_resamples):
+        pooled: List[float] = []
+        for _ in range(num_blocks):
+            pooled.extend(block_values[rng.randrange(num_blocks)])
+        resampled_means.append(statistics.fmean(pooled))
+    resampled_means.sort()
+
+    index = int((1 - confidence) * n_resamples)
+    index = max(0, min(n_resamples - 1, index))
+    return resampled_means[index]
 
 
 @dataclass(frozen=True)

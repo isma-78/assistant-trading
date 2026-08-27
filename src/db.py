@@ -186,10 +186,26 @@ CREATE TABLE IF NOT EXISTS trade_partials (
     trade_id INTEGER NOT NULL REFERENCES trades(id),
     palier TEXT NOT NULL,          -- "tp1" | "tp2" | "tp3" | "trailing" | "macro"
     fraction REAL NOT NULL,
-    prix_sortie REAL NOT NULL,
+    prix_sortie REAL NOT NULL,     -- valeur THÉORIQUE pré-calculée (action.exit_price), jamais écrasée
     r_atteint REAL NOT NULL,
     motif TEXT,
-    executed_at TEXT NOT NULL
+    executed_at TEXT NOT NULL,
+    prix_sortie_reel REAL,         -- ajout 27/08/2026 : level réel de la confirmation close_position(), NULL si non résolu (best-effort)
+    broker_executed_at TEXT        -- ajout 27/08/2026 : horodatage broker de la confirmation, NULL si non résolu
+);
+
+-- Attribution causale déterministe par trade (27/08/2026, voir
+-- docs/DECISIONS.md) : src.causal_decomposition. Une ligne par trade
+-- clôturé ayant au moins une jambe de sortie ; cout_sortie/derive_gestion
+-- restent NULL tant que trade_partials.prix_sortie_reel n'a jamais été
+-- capturé pour ce trade (voir docstring du module).
+CREATE TABLE IF NOT EXISTS trade_causal_decomposition (
+    trade_id INTEGER PRIMARY KEY REFERENCES trades(id),
+    r_theoretical REAL NOT NULL,
+    cout_entree REAL,
+    cout_sortie REAL,
+    derive_gestion REAL,
+    computed_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS trade_features (
@@ -452,6 +468,8 @@ _COLUMN_MIGRATIONS = [
     ("trades", "exit_type", "TEXT"),
     ("trades", "timing_layer", "TEXT"),
     ("trades", "anomalie_technique", "TEXT"),
+    ("trade_partials", "prix_sortie_reel", "REAL"),
+    ("trade_partials", "broker_executed_at", "TEXT"),
 ]
 
 

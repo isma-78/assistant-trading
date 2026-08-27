@@ -12,6 +12,331 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-27 — Chaîne complète (débloquer/mesurer/attribuer/affiner/promouvoir) : H1 clos (edge négatif net, axe résolution fermé), audit H2, étapes 0-2 codées et testées (PAS déployées), étape 1 durcie (2/30 couples passent), étapes 3/5 bloquées ou différées
+
+Session longue, deux demandes successives d'Ismaël traitées à la suite :
+reprise du chantier H1 (Volet B) laissé sans résultat documenté le
+26/08/2026, puis remplacement par un prompt de chaîne complète (0 à 6,
+voir `docs/HYPOTHESES.md` pour ce qui est superseded). **Aucun
+déploiement, aucun redémarrage de process, aucune modification de
+production** — tout le travail chiffré ci-dessous a tourné soit en local
+(dépôt Windows, tests), soit dans `/home/assistant/costfix_staging/` sur
+le VPS (copie isolée créée le 26/08/2026, jamais la base ni le code
+live).
+
+### 1. H1 — le dernier chantier ouvert du projet, désormais clos (négatif)
+
+`scripts/_measure_h1_sigma_and_target.py` (écrit le 26/08/2026, jamais
+exécuté avant aujourd'hui) tourné dans `costfix_staging` (modèle de coûts
+corrigé, historique réel HOUR) : fenêtre BRÛLÉE (2024-06-14 → 2026-08-26),
+USDJPY+GBPUSD+EURUSD poolés, HOUR, Donchian(20)+MA200 strictement
+inchangé.
+
+**Découverte préalable, non anticipée** : l'historique HOUR de ces 3
+actifs remonte en réalité à **2017-05-01** (57 495-57 799 bougies selon
+l'actif) — aussi profond que HOUR_4 (2017-01-29), jamais vérifié pour
+HOUR avant aujourd'hui. Même corruption confirmée année par année
+(`openPrice.ask - openPrice.bid`) : 2017 12,5-29,8% de spreads négatifs
++ 56-61% de spreads NULS (bid=ask, feed synthétique probable), 2018
+encore 5,8-7,6% de négatifs, **2019+ propre (0% négatif) sur les 3
+actifs**. La contrainte permanente du 26/08/2026 (jamais de bougie avant
+2019-01-01) s'applique donc à HOUR exactement comme à HOUR_4 — pas une
+supposition non vérifiée cette fois-ci.
+
+**Conséquence méthodologique** : `scripts/evaluate_h1_zero_cost_diagnostic.py`
+(exécuté le 26/08/2026, jamais avec des chiffres consignés — reproduit
+aujourd'hui) lit l'historique COMPLET sans filtrer 2019-01-01, donc
+contaminé par 2017-2018 pour ce diagnostic précis. Chiffres reproduits
+aujourd'hui pour mémoire (n=1088-1110/actif, US30 espérance NETTE
++0,83R — un stop moyen de 411 points et un spread moyen NÉGATIF de
+-5,33 confirment la contamination) : **à ne jamais réutiliser comme
+référence "brut" pour ce chantier.** La mesure qui fait foi est celle
+ci-dessous, restreinte à la fenêtre brûlée (2024-06-14+, entièrement
+post-2019, donc non contaminée par construction).
+
+**Mesure propre (fenêtre brûlée uniquement, jamais le hors-échantillon
+2019-2024.06)** :
+
+| Résolution (T, min) | n | brut (coût nul) | net (coût corrigé) | coût mesuré |
+|---|---|---|---|---|
+| M15 (15) | 3148 | +0,0345R | — | — |
+| **HOUR (60, config actuelle)** | **767** | **+0,0517R** | **-0,0250R** | **0,0767R** |
+| HOUR_4 (240) | 187 | -0,0343R | — | — |
+
+sigma(R) mesuré = 0,9487 (n=767).
+
+**Cible (étape 4, chaîne complète) = brut - coût mesuré = 0,0517 -
+0,0767 = -0,0250R — NÉGATIVE**, exactement égale (contrôle de cohérence)
+au net mesuré directement. n projeté pour le holdout 2019-2024.06 (deux
+méthodes convergentes — taux/jour sur la fenêtre brûlée × durée du
+holdout, et ratio du nombre de bougies) : 1899-1906, retenu 1900.
+MDE = 2,4865×0,9487/√1900 ≈ 0,054R.
+
+**Décision, appliquée mécaniquement** : cible ≤ 0 ⇒ MDE ≥ cible dans
+tous les cas ⇒ **NE LANCE PAS le backtest sur le holdout 2019-2024.06,
+jamais consulté, jamais brûlé.** Le chiffre est rapporté, le chantier
+s'arrête ici pour la résolution HOUR.
+
+**Axe résolution testé en plus (étape 4c, sur la même fenêtre brûlée,
+jamais le holdout)** : brut négatif à HOUR_4 (-0,0343R) et en dessous du
+niveau HOUR à M15 (+0,0345R) — pas de tendance croissante avec T. beta
+(pente ln(brut) vs ln(T), calculée entre M15 et HOUR, les deux seuls
+points positifs) = **0,29 < 0,55** (seuil fixé avant calcul) ⇒ **axe
+résolution FERMÉ DÉFINITIVEMENT pour H1**, dans les deux sens. Voir
+`docs/HYPOTHESES.md` (27/08/2026) pour la supersession dédiée du
+pré-enregistrement H1/HOUR_4 du 26/08/2026 (Volet A, demandé
+explicitement, entrée séparée, original non modifié).
+
+**Verdict H1 (USDJPY/GBPUSD/EURUSD, HOUR, Donchian(20)+MA200)** : sous le
+modèle de coûts corrigé et sur la donnée récente non contaminée,
+espérance nette négative, aucun axe de résolution ne la sauve. US30
+reste hors pool (Branche B actée le 26/08/2026, jamais brut positif). Le
+holdout pur 2019-2024.06 n'a jamais été consulté — préservé intact pour
+toute future hypothèse théorique nouvelle sur ces 3 actifs.
+
+**Script `_measure_h1_sigma_and_target.py`** : `BURN_END` mis à jour à
+`2026-08-27T23:59:59` (était `2026-08-26`, sans effet sur le résultat,
+filtré par le contenu réel du fichier de toute façon).
+
+### 2. H2 — audit mécanique du déclencheur (Chantier 3, `docs/Prompts_Chantiers_2-6.md`)
+
+`scripts/_h2_funnel_audit.py` (nouveau, ponctuel, aucune écriture DB,
+aucun appel réseau) : instrumente `ict_strategy._find_regime_and_leg`/
+`_evaluate_entry` (réutilisées telles quelles par
+`hypothesis2_strategy.evaluate_entry`) pour compter, bougie par bougie,
+sur tout l'historique M15 disponible des 8 actifs (2024-06-14 →
+aujourd'hui, ~473 000 bougies poolées — l'historique M15 n'a jamais été
+étendu au-delà de ce point, contrairement à HOUR/HOUR_4), l'entonnoir
+cumulatif exact :
+
+| Étape | Bougies atteignant AU MOINS cette étape (poolé, 8 actifs) | % du total |
+|---|---|---|
+| Fenêtre suffisante | 473 485 | 100% |
+| ≥ swings haut ET bas confirmés | 473 293 | 99,96% |
+| ≥ régime structurel résolu (BOS) | 469 731 | 99,20% |
+| ≥ jambe d'impulsion valide | 160 908 | 33,99% |
+| ≥ clôture dans la zone Fibonacci 61,8-78,6% | 36 498 | 7,71% |
+| ≥ FVG chevauchant la zone (= signal généré) | **19** | **0,004%** |
+
+**Aucune étape à zéro strict sur ~473 000 bougies** — la règle de
+lecture pré-fixée ("0 fois = bug") ne se déclenche nulle part. La
+restriction est concentrée sur les deux dernières étapes : jambe valide
+(-66%) et zone Fibonacci (-77%), puis surtout **FVG dans la zone
+(-99,95% du reliquat, à elle seule)** — un FVG (motif de bougies déjà
+rare) doit en plus chevaucher une bande de seulement 16,8% de la jambe
+(78,6%-61,8%), dans le même sens que le régime, sur une fenêtre de
+seulement 25 bougies. **Verdict : conjonction de confluences, pas un
+bug** (chaque condition prise seule est correcte et non-dégénérée) — la
+sévérité vient du PRODUIT des trois derniers filtres, concentrée sur le
+dernier. Décision de conception à trancher par Ismaël (assouplir FVG ?
+élargir la zone ? étendre la fenêtre de recherche ?), non tranchée ici,
+conformément à la règle du chantier.
+
+**Garde-fou "une position à la fois" — signaux perdus, chiffré (ajout
+demandé, chaîne complète étape 4d)** : sur les 19 signaux bruts (position
+ignorée), seuls 9 sont survenus alors qu'aucune position n'était déjà
+ouverte pour l'actif — **10/19 (53%) sont bloqués par ce seul mécanisme**,
+avant même d'atteindre `decide_entry`. Sur ces 9 signaux "libres", les 9
+sont devenus des trades complétés (0 perdu ensuite au sizing/remplissage)
+— cohérent avec `n=0-2 trades/actif` documenté le 25/08/2026 (total
+poolé ici : 9, réparti GOLD 1/US100 1/US30 1/EURUSD 1/GBPUSD 2/USDJPY
+2/BTCUSD 0/ETHUSD 1).
+
+### 3. Étape 0 — instrumentation du prix de sortie réel (codée, testée, PAS déployée)
+
+Défaut confirmé identique à celui documenté le 26/08/2026 :
+`trade_partials.prix_sortie` n'a jamais été autre chose que la valeur
+théorique pré-calculée ; `client.close_position()` était appelée sans
+jamais lire sa réponse.
+
+- **`src/capital_client.py::close_position`** : résout désormais la
+  confirmation (`GET /confirms/{dealReference}`), même mécanisme que
+  `_submit_and_confirm` pour l'ouverture. **Non vérifié empiriquement
+  sur une clôture réelle** que Capital.com renvoie bien un
+  `dealReference` pour un DELETE (contrairement à l'ouverture, vérifiée
+  aux paliers P0/P2) — à confirmer sur la première clôture démo qui
+  suivrait un déploiement. Best-effort, fail-safe : un échec de
+  résolution ne fait jamais échouer la fermeture elle-même.
+- **`trade_partials.prix_sortie_reel`/`broker_executed_at`** (nouvelles
+  colonnes, migration `_add_column_if_missing`, `NULL` par défaut,
+  aucun backfill — honnête : aucune mesure rétroactive n'existe).
+- **`src/executor.py::_apply_management_action`** : capture le résultat
+  de `close_position()`, persiste les deux nouvelles colonnes SANS
+  écraser `prix_sortie` (théorique, conservée telle quelle).
+- Tests : `tests/test_capital_client.py` (+3), `tests/test_executor.py`
+  (+1, capture bout en bout). **928 tests passent au total, 100% sur
+  `capital_client.py`.**
+
+### 4. Étape 1 — garde-fou Option B sensible à l'environnement (codé, testé, PAS déployé)
+
+Bug de conception confirmé dans le code : `_check_backtest_confidence_gate`
+(`src/executor.py`) ne testait aucun environnement — il bloquait un
+signal DÉMO exactement comme un signal réel dès qu'un backtest
+défavorable existait, alors que `trades.mode` est TOUJOURS `'demo'`
+(aucun chemin de code vers le réel n'existe même structurellement,
+`_DEMO_BASE_URL` codée en dur — voir `run_executor_loop`). **Le
+garde-fou empêchait donc d'accumuler la donnée démo qui permettrait un
+jour de le lever.**
+
+Corrigé, deux branches, `environment` lu UNIQUEMENT depuis
+`config.capital_environment` (invariant #6, jamais un paramètre modifié
+à chaud) — `open_signal`/`_check_backtest_confidence_gate` gagnent un
+paramètre `environment` (défaut `"demo"`, thread par les deux boucles
+concernées, `run_executor_loop` et `technical_strategy_executor.
+run_technical_strategy_loop`) :
+- **`environment == "demo"`** : no-op inconditionnel, quelle que soit
+  l'espérance du backtest.
+- **Tout le reste (`"live"` ou fail-safe)** : critère DURCI — borne
+  basse à 95% par **bootstrap de blocs CALENDAIRES** (mois), pas
+  l'ancienne approximation normale (moyenne - z×SE). Nouvelle fonction
+  pure `src/evolution_engine.compute_calendar_block_bootstrap_lower_bound`
+  (100% couverte, 6 tests) : rééchantillonne des MOIS entiers (jamais des
+  trades individuels), ne suppose ni normalité ni indépendance
+  intra-mois. `None` si moins de 2 mois distincts (jamais traité comme
+  qualifiant faute de pouvoir le calculer).
+
+**Rapport demandé ("combien des 40 couples passent 'borne basse > 0'")**,
+`scripts/_gate_40_couples_bootstrap_report.py`, exécuté en lecture seule
+sur `costfix_staging/data/assistant_trading_staging.db` (données Option B
+régénérées le 26/08/2026 avec le modèle de coûts corrigé) :
+
+- 35/40 couples ont ≥1 trade backtest ; 5 sont à zéro trade.
+- 5 couples n'ont qu'1 seul mois calendaire (n=1 chacun, H2) — borne
+  bootstrap indéfinie, non évaluables.
+- **2/30 couples évaluables passent "borne basse bootstrap > 0"** :
+  - `hypothesis2_backtest`/GBPUSD (n=2, mean=+1,4653R, borne=+0,8142R) —
+    **bruit pur, n=2** (même lecture que H1/BTCUSD et H4/GOLD signalés
+    le 26/08/2026 : un tirage, pas un edge, à ne jamais promouvoir).
+  - **`hypothesis_backtest` (H1) / GOLD (n=233, 28 mois, mean=+0,1837R,
+    borne bootstrap=+0,0715R, borne analytique=+0,0632R)** — échantillon
+    substantiel, borne robuste aux deux méthodes. **Finding NOUVEAU, hors
+    périmètre de ce chantier** : GOLD n'a jamais fait partie du pool H1
+    testé le 26/08/2026 (limité à USDJPY/US30/GBPUSD/EURUSD, les 4
+    couples bloqués en direct) et n'est PAS dans la liste blanche live de
+    H1 (Flux B : US30/EURUSD/GBPUSD/USDJPY/ETHUSD, voir palier P2.5) — ce
+    chiffre est un résultat purement rétrospectif (`run_retrospective_
+    backtest.py` rejoue les 8 actifs pour chaque hypothèse par
+    construction), jamais tradé par H1 en réalité. **Rapporté, pas agi**
+    — décision d'ouvrir ou non un chantier H1/GOLD à trancher par
+    Ismaël, aucun paramétrage par-actif introduit ici.
+- Tous les autres couples évaluables (H3/H4/H5 sur leurs 6-8 actifs,
+  H1 sur les 7 autres actifs) ont une borne basse bootstrap négative —
+  cohérent avec les clôtures déjà actées.
+
+Tests : `tests/test_executor.py` (fixture `_insert_closed_backtest_trades`
+étalée sur 6 mois calendaires au lieu d'1 seul — nécessaire pour exercer
+le bootstrap ; gate tests réécrits avec `environment="live"` explicite là
+où le blocage est attendu, +2 tests dédiés au bypass démo).
+
+### 5. Étape 2 — attribution causale déterministe par trade (codée, testée, PAS exécutée en masse)
+
+`src/causal_decomposition.py` (nouveau, couche pure 100% couverte) :
+`R_réalisé = R_théorique - coût_entrée - coût_sortie - dérive_gestion`,
+par jambe (`trade_partials`) puis agrégée au prorata de `fraction` par
+trade. `coût_entrée` mesurable dès aujourd'hui
+(`prix_entree_reel` déjà en base depuis P2) ; `coût_sortie`/
+`dérive_gestion` restent `None` tant que `prix_sortie_reel` (étape 0,
+ci-dessus) n'a pas été alimenté par au moins un cycle démo réel —
+**aucune valeur de repli, jamais un zéro silencieux pour un coût de
+sortie non mesuré** (même discipline que le 26/08/2026). Nouvelle table
+`trade_causal_decomposition` (une ligne par trade, idempotente),
+`aggregate_by_hypothesis_asset_month` pour le livrable demandé
+("où part l'argent" par hypothèse/actif/mois). 22 tests, 100% de
+couverture. **Non exécuté sur la base de production** (l'étape 0 dont il
+dépend pour sa moitié utile n'est pas déployée) — prêt à tourner dès
+qu'au moins 30 trades démo auront fermé avec la nouvelle instrumentation.
+
+### 6. Étape 3 — recalibration des coûts sur les deux jambes : BLOQUÉE, pas contournée
+
+Ne peut PAS être complétée aujourd'hui, par construction : nécessite des
+données RÉELLEMENT mesurées (`prix_sortie_reel`, taux de remplissage
+démo) qui n'existent nulle part avant que l'étape 0 tourne en production
+pendant un certain temps. Conditions explicites pour débloquer, dans
+l'ordre : (1) accord d'Ismaël pour déployer le correctif de l'étape 0 et
+redémarrer les 6 process concernés ; (2) accumulation d'au moins 30
+trades démo clôturés avec `prix_sortie_reel` renseigné ; (3) alors
+seulement, mesurer le coût de sortie réel par actif ET le taux de
+remplissage backtest-vs-démo (le biais signalé — "rempli au contact" en
+backtest vs remplissage préférentiel quand le prix traverse en réalité —
+reste non mesuré, dans le sens INVERSE du slippage retiré le 26/08/2026,
+donc potentiellement compensateur, pas juste aggravant). Aucune
+estimation de repli produite ici — un chiffre inventé serait pire
+qu'une case vide.
+
+### 7. Étape 4 — tri des 5 hypothèses au seuil invariant
+
+**4a** (H1, ci-dessus) : voir section 1.
+
+**4b — seuil invariant `brut_min = 2×√(c0×m0)`**, c0/m0 dérivés de la
+paire (coût, MDE) mesurée à la résolution actuelle : H1 (HOUR,
+T=60min, cost=0,0767R, n=767, sigma=0,9487) donne c0=0,594, m0=0,01212,
+**brut_min=0,1697R** contre un brut mesuré de 0,0517R — **déficit
+×3,3**. T optimal théorique (c0/m0) ≈ 49 min, quasiment déjà HOUR (60
+min) — H1 opère déjà près de son optimum de résolution, changer de
+timeframe n'aurait de toute façon apporté presque rien (cohérent avec
+beta=0,29 ci-dessus). Pour mémoire, valeurs déjà calculées et citées
+telles quelles (non re-dérivées ici, hors périmètre de re-vérification
+de ce chantier) : H3 seuil 0,1052R (brut +0,0237R, déficit ×4,4), H5
+seuil 0,1396R (brut +0,0139R, déficit ×10,0), H4 seuil 0,1450R (brut
+négatif, déficit non défini — aucune résolution ne peut sauver un brut
+déjà négatif).
+
+**4c — beta (pente ln(brut) vs ln(T)) sur fenêtre brûlée uniquement** :
+H1 = 0,29 (mesuré directement ci-dessus, 3 points M15/HOUR/HOUR_4) →
+**axe FERMÉ définitivement**. H3 = 0,626 (recalculé en contrôle croisé à
+partir des deux points déjà documentés, M15 +0,0237R et HOUR_4
++0,1345R — pas une nouvelle mesure indépendante) → **≥ 0,55, axe resté
+ouvert par la règle**, mais **aucun test confirmatoire à T*=c0/m0 n'est
+pré-enregistré dans cette session** (dérivation complète de c0/m0 pour
+H3 hors du temps disponible ici) — prochaine étape explicite pour une
+session dédiée, pas oubliée.
+
+**4d** (H2, ci-dessus) : voir section 2.
+
+### 8. Étape 5 — affinage (`run_evolution_cycle.py`) : différé, pas exécuté
+
+Décision explicite de ne PAS lancer de dry-run ce chantier-ci : la
+section 4 ci-dessus ne dégage aucune hypothèse clairement vivante à
+affiner (H1 fermé, H3/H5/H4 sous leur propre seuil invariant avec un
+déficit de ×4 à ×10, H2 trop clairsemée). Le seul signal positif robuste
+(H1/GOLD, section 4) est hors périmètre déclaré de H1 et n'a pas encore
+été tranché par Ismaël — lancer l'affinage avant cette décision risquait
+de consommer un cycle sur un pool qui va changer. Reste prêt à lancer
+(`python scripts/run_evolution_cycle.py --hypothesis H3 --dry-run`, etc.)
+dès qu'Ismaël aura arbitré.
+
+### 9. Étape 6 — promotion au réel : aucun couple, état inchangé
+
+Confirmé par le rapport de la section 4 : à ce jour, **aucun couple
+(actif, hypothèse) avec un échantillon substantiel ne passe le critère
+durci** de promotion au réel (borne basse à 95% > 0). Le seul couple qui
+passe avec un échantillon non-trivial (H1/GOLD, n=233) est un résultat
+rétrospectif sur un actif jamais tradé par H1 en direct — pas une
+promotion candidate tant que ce périmètre n'est pas explicitement
+étendu par Ismaël.
+
+### Tests, déploiement
+
+928 tests passent au total (904 avant ce chantier), 100% de couverture
+maintenue sur tous les modules critiques
+(`risk_engine`/`capital_manager`/`go_nogo`/`validator`/`trend_strategy`/
+`circuit_breaker`/`ict_strategy`/`mean_reversion_strategy`/
+`confidence_scorer`/`hypothesis2_strategy`/`hypothesis3_strategy`/
+`hypothesis5_strategy`/`regime_confirmation`/`backtest_engine`/
+`causal_analyzer`/`evolution_engine`/`causal_decomposition`/
+`capital_client`). **Aucun déploiement VPS, aucun redémarrage de
+process** — tout le code des étapes 0/1/2 (capital_client.py,
+db.py, executor.py, technical_strategy_executor.py, evolution_engine.py,
+causal_decomposition.py + tests) reste committé côté dépôt local
+uniquement à ce stade, prêt à revue avant tout `git push`/déploiement.
+6 scripts de recherche ponctuels ajoutés (`scripts/_h2_funnel_audit.py`,
+`scripts/_h1_beta_multi_resolution.py`,
+`scripts/_gate_40_couples_bootstrap_report.py`, `scripts/_h1_burned_gross_check.py`
+côté VPS uniquement — lecture seule, aucun n'écrit sur la base de
+production).
+
+---
+
 ## 2026-08-26 (suite 4) — Recalibration du modèle de coûts §2.6 : défaut confirmé (partiellement), corrigé, données Option B régénérées en isolation (PAS déployé)
 
 Pré-enregistrement complet dans `docs/HYPOTHESES.md` (26/08/2026, suite

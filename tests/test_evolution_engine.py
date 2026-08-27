@@ -11,6 +11,7 @@ from src.evolution_engine import (
     ValidationVerdict,
     bonferroni_one_sided_z,
     build_rule_change_rows,
+    compute_calendar_block_bootstrap_lower_bound,
     compute_lower_bound,
     evaluate_validation,
     persist_rule_changes,
@@ -63,6 +64,55 @@ def test_lower_bound_below_mean():
 def test_lower_bound_zero_variance():
     values = [0.5, 0.5, 0.5, 0.5]
     assert compute_lower_bound(values, 1.645) == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# compute_calendar_block_bootstrap_lower_bound
+# ---------------------------------------------------------------------------
+
+def test_bootstrap_lower_bound_empty_is_none():
+    assert compute_calendar_block_bootstrap_lower_bound([], []) is None
+
+
+def test_bootstrap_lower_bound_single_block_is_none():
+    values = [0.5, -0.2, 0.8]
+    timestamps = ["2024-06-01T00:00:00", "2024-06-15T00:00:00", "2024-06-20T00:00:00"]
+    assert compute_calendar_block_bootstrap_lower_bound(values, timestamps) is None
+
+
+def test_bootstrap_lower_bound_mismatched_lengths_raises():
+    with pytest.raises(ValueError):
+        compute_calendar_block_bootstrap_lower_bound([0.5], ["2024-06-01T00:00:00", "2024-07-01T00:00:00"])
+
+
+def test_bootstrap_lower_bound_below_mean_with_variance():
+    values = [1.0, 0.9, 1.1, -0.8, -0.9, -1.0]
+    timestamps = [
+        "2024-06-01T00:00:00", "2024-06-10T00:00:00", "2024-06-20T00:00:00",
+        "2024-07-01T00:00:00", "2024-07-10T00:00:00", "2024-07-20T00:00:00",
+    ]
+    lb = compute_calendar_block_bootstrap_lower_bound(values, timestamps, seed=42)
+    mean = sum(values) / len(values)
+    assert lb < mean
+
+
+def test_bootstrap_lower_bound_deterministic_with_seed():
+    values = [0.5, -0.2, 0.8, 1.1, -0.4, 0.3]
+    timestamps = [
+        "2024-06-01T00:00:00", "2024-06-15T00:00:00",
+        "2024-07-01T00:00:00", "2024-07-15T00:00:00",
+        "2024-08-01T00:00:00", "2024-08-15T00:00:00",
+    ]
+    lb1 = compute_calendar_block_bootstrap_lower_bound(values, timestamps, seed=7)
+    lb2 = compute_calendar_block_bootstrap_lower_bound(values, timestamps, seed=7)
+    assert lb1 == lb2
+
+
+def test_bootstrap_lower_bound_zero_variance_matches_constant():
+    values = [0.5, 0.5, 0.5, 0.5]
+    timestamps = ["2024-06-01T00:00:00", "2024-06-15T00:00:00", "2024-07-01T00:00:00", "2024-07-15T00:00:00"]
+    lb = compute_calendar_block_bootstrap_lower_bound(values, timestamps, seed=1)
+    assert lb == pytest.approx(0.5)
 
 
 # ---------------------------------------------------------------------------

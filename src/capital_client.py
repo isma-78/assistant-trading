@@ -237,9 +237,39 @@ class CapitalClient:
 
     def close_position(self, deal_id: str, size: Optional[float] = None) -> dict:
         """Ferme une position, totalement (size=None) ou partiellement
-        (size=fraction de la taille ouverte, pour TP1/TP2 — §2.10)."""
+        (size=fraction de la taille ouverte, pour TP1/TP2 — §2.10).
+
+        Résout la confirmation (27/08/2026, voir docs/DECISIONS.md) —
+        même mécanisme que `_submit_and_confirm` pour l'ouverture (POST/
+        DELETE puis `GET /confirms/{dealReference}`) : jusqu'ici la
+        réponse du DELETE était retournée telle quelle et jamais lue par
+        l'appelant, rendant le prix de sortie réel structurellement non
+        mesurable. **Non encore vérifié empiriquement sur une clôture
+        réelle** que Capital.com renvoie bien un `dealReference` pour un
+        DELETE (contrairement à l'ouverture, vérifiée aux paliers P0/P2)
+        — à confirmer sur la première clôture démo qui suit ce
+        déploiement. Best-effort, fail-safe (invariant #7) : la position
+        est déjà fermée côté broker à ce stade, un échec de résolution de
+        la confirmation ne doit jamais faire remonter d'exception ici —
+        seul le prix réel reste alors non capturé pour cet appel.
+
+        Retourne {"level": <prix réel ou None>, "executed_at": <date de
+        la confirmation ou None>, "confirmation": <réponse complète ou
+        None>}."""
         body = {"size": size} if size is not None else None
-        return self.delete(f"/positions/{deal_id}", body=body)
+        result = self.delete(f"/positions/{deal_id}", body=body)
+        deal_reference = result.get("dealReference")
+        if not deal_reference:
+            return {"level": None, "executed_at": None, "confirmation": None}
+        try:
+            confirmation = self.get(f"/confirms/{deal_reference}")
+        except CapitalApiError:
+            return {"level": None, "executed_at": None, "confirmation": None}
+        return {
+            "level": confirmation.get("level"),
+            "executed_at": confirmation.get("date"),
+            "confirmation": confirmation,
+        }
 
     def update_position_stop(self, deal_id: str, new_stop_level: float, guaranteed_stop: bool = False) -> dict:
         """Déplace le stop d'une position déjà ouverte (resserrement

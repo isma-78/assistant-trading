@@ -184,7 +184,8 @@ def test_open_position_with_guaranteed_stop_includes_body_fields():
 
 def test_close_position_full_sends_no_size():
     client, session = _logged_in_client()
-    session.delete.return_value = _fake_response(json_body={"status": "closed"})
+    session.delete.return_value = _fake_response(json_body={"dealReference": "ref-1"})
+    session.get.return_value = _fake_response(json_body={"level": 91950.0, "date": "2026-08-27T10:00:00"})
 
     client.close_position("pos-1")
 
@@ -193,11 +194,46 @@ def test_close_position_full_sends_no_size():
 
 def test_close_position_partial_sends_size():
     client, session = _logged_in_client()
-    session.delete.return_value = _fake_response(json_body={"status": "closed"})
+    session.delete.return_value = _fake_response(json_body={"dealReference": "ref-1"})
+    session.get.return_value = _fake_response(json_body={"level": 91950.0, "date": "2026-08-27T10:00:00"})
 
     client.close_position("pos-1", size=0.0005)
 
     assert session.delete.call_args.kwargs["json"] == {"size": 0.0005}
+
+
+def test_close_position_resolves_real_execution_price_and_date():
+    client, session = _logged_in_client()
+    session.delete.return_value = _fake_response(json_body={"dealReference": "ref-close-1"})
+    session.get.return_value = _fake_response(json_body={"level": 91950.0, "date": "2026-08-27T10:00:00"})
+
+    result = client.close_position("pos-1")
+
+    session.get.assert_called_once()
+    assert session.get.call_args[0][0].endswith("/confirms/ref-close-1")
+    assert result["level"] == 91950.0
+    assert result["executed_at"] == "2026-08-27T10:00:00"
+    assert result["confirmation"]["level"] == 91950.0
+
+
+def test_close_position_without_deal_reference_returns_none_fields():
+    client, session = _logged_in_client()
+    session.delete.return_value = _fake_response(json_body={"status": "closed"})
+
+    result = client.close_position("pos-1")
+
+    session.get.assert_not_called()
+    assert result == {"level": None, "executed_at": None, "confirmation": None}
+
+
+def test_close_position_confirmation_failure_is_best_effort():
+    client, session = _logged_in_client()
+    session.delete.return_value = _fake_response(json_body={"dealReference": "ref-close-1"})
+    session.get.return_value = _fake_response(status_ok=False)
+
+    result = client.close_position("pos-1")
+
+    assert result == {"level": None, "executed_at": None, "confirmation": None}
 
 
 def test_update_position_stop_uses_put():

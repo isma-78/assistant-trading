@@ -54,7 +54,7 @@ from typing import Callable, List, Optional, Tuple
 
 import requests
 
-from src import circuit_breaker_store, confidence_scorer
+from src import circuit_breaker_store, confidence_scorer, evolution_engine
 from src.audit_notifier import (
     format_trade_closed_notification,
     format_trade_opened_notification,
@@ -611,57 +611,81 @@ def _compute_guaranteed_stop_adjustment(
     return GuaranteedStopAdjustment(stop_price=widened_stop_price, stop_distance=min_distance, guaranteed_required=True, widened=True)
 
 
-def _check_backtest_confidence_gate(db_path: str, asset: str, source: str, risk_percent: float) -> Optional[str]:
-    """Garde-fou Option B (24/08/2026, voir docs/HYPOTHESES.md) : rejette
-    un signal AVANT tout calcul de sizing si le backtest rétrospectif du
-    couple (actif, hypothèse) est ÉLIGIBLE (seuils backtest, plus stricts
-    que le live — `confidence_scorer.PHASE_A_MIN_TRADES_BACKTEST`/
-    `PHASE_B_MIN_TRADES_BACKTEST`) ET que son espérance nette est ≤ 0.
-    Ne s'applique JAMAIS à Station X (source absente de `_BACKTEST_
-    SOURCE_BY_LIVE_SOURCE`). Retourne le détail du rejet, ou None si le
-    signal doit continuer son chemin normal (source non concernée,
-    couple backtest pas encore éligible, ou espérance positive) — dans
-    TOUS ces cas "None", ce garde-fou est un pur no-op, comportement live
-    strictement inchangé (vrai par construction tant qu'aucun backtest
-    n'a été exécuté pour ce couple : `eligible` reste alors False).
+def _fetch_backtest_r_values_and_timestamps(db_path: str, asset: str, backtest_source: str) -> Tuple[List[float], List[str]]:
+    """Trades fermés d'un couple (actif, source backtest), triés
+    chronologiquement — support brut du garde-fou RÉEL (27/08/2026, voir
+    docs/DECISIONS.md), qui a besoin des valeurs individuelles (pour le
+    bootstrap par blocs calendaires), pas seulement de l'agrégat que
+    renvoie `confidence_scorer.compute_confidence_score`."""
+    with connection_scope(db_path) as conn:
+        rows = conn.execute(
+            "SELECT r_multiple_total, ferme_at FROM trades WHERE source = ? AND actif = ? "
+            "AND statut = 'ferme' AND r_multiple_total IS NOT NULL ORDER BY ferme_at",
+            (backtest_source, asset),
+        ).fetchall()
+    return [row["r_multiple_total"] for row in rows], [row["ferme_at"] for row in rows]
 
-    N'augmente jamais le risque (ne fait que refuser, jamais moduler à
-    la hausse) — `risk_engine.py` n'est pas modifié par ce garde-fou.
 
-    Corrigé pendant les tests (24/08/2026, voir docs/DECISIONS.md) :
-    n'utilise PAS `ConfidenceScore.eligible` comme critère "assez de
-    données" — `evaluate_confidence` (§2.4) exige une espérance nette
-    STRICTEMENT POSITIVE parmi ses conditions éliminatoires (c'est un
-    score de PROMOTION vers le réel), donc `eligible` est TOUJOURS False
-    dès que l'espérance est ≤ 0 : utiliser `eligible` ici aurait rendu ce
-    garde-fou définitivement inatteignable, exactement le cas qu'il doit
-    détecter. La suffisance d'échantillon est vérifiée séparément via
-    `check_min_trades` (mêmes seuils backtest), découplée du signe de
-    l'espérance."""
+def _check_backtest_confidence_gate(db_path: str, asset: str, source: str, risk_percent: float, environment: str = "demo") -> Optional[str]:
+    """Garde-fou Option B — origine 24/08/2026 (voir docs/HYPOTHESES.md),
+    DEVIENT SENSIBLE À L'ENVIRONNEMENT le 27/08/2026 (voir docs/DECISIONS.md) :
+
+    - **`environment == "demo"`** : NO-OP INCONDITIONNEL. Constat vérifié
+      le 27/08/2026 : le système tourne intégralement en démo
+      (`trades.mode` toujours 'demo', voir `open_signal`) et ce garde-fou
+      ne distinguait pas l'environnement — il bloquait donc aussi les
+      trades démo dès qu'un backtest existait pour ce couple, empêchant
+      structurellement d'accumuler la donnée live qui permettrait un jour
+      de le lever. La démo doit trader sans blocage, sur toute sa liste
+      blanche : les pertes démo n'ont pas de coût, la donnée a de la
+      valeur.
+    - **Tout le reste (`"live"`, ou toute autre valeur — fail-safe :
+      jamais un bypass silencieux du réel faute de valeur reconnue)** :
+      critère DURCI. Ne s'applique JAMAIS à Station X (source absente de
+      `_BACKTEST_SOURCE_BY_LIVE_SOURCE`). Exige au moins
+      `PHASE_A_MIN_TRADES_BACKTEST` trades ET une borne basse à 95% par
+      bootstrap de blocs CALENDAIRES (mois) strictement positive
+      (`evolution_engine.compute_calendar_block_bootstrap_lower_bound`)
+      — plus strict que l'ancien critère (signe de la moyenne seule) : la
+      borne basse implique déjà ce signe (borne basse <= moyenne), sans
+      supposer normalité ni indépendance intra-mois. Un signal RÉEL est
+      donc bloqué par défaut tant que la promotion n'est pas
+      statistiquement établie — c'est désormais le critère de PROMOTION
+      vers le réel, jamais un simple filtre de recherche.
+
+    `environment` doit provenir UNIQUEMENT de `config.capital_environment`
+    (invariant #6 — jamais un paramètre modifiable à chaud) ; ce garde-fou
+    lui-même ne lit jamais la config, l'appelant est seul responsable de
+    ce qu'il transmet ici.
+
+    N'augmente jamais le risque (ne fait que refuser, jamais moduler à la
+    hausse) — `risk_engine.py` n'est pas modifié par ce garde-fou."""
     backtest_source = _BACKTEST_SOURCE_BY_LIVE_SOURCE.get(source)
     if backtest_source is None:
         return None
-    score = confidence_scorer.compute_confidence_score(
-        db_path, asset, backtest_source, risk_percent,
-        phase_a_min_trades=confidence_scorer.PHASE_A_MIN_TRADES_BACKTEST,
-        phase_b_min_trades=confidence_scorer.PHASE_B_MIN_TRADES_BACKTEST,
-    )
-    enough_data, _, phase = confidence_scorer.check_min_trades(
-        score.nb_trades, confidence_scorer.PHASE_A_MIN_TRADES_BACKTEST, confidence_scorer.PHASE_B_MIN_TRADES_BACKTEST,
-    )
-    if not enough_data or score.esperance_r is None or score.esperance_r > 0:
+    if environment == "demo":
         return None
+
+    r_values, timestamps = _fetch_backtest_r_values_and_timestamps(db_path, asset, backtest_source)
+    if len(r_values) < confidence_scorer.PHASE_A_MIN_TRADES_BACKTEST:
+        return None
+
+    lower_bound = evolution_engine.compute_calendar_block_bootstrap_lower_bound(r_values, timestamps)
+    if lower_bound is not None and lower_bound > 0:
+        return None
+
+    lb_str = f"{lower_bound:.4f}R" if lower_bound is not None else "indéterminée (un seul mois calendaire distinct)"
     return (
-        f"Backtest rétrospectif ({backtest_source}) : {score.nb_trades} trades (phase {phase}) "
-        f"avec une espérance nette ≤ 0 ({score.esperance_r:.4f}R) — "
-        "signal rejeté avant sizing (garde-fou Option B, docs/HYPOTHESES.md 24/08/2026)"
+        f"Backtest rétrospectif ({backtest_source}) : {len(r_values)} trades, borne basse à 95% "
+        f"(bootstrap par blocs calendaires) = {lb_str} — signal RÉEL rejeté avant sizing "
+        "(garde-fou Option B durci, promotion au réel, docs/DECISIONS.md 27/08/2026)"
     )
 
 
 def open_signal(
     db_path: str, client: CapitalClient, signal_row, risk_engine: RiskEngine, whitelist: dict,
     envelope_manager: CapitalManager, envelope_id: int, confidence_threshold: float, go_nogo_status: GoNoGoStatus,
-    bot_token: Optional[str] = None, chat_id: Optional[str] = None,
+    bot_token: Optional[str] = None, chat_id: Optional[str] = None, environment: str = "demo",
 ) -> Optional[str]:
     """Traite un signal statut='a_valider' : valide, dimensionne, place
     un ordre LIMITE (§2.8), journalise. Retourne le deal_id si un ordre a
@@ -708,7 +732,7 @@ def open_signal(
         return None
 
     backtest_gate_detail = _check_backtest_confidence_gate(
-        db_path, asset, signal_row["source"], risk_engine.caps.risk_percent_default,
+        db_path, asset, signal_row["source"], risk_engine.caps.risk_percent_default, environment,
     )
     if backtest_gate_detail is not None:
         with connection_scope(db_path) as conn:
@@ -1262,8 +1286,21 @@ def _apply_management_action(
     # Clôtures (partielles ou totales)
     is_full_close = action.action in (ManagementActionType.CLOSE_FULL_STOP, ManagementActionType.CLOSE_FULL_TP)
     close_size = None if is_full_close else round(action.fraction_to_close * _initial_size(db_path, state.trade_id), 10)
+    # Capture du prix de sortie RÉEL (27/08/2026, voir docs/DECISIONS.md) :
+    # jusqu'ici la réponse de close_position() était totalement ignorée —
+    # trade_partials.prix_sortie ne contenait que la valeur THÉORIQUE
+    # pré-calculée par _evaluate_position_management, rendant tout coût de
+    # sortie structurellement non mesurable. `prix_sortie_reel`/
+    # `broker_executed_at` sont None en best-effort (position déjà fermée
+    # côté broker à ce stade quoi qu'il arrive) — jamais un motif d'échec
+    # de cette fonction.
+    real_exit_level: Optional[float] = None
+    real_exit_executed_at: Optional[str] = None
     try:
-        client.close_position(state.deal_id, size=close_size)
+        close_result = client.close_position(state.deal_id, size=close_size)
+        if isinstance(close_result, dict):
+            real_exit_level = close_result.get("level")
+            real_exit_executed_at = close_result.get("executed_at")
     except CapitalApiError:
         # Incident réel du 21/08/2026 (voir docs/DECISIONS.md) : un stop
         # garanti s'exécute INSTANTANÉMENT côté broker dès que le prix le
@@ -1312,9 +1349,13 @@ def _apply_management_action(
     # docs/DECISIONS.md).
     with connection_scope(db_path) as conn:
         conn.execute(
-            "INSERT INTO trade_partials (trade_id, palier, fraction, prix_sortie, r_atteint, motif, executed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (state.trade_id, palier, action.fraction_to_close, action.exit_price, action.r_multiple, action.detail, now),
+            "INSERT INTO trade_partials (trade_id, palier, fraction, prix_sortie, r_atteint, motif, executed_at, "
+            "prix_sortie_reel, broker_executed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                state.trade_id, palier, action.fraction_to_close, action.exit_price, action.r_multiple,
+                action.detail, now, real_exit_level, real_exit_executed_at,
+            ),
         )
         if action.new_stop_price is not None:
             conn.execute("UPDATE trades SET stop_loss_courant = ? WHERE id = ?", (action.new_stop_price, state.trade_id))
@@ -1646,6 +1687,7 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30, startup_
                     envelope_managers[key], envelope_ids[key],
                     config.confidence_threshold, go_nogo_status,
                     config.telegram_bot_token, config.telegram_chat_id,
+                    environment=config.capital_environment,
                 )
 
             manage_open_trades(

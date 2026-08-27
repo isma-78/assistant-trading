@@ -3547,6 +3547,64 @@ direct, écart assumé à la règle d'auto-déploiement du 25/08).
 
 ---
 
+## 2026-08-27 — SUPERSESSION dédiée : pré-enregistrement H1/HOUR_4 du 26/08 (« suite », auto-déploiement) déclaré CADUC
+
+Entrée de supersession promise le 26/08/2026 (voir `docs/DECISIONS.md`
+du même jour, chantier H3/HOUR_4 : « celui-ci est déclaré CADUC par
+Ismaël... superseded par une entrée dédiée future ») mais jamais
+livrée — une seule ligne glissée dans l'entrée H3/HOUR_4 n'en tenait pas
+lieu. Écrite ici, séparément, comme demandé le 27/08/2026. **L'entrée
+d'origine ci-dessus (« 2026-08-26 (suite) — PRÉ-ENREGISTREMENT : chantier
+de refonte H1, actifs du diagnostic Phase 1 ») n'est ni supprimée ni
+modifiée** — elle reste lisible telle quelle, seule sa validité est
+ici annulée.
+
+### Ce qui est superseded
+
+Le pré-enregistrement H1/HOUR_4 du 26/08/2026 proposait : (1) tester un
+candidat de résolution HOUR_4 pour USDJPY/GBPUSD/EURUSD via
+`scripts/run_evolution_cycle.py --hypothesis H1` (protocole entraînement/
+validation, cutoff 2025-12-01, seuils `PHASE_A/B_MIN_TRADES_BACKTEST`) ;
+(2) déploiement **automatique** si le candidat qualifie
+(`rule_changes.statut='applique'` directement, sans confirmation
+manuelle). **Jamais exécuté** — `data/historical/` absent du dépôt local
+au moment de l'écrire, seule la session VPS y avait accès.
+
+### Pourquoi c'est caduc
+
+Deux raisons indépendantes, toutes deux découvertes le 27/08/2026 :
+
+1. **Protocole remplacé par une méthodologie plus rigoureuse.** Le
+   chantier repris le 27/08/2026 (voir `docs/DECISIONS.md`) applique à H1
+   le même protocole de test confirmatoire unique déjà validé sur
+   H3/HOUR_4 (25-26/08/2026) : mesure de sigma/cible sur la fenêtre
+   BRÛLÉE (2024-06-14 → aujourd'hui, jamais le hors-échantillon), porte
+   de puissance (MDE) fixée AVANT tout calcul sur le holdout
+   2019-2024.06, et surtout **AUCUN déploiement automatique** — chaque
+   candidat, si un jour un test qualifie, sera soumis à Ismaël. C'est un
+   protocole strictement supérieur à celui du 26/08/2026 sur le même
+   sujet (H1, résolution), pas une simple répétition.
+2. **La prémisse même du test HOUR_4 est invalidée.** Mesuré le
+   27/08/2026 (`docs/DECISIONS.md`) : l'espérance BRUTE (coût nul) de H1
+   sur la fenêtre brûlée, pour USDJPY/GBPUSD/EURUSD poolés, est
+   **négative à HOUR_4** (-0,0343R, contre +0,0517R à HOUR et +0,0345R à
+   M15) — beta (pente ln(brut) vs ln(T)) = 0,29, sous le seuil de 0,55
+   fixé pour garder l'axe résolution ouvert. Le candidat HOUR_4 que le
+   pré-enregistrement du 26/08/2026 proposait de tester n'aurait
+   structurellement rien pu qualifier : l'axe résolution est fermé pour
+   H1, dans les deux sens (HOUR_4 comme M15).
+
+### Conséquence
+
+Aucune action requise sur le pré-enregistrement d'origine (jamais
+exécuté, aucun `rule_changes` écrit, aucun risque de déploiement
+fantôme). Le chantier H1/résolution est désormais clos par la mesure du
+27/08/2026 ci-dessus, pas par cette supersession elle-même — cette
+entrée documente uniquement pourquoi l'ancien protocole ne sera jamais
+relancé tel quel.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4, #5, ou du backtest rétrospectif — jamais une modification de
 ce qui précède.*

@@ -453,6 +453,7 @@ def run_technical_strategy_loop(
                     envelope_managers[key], envelope_ids[key],
                     config.confidence_threshold, go_nogo_status,
                     config.telegram_bot_token, config.telegram_chat_id,
+                    environment=config.capital_environment,
                 )
 
             manage_open_trades(

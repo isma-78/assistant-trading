@@ -1336,6 +1336,45 @@ def test_manage_open_trades_closes_full_stop_and_updates_envelope(tmp_path):
     assert envelope_manager.balance == 490.0  # perte imputée en totalité (§2.3)
 
 
+def test_manage_open_trades_captures_real_exit_price_from_close_position(tmp_path):
+    # 27/08/2026 (voir docs/DECISIONS.md) : trade_partials.prix_sortie_reel/
+    # broker_executed_at doivent être alimentés depuis la réponse résolue
+    # de client.close_position(), sans écraser prix_sortie (théorique).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-xyz', 'station_x', 'GOLD', 'demo', 'short', 0.01, 100.0, 101.0, 101.0, 10.0, 2.0, "
+            "'2026-08-16T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 101.0, "offer": 101.2, "marketStatus": "TRADEABLE"}}
+    client.get_prices.return_value = {"prices": []}
+    client.close_position.return_value = {"level": 101.05, "executed_at": "2026-08-27T09:00:00", "confirmation": {}}
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="stationx")
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("GOLD", "stationx"): envelope_manager}, envelope_ids={("GOLD", "stationx"): envelope_id},
+    )
+
+    conn = get_connection(db_path)
+    try:
+        partial = conn.execute("SELECT * FROM trade_partials WHERE trade_id = ?", (trade_id,)).fetchone()
+        assert partial["prix_sortie_reel"] == pytest.approx(101.05)
+        assert partial["broker_executed_at"] == "2026-08-27T09:00:00"
+        assert partial["prix_sortie"] is not None  # valeur théorique toujours présente, inchangée
+    finally:
+        conn.close()
+
+
 def test_manage_open_trades_closes_full_tp_h4_and_updates_envelope(tmp_path):
     # Bout en bout Hypothèse #4 : take_profit chargé depuis signals.take_profit
     # (jamais tp1/tp2, restés NULL) -> _load_open_trade_state -> dispatch
@@ -2049,17 +2088,24 @@ def test_open_signal_within_exposure_cap_still_approved(tmp_path):
 # --- _check_backtest_confidence_gate / open_signal (Option B, 24/08/2026) -
 
 def _insert_closed_backtest_trades(db_path, actif, source, n, r_multiple, spread=0.1, stop_distance=3.0):
+    # Étalé sur plusieurs mois calendaires (27/08/2026, voir
+    # docs/DECISIONS.md) — nécessaire pour exercer le bootstrap par blocs
+    # calendaires du garde-fou RÉEL (>= 2 blocs distincts requis) ; sans
+    # objet pour les autres tests de ce fichier, qui ne regardent jamais
+    # la répartition mensuelle.
     for i in range(n):
         signal_row = _insert_signal(db_path, actif=actif, source=source, telegram_msg_id=1000 + i)
+        month = (i % 6) + 1
+        day = (i % 27) + 1
         with connection_scope(db_path) as conn:
             conn.execute(
                 "INSERT INTO trades (signal_id, source, actif, mode, direction, taille_initiale, "
                 "prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
                 "pourcentage_risque_applique, ouvert_at, ferme_at, r_multiple_total, statut) "
                 "VALUES (?, ?, ?, 'demo', 'long', 0.01, 100.0, ?, 100.0, 10.0, 2.0, "
-                "'2026-08-01T00:00:00Z', ?, ?, 'ferme')",
+                "'2026-01-01T00:00:00Z', ?, ?, 'ferme')",
                 (signal_row["id"], source, actif, 100.0 - stop_distance,
-                 f"2026-08-{(i % 27) + 1:02d}T00:00:00Z", r_multiple),
+                 f"2026-{month:02d}-{day:02d}T00:00:00Z", r_multiple),
             )
             conn.execute(
                 "INSERT INTO market_snapshots (signal_id, bid, ask, spread, captured_at) "
@@ -2073,8 +2119,8 @@ def test_check_backtest_confidence_gate_noop_for_stationx(tmp_path):
     init_db(db_path)
     load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
     _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", PHASE_A_MIN_TRADES_BACKTEST, r_multiple=-0.5)
-    assert _check_backtest_confidence_gate(db_path, "GOLD", "stationx", 2.0) is None
-    assert _check_backtest_confidence_gate(db_path, "GOLD", "station_x", 2.0) is None
+    assert _check_backtest_confidence_gate(db_path, "GOLD", "stationx", 2.0, environment="live") is None
+    assert _check_backtest_confidence_gate(db_path, "GOLD", "station_x", 2.0, environment="live") is None
 
 
 def test_check_backtest_confidence_gate_noop_when_not_eligible(tmp_path):
@@ -2083,7 +2129,7 @@ def test_check_backtest_confidence_gate_noop_when_not_eligible(tmp_path):
     load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
     # Pas assez de trades backtest (< PHASE_A_MIN_TRADES_BACKTEST) -> jamais éligible.
     _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", 10, r_multiple=-0.5)
-    assert _check_backtest_confidence_gate(db_path, "GOLD", "hypothesis5", 2.0) is None
+    assert _check_backtest_confidence_gate(db_path, "GOLD", "hypothesis5", 2.0, environment="live") is None
 
 
 def test_check_backtest_confidence_gate_noop_when_expectancy_positive(tmp_path):
@@ -2091,18 +2137,30 @@ def test_check_backtest_confidence_gate_noop_when_expectancy_positive(tmp_path):
     init_db(db_path)
     load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
     _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", PHASE_A_MIN_TRADES_BACKTEST, r_multiple=0.5)
-    assert _check_backtest_confidence_gate(db_path, "GOLD", "hypothesis5", 2.0) is None
+    assert _check_backtest_confidence_gate(db_path, "GOLD", "hypothesis5", 2.0, environment="live") is None
 
 
-def test_check_backtest_confidence_gate_blocks_when_expectancy_negative(tmp_path):
+def test_check_backtest_confidence_gate_blocks_when_lower_bound_negative(tmp_path):
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
     load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
     _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", PHASE_A_MIN_TRADES_BACKTEST, r_multiple=-0.5)
-    detail = _check_backtest_confidence_gate(db_path, "GOLD", "hypothesis5", 2.0)
+    detail = _check_backtest_confidence_gate(db_path, "GOLD", "hypothesis5", 2.0, environment="live")
     assert detail is not None
     assert "hypothesis5_backtest" in detail
-    assert "espérance" in detail.lower()
+    assert "borne basse" in detail.lower()
+
+
+def test_check_backtest_confidence_gate_noop_in_demo_even_with_negative_expectancy(tmp_path):
+    # 27/08/2026 (voir docs/DECISIONS.md) : la démo ne doit JAMAIS être
+    # bloquée par ce garde-fou, quelle que soit l'espérance du backtest —
+    # c'est désormais un critère de promotion au réel uniquement.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
+    _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", PHASE_A_MIN_TRADES_BACKTEST, r_multiple=-0.5)
+    assert _check_backtest_confidence_gate(db_path, "GOLD", "hypothesis5", 2.0, environment="demo") is None
+    assert _check_backtest_confidence_gate(db_path, "GOLD", "hypothesis5", 2.0) is None  # défaut = demo
 
 
 def test_open_signal_rejected_by_backtest_confidence_gate(tmp_path):
@@ -2117,6 +2175,7 @@ def test_open_signal_rejected_by_backtest_confidence_gate(tmp_path):
     result = open_signal(
         db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
         confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+        environment="live",
     )
 
     assert result is None
@@ -2132,10 +2191,34 @@ def test_open_signal_rejected_by_backtest_confidence_gate(tmp_path):
         conn.close()
 
 
+def test_open_signal_not_blocked_in_demo_even_with_negative_backtest_data(tmp_path):
+    # 27/08/2026 (voir docs/DECISIONS.md) : le comportement historique
+    # (bloquant dès qu'un backtest existait) ne s'applique plus qu'au
+    # réel — la démo doit trader sans blocage sur toute sa liste blanche.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
+    _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", PHASE_A_MIN_TRADES_BACKTEST, r_multiple=-0.5)
+    signal_row = _insert_signal(db_path, source="hypothesis5", confiance=1.0)
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-new", "level": 100.0}
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+        # environment omis -> défaut "demo"
+    )
+
+    assert result == "deal-new"
+
+
 def test_open_signal_backtest_gate_rejection_sends_notification(tmp_path):
     # 24/08/2026, demande explicite d'Ismaël (voir docs/DECISIONS.md) :
     # un rejet par ce garde-fou doit être notifié, contrairement au
     # comportement initial (silencieux, seulement risk_decisions/logs).
+    # 27/08/2026 : ne s'applique plus qu'au réel, environment="live" ici.
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
     load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
@@ -2148,7 +2231,7 @@ def test_open_signal_backtest_gate_rejection_sends_notification(tmp_path):
         result = open_signal(
             db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
             confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
-            bot_token="tok", chat_id="42",
+            bot_token="tok", chat_id="42", environment="live",
         )
 
     assert result is None
@@ -2172,6 +2255,7 @@ def test_open_signal_backtest_gate_rejection_no_notification_without_tokens(tmp_
         open_signal(
             db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
             confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+            environment="live",
         )
     mock_notify.assert_not_called()
 
@@ -2210,6 +2294,7 @@ def test_open_signal_not_blocked_when_backtest_expectancy_positive(tmp_path):
     result = open_signal(
         db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
         confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+        environment="live",
     )
     assert result == "deal-new"
 
