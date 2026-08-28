@@ -12,6 +12,136 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-28 (suite 9) — CORRECTIF majeur : le "10 trades sur 15 rejetés" du garde-fou de taille était un artefact — mauvais champ API utilisé (`minStepDistance` au lieu de `minSizeIncrement`). Corrigé : 0/54 trades réels dévient de plus de 20%. Le garde-fou est structurellement un no-op avec le bon champ, mais garde une valeur de défense en profondeur pour l'onboarding de futurs actifs
+
+**Erreur trouvée avant de répondre au point 4 (arbitrage), en vérifiant le
+premise plutôt qu'en calculant directement dessus** (méthodologie
+demandée explicitement par Ismaël) : le chiffre "10 trades sur 15
+auraient été rejetés" (`AssetSpec.size_step`, `evaluate_sizing_
+plausibility`, entrée du 28/08/2026 précédente) utilisait `size_step`
+= `minStepDistance` extrait de `data/instrument_specs.json` — **ce
+champ gouverne la granularité de distance des stops/limites, pas
+l'incrément d'arrondi de la TAILLE d'une position.** Le vrai champ est
+`minSizeIncrement`, jamais requêté jusqu'ici pour US30/US100/BTCUSD/
+ETHUSD (`discover_instruments.py` du 16/08/2026 ne le capturait pas).
+
+**Vérifié en direct sur l'API Capital.com (lecture seule,
+`scripts/_size_increment_check.py`)** : `minSizeIncrement` == `minDealSize`
+**trait pour trait pour les 8 actifs de la liste blanche**, sans
+exception :
+
+| Actif | minStepDistance (mauvais champ, utilisé à tort) | minSizeIncrement = minDealSize (le bon champ) |
+|---|---|---|
+| US30 | 0,1 | **0,001** |
+| US100 | 0,1 | **0,001** |
+| BTCUSD | 0,05 | **0,0001** |
+| ETHUSD | 0,01 | **0,001** |
+| GOLD | 0,01 | 0,01 (identiques ici) |
+| EURUSD/GBPUSD/USDJPY | 0,00001 | 100 |
+
+**Recalcul avec le bon champ, mêmes 54 trades réels (deal_id non nul,
+sources non-backtest) sur US30/US100/BTCUSD/ETHUSD : 0 trade dépasse
+20% d'écart entre risque cible et risque réel après arrondi au vrai pas
+du broker.** Le "10 sur 15" est retiré, ne doit plus être cité.
+
+**Constat architectural qui explique pourquoi ce sera TOUJOURS 0** :
+`RiskEngine.evaluate_new_entry` arrondit déjà `units` à l'inférieur au
+multiple de `asset_spec.min_units` (`_round_down_to_min`, ligne 272)
+**avant** tout calcul de risque — et `_MIN_UNITS` (`asset_whitelist.py`)
+vaut, pour chaque actif vérifié, exactement `minDealSize` =
+`minSizeIncrement`. Le garde-fou de taille, une fois câblé avec le bon
+`size_step`, ne fait donc que ré-arrondir une valeur déjà multiple du
+même pas — écart structurellement nul. **Ce n'est pas un bug du
+garde-fou lui-même (fonction pure correcte, testée) : c'est le champ
+source qui était faux dans l'analyse rétroactive, et le garde-fou
+lui-même n'a jamais été câblé dans `asset_whitelist.py` (aucune valeur
+`size_step` déployée à ce jour, vérifié — le module reste commité mais
+non déployé, comme journalisé le 28/08/2026).**
+
+### Réponse au point 4 (arbitrage), avec les données corrigées
+
+**Aucun arbitrage n'est nécessaire aujourd'hui** : sur les 8 actifs
+actuels, `min_units` est déjà correctement sourcé de `minDealSize` réel
+— le garde-fou de taille (avec le bon champ) ne rejetterait jamais un
+trade dans la configuration actuelle. Les deux options demandées
+(rejet strict >20% vs avertissement journalisé) n'ont donc pas
+d'effet pratique distinguable sur l'historique existant — les deux
+options seraient de purs no-op sur les 54 trades réels vérifiés.
+
+**Valeur réelle du garde-fou, différente de celle initialement
+supposée** : il agit comme une **défense en profondeur pour
+l'onboarding de futurs actifs** (CHFJPY, point 2 — ou tout actif
+ultérieur) — si `min_units`/`_MIN_UNITS` était un jour mal renseigné
+pour un nouvel actif (exactement l'erreur de champ commise ici, mais
+au moment de construire la liste blanche plutôt qu'au moment de
+l'analyse rétroactive), ce garde-fou la détecterait au moment du
+premier signal, avant tout envoi au broker — plutôt que la découvrir
+des semaines plus tard. **Recommandation, à trancher par Ismaël** :
+garder la fonction telle quelle (déjà testée, 100% couverte), la câbler
+dans `asset_whitelist.py` avec `size_step = minSizeIncrement` réel pour
+chaque actif (y compris CHFJPY dès sa création, point 2) comme filet de
+sécurité silencieux plutôt que comme mécanisme correctif actif — sans
+attente de rejet réel à ce jour. Ne rien déployer sans accord explicite,
+conformément à l'instruction.
+
+## 2026-08-28 (suite 8) — CHFJPY : cadrage statistique (AVANT tout chiffre) puis vérification de disponibilité/specs/spread réel
+
+### Cadrage statistique — à respecter pour toute mention future de CHFJPY
+
+**CHFJPY est un ajout de PÉRIMÈTRE (univers d'actifs), pas une variable de
+stratégie.** Il ne consomme aucun budget au titre de l'invariant #10
+(5 variables max / 10 trades par variable) — ajouter un actif à la liste
+blanche n'est pas un paramètre réglable d'une hypothèse donnée.
+
+**Mais CHFJPY n'est PAS lui-même un test.** Aucun résultat obtenu sur
+CHFJPY (edge, espérance, quoi que ce soit) ne pourra jamais être invoqué
+comme une découverte sans un pré-enregistrement séparé et dédié dans
+`docs/HYPOTHESES.md`, écrit avant de regarder la moindre donnée CHFJPY.
+Ne pas respecter cette règle reproduirait exactement l'erreur déjà commise
+avec GOLD/H1 (finding post-hoc issu d'un balayage d'actifs, jamais
+pré-enregistré). **CHFJPY sert uniquement à produire de la donnée forward
+propre pour les 5 hypothèses — rien d'autre, jusqu'à nouvel ordre.**
+
+**Rattachement de cluster de corrélation dès la création** : CHFJPY
+partage la jambe JPY avec USDJPY (et toute autre paire JPY future). Il est
+donc rattaché, dès son ajout, au même cluster de corrélation que USDJPY
+plutôt que traité comme un actif indépendant — voir point 3 (clusters)
+pour le mécanisme d'exposition par cluster. Aucune mesure de corrélation
+empirique CHFJPY↔USDJPY n'a encore été faite (aucune donnée téléchargée à
+ce stade de cette entrée) ; le rattachement initial est motivé par la
+mécanique de cotation (jambe commune), pas par une mesure — une vérification
+empirique ultérieure sur données réelles pourra affiner ce rattachement
+sans jamais le retirer en dessous de ce plancher prudent.
+
+### Point 2a — Disponibilité, specs, spread réel (vérifié, lecture seule)
+
+Vérifié via l'API Capital.com démo (`scripts/_chfjpy_discovery.py`,
+lecture seule, aucun ordre) :
+
+- **Epic retenu : `CHFJPY`** (candidat non-`_W`, statut `TRADEABLE`).
+  Deux autres candidats trouvés pour le terme de recherche `CHFJPY`
+  (`CHFPLN`, `CNHJPY`) — écartés, non pertinents.
+- **`minDealSize` = 100** (unité POINTS), **`minStepDistance` = 0,001**
+  (unité POINTS). **Identiques trait pour trait aux specs déjà connues de
+  USDJPY** (`minDealSize`=100, `minStepDistance`=0,001,
+  `data/instrument_specs.json` ligne ~839-841) — cohérence forte,
+  attendue pour deux paires JPY chez le même broker, aucune anomalie.
+- **Spread réel mesuré** : 20 lectures espacées de 3s sur le flux live
+  (bid/offer instantanés, aucune bougie historique) : moyenne = 0,028,
+  min = 0,026, max = 0,031 (unités de prix, cotation ≈197,8). Spread
+  positif et stable sur tout l'échantillon — aucun signe de l'anomalie
+  bid<ask qui a motivé la vérification d'intégrité 2017-2018 (voir
+  point 2b, à faire séparément sur l'historique téléchargé).
+- `minGuaranteedStopDistance` = 0,1% (PERCENTAGE), `trailingStopsPreference`
+  = `NOT_AVAILABLE` — cohérent avec les autres paires FX de la liste
+  blanche, aucun garde-fou supplémentaire identifié à ce stade.
+
+Suite (2b : téléchargement historique 2019-01-01→ et vérification
+d'intégrité bid/ask sur toute la profondeur ; 2c : ajout à
+`asset_whitelist.py` et aux 5 hypothèses, couverture 100%) : à faire dans
+une entrée séparée avant tout déploiement. Aucun déploiement VPS sans
+accord explicite d'Ismaël.
+
 ## 2026-08-28 (suite 7) — Structure de sortie : AXE CLOS. Cause confirmée (H4 natif ≈ A, loin de B) — le +0,102R était un artefact du trailing Donchian(20) imposé, pas un effet de troncature
 
 **Vérification unique autorisée par Ismaël, exécutée** (`scripts/_h4_native_check.py`,
