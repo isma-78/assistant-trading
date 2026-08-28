@@ -185,7 +185,7 @@ def test_open_position_with_guaranteed_stop_includes_body_fields():
 def test_close_position_full_sends_no_size():
     client, session = _logged_in_client()
     session.delete.return_value = _fake_response(json_body={"dealReference": "ref-1"})
-    session.get.return_value = _fake_response(json_body={"level": 91950.0, "date": "2026-08-27T10:00:00"})
+    session.get.return_value = _fake_response(json_body={"status": "CLOSED", "level": 91950.0, "date": "2026-08-27T10:00:00"})
 
     client.close_position("pos-1")
 
@@ -195,7 +195,7 @@ def test_close_position_full_sends_no_size():
 def test_close_position_partial_sends_size():
     client, session = _logged_in_client()
     session.delete.return_value = _fake_response(json_body={"dealReference": "ref-1"})
-    session.get.return_value = _fake_response(json_body={"level": 91950.0, "date": "2026-08-27T10:00:00"})
+    session.get.return_value = _fake_response(json_body={"status": "CLOSED", "level": 91950.0, "date": "2026-08-27T10:00:00"})
 
     client.close_position("pos-1", size=0.0005)
 
@@ -205,7 +205,7 @@ def test_close_position_partial_sends_size():
 def test_close_position_resolves_real_execution_price_and_date():
     client, session = _logged_in_client()
     session.delete.return_value = _fake_response(json_body={"dealReference": "ref-close-1"})
-    session.get.return_value = _fake_response(json_body={"level": 91950.0, "date": "2026-08-27T10:00:00"})
+    session.get.return_value = _fake_response(json_body={"status": "CLOSED", "level": 91950.0, "date": "2026-08-27T10:00:00"})
 
     result = client.close_position("pos-1")
 
@@ -214,6 +214,43 @@ def test_close_position_resolves_real_execution_price_and_date():
     assert result["level"] == 91950.0
     assert result["executed_at"] == "2026-08-27T10:00:00"
     assert result["confirmation"]["level"] == 91950.0
+
+
+def test_close_position_retries_on_stale_open_confirmation_then_succeeds(monkeypatch):
+    # 28/08/2026 (voir docs/DECISIONS.md) : dealReference = "p_"+deal_id
+    # n'est pas unique par transaction — un GET immédiat peut renvoyer la
+    # confirmation PÉRIMÉE de l'ouverture d'origine (status="OPEN"),
+    # observé sur 2 clôtures réelles sur 3. Doit retenter jusqu'à
+    # status="CLOSED".
+    client, session = _logged_in_client()
+    session.delete.return_value = _fake_response(json_body={"dealReference": "ref-close-1"})
+    session.get.side_effect = [
+        _fake_response(json_body={"status": "OPEN", "level": 100.0, "date": "2026-08-28T05:24:19"}),
+        _fake_response(json_body={"status": "OPEN", "level": 100.0, "date": "2026-08-28T05:24:19"}),
+        _fake_response(json_body={"status": "CLOSED", "level": 99.7, "date": "2026-08-28T11:00:55"}),
+    ]
+    sleeps = []
+    monkeypatch.setattr("src.capital_client.time.sleep", lambda s: sleeps.append(s))
+
+    result = client.close_position("pos-1")
+
+    assert session.get.call_count == 3
+    assert result["level"] == 99.7
+    assert result["executed_at"] == "2026-08-28T11:00:55"
+    assert len(sleeps) == 2  # une pause entre chaque tentative, jamais après la dernière
+
+
+def test_close_position_gives_up_after_max_attempts_never_closed(monkeypatch):
+    client, session = _logged_in_client()
+    session.delete.return_value = _fake_response(json_body={"dealReference": "ref-close-1"})
+    session.get.return_value = _fake_response(json_body={"status": "OPEN", "level": 100.0, "date": "2026-08-28T05:24:19"})
+    monkeypatch.setattr("src.capital_client.time.sleep", lambda s: None)
+
+    result = client.close_position("pos-1")
+
+    from src.capital_client import _CLOSE_CONFIRM_MAX_ATTEMPTS
+    assert session.get.call_count == _CLOSE_CONFIRM_MAX_ATTEMPTS
+    assert result == {"level": None, "executed_at": None, "confirmation": {"status": "OPEN", "level": 100.0, "date": "2026-08-28T05:24:19"}}
 
 
 def test_close_position_without_deal_reference_returns_none_fields():

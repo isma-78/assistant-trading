@@ -12,6 +12,68 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-28 (suite) — Volet 1 : bug d'instrumentation confirmé et corrigé (confirmation de clôture périmée, `dealReference` non unique), déployé, 1 exemple propre confirmé
+
+Cause racine trouvée grâce au log diagnostique déployé le 27/08/2026
+(`f1f7eb4`) : `dealReference` pour une clôture Capital.com vaut
+littéralement `"p_" + deal_id` — **jamais un identifiant propre à la
+transaction de clôture**. Un `GET /confirms/{ref}` immédiat après le
+DELETE peut donc renvoyer la confirmation PÉRIMÉE de l'OUVERTURE
+d'origine (`status="OPEN"`, même niveau, même horodatage à quelques
+secondes de l'ouverture) au lieu de celle de la clôture qui vient
+d'avoir lieu.
+
+### Preuves, 3 clôtures réelles observées le 28/08/2026
+
+| Trade | Jambe | `status` renvoyé | Résultat |
+|---|---|---|---|
+| 14249 (US30/H5) | TP1 partiel | `CLOSED` | **Correct** : `prix_sortie_reel`=53582,3 ≠ théorique 53591,3, `broker_executed_at` cohérent avec l'heure réelle de TP1 |
+| 14231 (ETHUSD/H5, 27/08) | TP1 partiel | `OPEN` (périmé) | **Faux** : `prix_sortie_reel`=2511,76 = prix d'ENTRÉE, `broker_executed_at` ≈ 10s après l'ouverture, pas 3h plus tard au TP1 réel |
+| 14239 (US100/H4) | Clôture totale | `OPEN` (périmé) | **Faux** : `prix_sortie_reel`=29558,4 = prix d'ENTRÉE, `broker_executed_at` ≈ 12s après l'ouverture, pas 7h26 plus tard à la clôture réelle |
+
+2 cas sur 3 corrompus par la confirmation périmée — pas un cas isolé,
+confirmé récurrent avant toute correction.
+
+### Correctif
+
+`src/capital_client.py::close_position` : ne fait plus confiance à la
+première confirmation reçue — ne retient une confirmation que si
+`status == "CLOSED"` (signal fiable, vérifié sur les 3 cas ci-dessus :
+`CLOSED` pour la vraie clôture, `OPEN` pour la périmée). Retente jusqu'à
+`_CLOSE_CONFIRM_MAX_ATTEMPTS=4` fois, 1s d'écart
+(`_CLOSE_CONFIRM_RETRY_DELAY_SECONDS`) — la latence de propagation
+supposée côté broker. Épuiser les tentatives sans jamais voir `CLOSED`
+retourne `level`/`executed_at` à `None`, jamais la valeur périmée
+(fail-safe : une donnée fausse serait pire qu'une case vide, même
+principe que partout ailleurs dans ce chantier). `tests/
+test_capital_client.py` : 2 tests supplémentaires (retente puis réussit,
+épuise les tentatives sans jamais voir `CLOSED`). **931 tests passent,
+100% de couverture sur `capital_client.py`.**
+
+### Déploiement
+
+Push → pull VPS → tests verts → 6 process redémarrés (mêmes 6
+qu'hier : `executor_loop`/`trend_executor`/`hypothesis2-5_executor`).
+`tmux pipe-pane` maintenu actif sur les 6 pour continuer à observer les
+prochaines clôtures.
+
+### Statut Volet 1
+
+Un exemple PROPRE déjà confirmé avant même ce correctif (trade 14249,
+`status` déjà `CLOSED` du premier coup ce jour-là). Le correctif vise
+les cas où `status` serait `OPEN` au premier essai — reste à observer
+qu'il fonctionne EN PRATIQUE sur un vrai cas périmé après déploiement
+(aucun n'est survenu entre le déploiement et la rédaction de cette
+entrée). Toujours besoin d'un exemple de clôture COMPLÈTE propre pour
+valider `trade_causal_decomposition` de bout en bout (les 2 clôtures
+complètes vues jusqu'ici, 14231 et 14239, étaient toutes deux
+corrompues par ce bug — leurs lignes `trade_causal_decomposition`
+existantes sont donc FAUSSES, à ignorer, jamais utilisées pour la
+Mesure A/B/C ni le design apparié). Surveillance en tâche de fond
+maintenue.
+
+---
+
 ## 2026-08-28 — Amendement fidélité (Mesures A/B/C) spécifiées ; découverte en creusant : les 9 "annulations" H5/GBPUSD sont des échecs de PLACEMENT (probable 429), pas des péremptions marché ; bug de réconciliation trailing signalé (non corrigé)
 
 Voir `docs/HYPOTHESES.md` (28/08/2026, entrée d'amendement) pour la
