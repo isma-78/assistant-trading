@@ -12,6 +12,184 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-28 (suite 5) — Chantier "structure de sortie" : prémisse corrigée, points 3/4/5/6 mesurés, point 1 en cours
+
+### Prémisse vérifiée AVANT tout calcul — partiellement fausse
+
+**"Toutes les hypothèses sortent en 50/30/20" est FAUX pour 2 des 4
+hypothèses concernées**, vérifié dans le code :
+- **H1** (`trend_strategy.py`) : `tp1`/`tp2` toujours `None` — **déjà**
+  en trailing pur à 100% (déjà la structure "B"), jamais 50/30/20.
+- **H3** (`hypothesis3_strategy.py`) : TP1 50%@1R / TP2 30%@2R / 20%
+  trailing — structure "A", conforme à la prémisse.
+- **H4** (`mean_reversion_strategy.py`) : `take_profit` unique, clôture
+  100% en une fois, **AUCUN trailing** — une 4e structure, ni A ni B ni
+  C, jamais testée dans ce chantier tel quel.
+- **H5** (`hypothesis5_strategy.py`) : TP1(1R)/TP2(2R) — structure "A",
+  conforme.
+
+Conséquence : pour H1, comparer "A vs B" revient à demander "l'ajout de
+TP1/TP2 aurait-il nui à H1 ?", pas "faut-il changer sa pratique
+actuelle" (déjà optimale au sens B). Pour H4, A/B/C sont TOUTES
+hypothétiques (sa pratique réelle, D, n'est testée par aucune des
+trois) — le test reste informatif sur la question "la queue droite
+est-elle sa source d'edge", juste pas un choix "actuel vs alternative"
+pour cet actif précis. Signalé, pas corrigé silencieusement.
+
+**Structure C non testée, limitation de code trouvée en creusant** :
+`_evaluate_position_management` (`src/executor.py`) exige `tp1_hit ET
+tp2_hit` pour activer le trailing ATR du reliquat — avec `tp2=None`
+(50/50 voulu), `tp2_hit` ne devient jamais `True`, le reliquat reste
+bloqué au stop breakeven SANS jamais trailer. Tester C proprement
+demanderait une modification du code de gestion (même en environnement
+isolé) — **non fait dans ce chantier** (aucune modification de code de
+stratégie), signalé explicitement plutôt que bricolé. Seules A et B
+sont comparées ci-dessous.
+
+### Point 1 — mesure de troncature : EN COURS
+
+**Fenêtre substituée, documentée** : la demande initiale portait sur
+2019-01-01→aujourd'hui, qui ENGLOBE le holdout pur 2019-2024.06 jamais
+consulté à ce jour — contradictoire avec l'en-tête du chantier ("aucun
+holdout consommé"). Utilisé à la place : la fenêtre BRÛLÉE seule
+(2024-06-14→aujourd'hui), cohérent avec l'en-tête, jamais le holdout.
+`scripts/_exit_structure_comparison.py` (nouveau, ponctuel, aucune
+écriture DB) : rejoue H1/H3/H4/H5 sous A et B, coûts corrigés et coûts
+nuls, 8 actifs poolés, déclencheur et stop initial STRICTEMENT
+inchangés (seul un wrapper local réduit chaque signal à
+`(direction, entrée, stop)` puis réattribue `tp1`/`tp2` selon la
+structure testée). Calcul long (128 rejeux, jusqu'à ~76 000 bougies
+M15/actif) — résultat à suivre dans une entrée séparée dès qu'il
+termine, jamais une modification de celle-ci.
+
+### Point 3 — granularité d'exécution : écart de spec trouvé, sans impact observé à ce jour
+
+Vérifié en direct, `GET /markets/{epic}` pour les 8 actifs — le champ
+qui compte réellement pour la validité d'un ordre n'est PAS
+`minDealSize` (ce que `risk_engine`/`asset_whitelist` utilisent comme
+pas d'arrondi, `_MIN_UNITS`) mais `minStepDistance`, DIFFÉRENT sur 4
+des 8 instruments :
+
+| Actif | minDealSize (code) | minStepDistance (réel) | Écart |
+|---|---|---|---|
+| GOLD | 0,01 | 0,01 | aucun |
+| US100 | 0,001 | **0,1** | ×100 |
+| US30 | 0,001 | **0,1** | ×100 |
+| EURUSD | 100 | 0,00001 | code plus grossier, sans risque |
+| GBPUSD | 100 | 0,00001 | code plus grossier, sans risque |
+| USDJPY | 100 | 0,001 | code plus grossier, sans risque |
+| BTCUSD | 0,0001 | **0,05** | ×500 |
+| ETHUSD | 0,001 | **0,01** | ×10 |
+
+**Si `minStepDistance` était réellement appliqué** : `risk_engine.
+_round_down_to_min` arrondit aujourd'hui à 0,001 pour US30 — vérifié sur
+5 trades RÉELS récents (0,048 / 0,067 / 0,187 / 0,192 / 0,215) : arrondi
+au vrai pas (0,1) donnerait 0,0 / 0,0 / 0,1 / 0,1 / 0,2 — **2 des 5
+auraient une taille NULLE (rejet total, stratégie inexécutable sur ce
+cas précis)**, les 3 autres dévieraient de 46-100% du risque cible, très
+au-delà du seuil de 20%.
+
+**Mais empiriquement, sur ces mêmes trades RÉELS, aucun rejet ni
+ajustement de taille n'a été observé** (`risque_eur` réel cohérent avec
+la taille fractionnaire calculée, pas avec un arrondi au pas de 0,1) —
+Capital.com (au moins en démo) n'applique PAS `minStepDistance` comme
+contrainte dure à l'ouverture, malgré ce que la spec publie. **Verdict :
+écart de spec réel et quantifié, mais SANS conséquence observée à ce
+jour** — risque à surveiller avant tout passage au réel (le compte réel
+pourrait valider plus strictement que le démo), pas une action
+immédiate. Rien corrigé, conformément à la consigne.
+
+### Point 4 — clusters de corrélation : mesurés, jamais supposés
+
+Corrélations de rendements horaires, fenêtre brûlée (2024-06-14→
+aujourd'hui, 13 004 bougies communes aux 8 actifs) :
+
+| | GOLD | US100 | US30 | EURUSD | GBPUSD | USDJPY | BTCUSD | ETHUSD |
+|---|---|---|---|---|---|---|---|---|
+| GOLD | 1,00 | 0,19 | 0,18 | 0,33 | 0,35 | -0,21 | 0,16 | 0,15 |
+| US100 | | 1,00 | **0,75** | 0,09 | 0,22 | 0,15 | 0,45 | 0,45 |
+| US30 | | | 1,00 | 0,10 | 0,25 | 0,11 | 0,36 | 0,37 |
+| EURUSD | | | | 1,00 | **0,79** | -0,51 | 0,09 | 0,10 |
+| GBPUSD | | | | | 1,00 | -0,43 | 0,16 | 0,17 |
+| USDJPY | | | | | | 1,00 | 0,05 | 0,05 |
+| BTCUSD | | | | | | | 1,00 | **0,83** |
+| ETHUSD | | | | | | | | 1,00 |
+
+**Clusters proposés** (jamais appliqués) : {US30, US100} indices
+(ρ=0,75) ; {EURUSD, GBPUSD, USDJPY} majeures USD (ρ=0,79 même sens,
+-0,51/-0,43 sens opposé — **même facteur sous-jacent, signe inversé** :
+USDJPY coté USD/JPY, EURUSD/GBPUSD cotées vs USD, une force du dollar
+pousse les deux paires dans des sens opposés mécaniquement, ce n'est pas
+une indépendance réelle) ; {BTCUSD, ETHUSD} crypto (ρ=0,83) ; {GOLD}
+seul (corrélation max 0,35, assez faible pour rester indépendant).
+**4 sources de risque réelles, pas 8** — confirme l'estimation
+d'Ismaël ("environ 3 à 4").
+
+**Exposition simultanée maximale par cluster depuis le déblocage du
+27/08/2026** (toutes sources confondues, sweep temporel réel sur
+`trades.ouvert_at`/`ferme_at`) :
+
+| Cluster | Pic risque simultané (€) | n trades |
+|---|---|---|
+| indices | 127,55 | 19 |
+| usd_majors | 361,40 | 38 |
+| **crypto** | **435,38** | 46 |
+| gold | 224,37 | 24 |
+
+**Le plafond §2.3 (10% d'ENVELOPPE, ~50€ sur une enveloppe de 500€)
+raisonne par trade/enveloppe individuelle — rien n'agrège par
+facteur.** Le cluster crypto a atteint 435€ de risque simultané réel
+(BTCUSD+ETHUSD, toutes hypothèses confondues, chacune sur sa propre
+enveloppe) — 8,7× le plafond censé protéger UNE enveloppe, jamais
+détecté ni bloqué par le mécanisme actuel. **Proposition, non
+appliquée** : plafond par cluster (ex. 10% de la somme des enveloppes
+du cluster), à trancher par Ismaël.
+
+**Conséquence statistique actée, à appliquer partout désormais** :
+toute borne basse publiée jusqu'ici (Bonferroni z×SE) suppose des
+trades INDÉPENDANTS — faux pour ~4 actifs sur 8. Ces bornes sont trop
+étroites (trop optimistes). Le bootstrap par blocs calendaires déjà
+utilisé pour l'étape 1/le garde-fou réel devient la méthode par défaut
+pour toute future borne basse publiée, jamais l'approximation normale
+seule.
+
+### Point 5 — coupe-circuits : distinction actée, rien changé
+
+Table de probabilité de drawdown déjà fournie, consignée :
+`P(atteindre D) ≈ exp(-2μD/σ²)`, σ²=1,0927 — sous μ≤0 (le cas mesuré de
+H1..H5 à ce jour), **P=100% pour tout D, quel que soit le seuil**.
+**Conséquence actée en toutes lettres** : un déclenchement de
+coupe-circuit n'est PAS une information sur la qualité d'une
+hypothèse — sous édge nul ou négatif, TOUT système de trading finit par
+déclencher n'importe quel seuil de drawdown, c'est une certitude
+mathématique, pas un signal. **Deux seuils, explicitement distincts,
+jamais confondus à l'avenir** :
+- **Seuil de protection du capital** (coupe-circuit §2.7, -2R/jour,
+  -5R/semaine, -12R depuis le plus haut) — reste tel quel, ne protège
+  QUE le capital, ne dit rien sur l'edge.
+- **Seuil d'invalidation statistique** (test formel, n≥200, borne basse
+  d'espérance) — le seul habilité à conclure qu'une hypothèse est
+  mauvaise.
+**Ne jamais recalibrer une stratégie après un déclenchement de
+coupe-circuit** — acté comme règle permanente.
+
+### Point 6 — escalade de taille : mécanisme trouvé, JAMAIS déclenché en live
+
+`src/risk_engine.py:210` : `risk_pct = caps.risk_percent_boosted if
+signal.boosted else caps.risk_percent_default` — le mécanisme EXISTE
+(2% vs 4%). Mais `decide_entry` (`src/executor.py:287`) a `boosted:
+bool = False` par défaut, et **le seul appelant live**
+(`open_signal`, `src/executor.py:787`) **ne passe jamais `boosted=`**
+— toujours `False` en pratique, sur les 6 process de production, sans
+exception trouvée. Aucune performance constatée ne déclenche
+aujourd'hui quoi que ce soit. **Rien à corriger maintenant** — mais
+règle actée pour toute future implémentation : si `boosted` est un
+jour câblé sur un signal de performance, il devra être conditionné à
+`n≥200` ET une borne basse d'espérance `>0`, jamais une performance
+observée seule.
+
+---
+
 ## 2026-08-28 (suite 4) — Point 2 : dérive_gestion rendue mesurable (survol_polling / délai_broker), points 3-6 pré-enregistrés/documentés
 
 ### Point 2 — instrumentation du moment de décision
