@@ -12,6 +12,42 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-28 (suite 12ter) — CHFJPY, point 2c : ajoutée à `asset_whitelist.py` et aux 5 hypothèses, 100% couverture, suite verte (968 tests) — NON DÉPLOYÉ
+
+- `src/asset_whitelist.py` : `CHFJPY` ajoutée à `_MIN_UNITS` (100, =
+  `minDealSize`/`minSizeIncrement` vérifiés en direct le 28/08/2026,
+  identiques à USDJPY) et à `_QUOTE_CURRENCY` (`"JPY"`, même conversion
+  que USDJPY — CHF/JPY est coté en JPY).
+- Ajoutée à la liste d'actifs de **chacune des 5 hypothèses** :
+  `HYPOTHESIS_ASSETS` (H1, `trend_executor.py`), `HYPOTHESIS2_ASSETS`,
+  `HYPOTHESIS3_ASSETS`, `HYPOTHESIS4_ASSETS`, `HYPOTHESIS5_ASSETS`.
+  Station X (`executor_loop.py`) n'a pas de liste dédiée — elle valide
+  chaque signal contre `ASSET_WHITELIST` directement, donc déjà couverte
+  par le changement ci-dessus, aucune modification de code nécessaire
+  pour ce flux.
+- **6 tests de non-régression existants mis à jour** (asserts sur
+  l'ensemble exact des actifs par hypothèse — cassaient intentionnellement
+  avant la mise à jour, garde-fous fonctionnant comme prévu, pas des
+  tests fragiles à contourner) : `test_asset_whitelist.py` (×2,
+  ensemble attendu + `pip_value_per_unit` de CHFJPY vérifié égal à
+  celui de USDJPY sous des taux fournis), `test_hypothesis{2,3,4,5}_
+  executor.py`, `test_trend_executor.py`.
+- **Suite complète verte : 968 tests passent** (aucune régression).
+  **100% de couverture maintenue** sur les 16 modules critiques/
+  stratégiques suivis (`risk_engine`, `capital_manager`, `go_nogo`,
+  `validator`, `trend_strategy`, `circuit_breaker`, `ict_strategy`,
+  `mean_reversion_strategy`, `confidence_scorer`,
+  `hypothesis2_strategy`, `hypothesis3_strategy`, `hypothesis5_strategy`,
+  `regime_confirmation`, `backtest_engine`, `causal_analyzer`,
+  `asset_whitelist`).
+- **Committé et poussé sur GitHub (`main`), NON déployé sur le VPS** —
+  aucun `git pull`, aucun redémarrage des 6 process de production.
+  Attente explicite de l'accord d'Ismaël avant tout déploiement,
+  conformément à l'instruction du point 2d. Rappel du cadrage déjà écrit
+  (voir entrée "cadrage statistique" ci-dessous) : CHFJPY reste un ajout
+  de périmètre, jamais un test — aucun résultat futur sur CHFJPY ne
+  pourra être cité comme découverte sans pré-enregistrement séparé.
+
 ## 2026-08-28 (suite 12bis) — CHFJPY, point 2b : historique téléchargé (2019-01-01+ exploitable, jamais avant), intégrité bid/ask confirmée saine — mais MINUTE_15 ne remonte qu'à 2024-01-01
 
 **Téléchargement** (`scripts/download_historical_data.py --assets CHFJPY
