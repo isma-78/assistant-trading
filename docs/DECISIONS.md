@@ -12,6 +12,38 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-28 (suite 12) — Points 6 et 7 : Mesure A toujours non lancée, Mesure B toujours en attente, compteur Étape 3 inchangé (0/30)
+
+### Point 6 — Mesure A : NE PAS lancer, confirmé
+
+Les trois causes d'échec de placement (429, péremption marché §2.8,
+refus de stop `error.invalid.stoploss.*`) sont désormais **distinguables
+a posteriori par analyse de logs** (point 5 ci-dessus), mais **PAS
+encore séparables automatiquement dans le comptage `trades.statut=
+'annule'`** — aucun champ `cloture_reason`-équivalent n'existe côté
+placement pour discriminer la cause. Rien n'a été codé pour changer
+cela dans ce chantier (hors périmètre, rapport seulement). La Mesure A
+reste donc non lancée, conformément à l'instruction. Rappel non
+réévalué : le simulateur de backtest n'a structurellement aucune notion
+de durée de vie d'un ordre limite (`backtest_engine.py`, fenêtre
+glissante stricte, jamais de notion d'expiration) — une divergence
+live/backtest sur le taux de remplissage est donc déjà acquise comme
+certaine, seule son amplitude reste à mesurer une fois les causes
+séparables. Seuil Wilson (borne haute < 0,80 → simulateur déclaré
+infidèle sur la jambe d'entrée) inchangé, non re-dérivé ici.
+
+### Point 7 — Mesure B et Étape 3 : compteurs rapportés, rien calculé
+
+- **Mesure B (cadence d'émission, comptage par épisodes)** : toujours
+  pas assez de données forward pour une comparaison live/backtest
+  significative — aucun calcul forcé.
+- **Étape 3 (recalibration du modèle de coûts)** : compteur vérifié en
+  base (`trade_causal_decomposition`, lecture seule) — **0 ligne valide
+  (`invalide=0` ET `cout_sortie` non NULL) sur 11 lignes totales**,
+  **identique au dernier relevé** — aucun trade forward supplémentaire
+  n'a produit de jambe de sortie exploitable depuis. Seuil de 30
+  toujours non atteint, aucun calcul de recalibration entrepris.
+
 ## 2026-08-28 (suite 11) — Bug `error.invalid.stoploss.maxvalue`/`minvalue` : distribution complète — 94% des occurrences ne sont PAS des signaux perdus (échec de resserrement de stop sur position déjà ouverte), seules 89 sont de vraies entrées perdues qui biaisent la Mesure A. Ni `minStepDistance` ni les champs `%StopOrProfitDistance` n'expliquent le seuil broker
 
 ### Méthode et limite honnête sur la couverture temporelle
