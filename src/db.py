@@ -191,7 +191,10 @@ CREATE TABLE IF NOT EXISTS trade_partials (
     motif TEXT,
     executed_at TEXT NOT NULL,
     prix_sortie_reel REAL,         -- ajout 27/08/2026 : level réel de la confirmation close_position(), NULL si non résolu (best-effort)
-    broker_executed_at TEXT        -- ajout 27/08/2026 : horodatage broker de la confirmation, NULL si non résolu
+    broker_executed_at TEXT,       -- ajout 27/08/2026 : horodatage broker de la confirmation, NULL si non résolu
+    t_declenchement TEXT,          -- ajout 28/08/2026 : snapshot.captured_at_broker (updateTime broker) au moment de la décision de gestion
+    p_declenchement REAL,          -- ajout 28/08/2026 : current_price (snapshot.mid) utilisé pour cette même décision
+    t_demande TEXT                 -- ajout 28/08/2026 : horodatage de l'envoi de close_position() (close_requested_at)
 );
 
 -- Attribution causale déterministe par trade (27/08/2026, voir
@@ -206,6 +209,8 @@ CREATE TABLE IF NOT EXISTS trade_causal_decomposition (
     cout_sortie REAL,
     derive_gestion REAL,
     invalide INTEGER NOT NULL DEFAULT 0,  -- ajout 28/08/2026 : garde-fou de plausibilité (ratio cout_sortie/spread), voir docs/DECISIONS.md
+    survol_polling REAL,  -- ajout 28/08/2026 (point 2) : cout_sortie decompose en (survol_polling + delai_broker)
+    delai_broker REAL,
     computed_at TEXT NOT NULL
 );
 
@@ -471,7 +476,12 @@ _COLUMN_MIGRATIONS = [
     ("trades", "anomalie_technique", "TEXT"),
     ("trade_partials", "prix_sortie_reel", "REAL"),
     ("trade_partials", "broker_executed_at", "TEXT"),
+    ("trade_partials", "t_declenchement", "TEXT"),
+    ("trade_partials", "p_declenchement", "REAL"),
+    ("trade_partials", "t_demande", "TEXT"),
     ("trade_causal_decomposition", "invalide", "INTEGER NOT NULL DEFAULT 0"),
+    ("trade_causal_decomposition", "survol_polling", "REAL"),
+    ("trade_causal_decomposition", "delai_broker", "REAL"),
 ]
 
 

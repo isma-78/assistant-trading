@@ -12,6 +12,89 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-28 (suite 4) — Point 2 : dérive_gestion rendue mesurable (survol_polling / délai_broker), points 3-6 pré-enregistrés/documentés
+
+### Point 2 — instrumentation du moment de décision
+
+Il manquait une donnée, pas un calcul, exactement comme diagnostiqué.
+`src.market_data.PriceSnapshot` avait déjà un champ inexploité,
+`captured_at_broker` (= `snapshot["updateTime"]`, un horodatage RÉEL
+fourni par Capital.com pour ce prix — vérifié en direct : `GOLD` a
+répondu `'updateTime': '2026-08-28T18:30:33.815'` avec le bid/ask
+correspondant). Aucun appel réseau supplémentaire nécessaire.
+
+**Câblé** : `executor.manage_open_trades` transmet désormais
+`trigger_time=snapshot.captured_at_broker` à `_apply_management_action`
+(déjà `current_price=snapshot.mid`, c'est `p_déclenchement`) —
+persistés dans 3 nouvelles colonnes `trade_partials`
+(`t_declenchement`, `p_declenchement`, `t_demande` — ce dernier =
+`close_requested_at`, déjà calculé le 28/08/2026 matin pour le second
+discriminant de `close_position` mais jamais stocké jusqu'ici).
+
+**`src.causal_decomposition.decompose_gestion_delay`** (nouveau, pur,
+100% couvert) sépare `coût_sortie` (inchangé) en :
+- `survol_polling` = `sign×(prix_théorique − p_déclenchement)/stop` — ce
+  que le marché avait déjà dépassé la cible AVANT que le système ne
+  s'en aperçoive (borné par l'intervalle de sondage) ;
+- `délai_broker` = `sign×(p_déclenchement − prix_réel)/stop` — l'écart
+  entre ce que le système voyait à sa décision et ce qui a RÉELLEMENT
+  été exécuté (latence broker/réseau).
+
+Identité vérifiée par test : `survol_polling + délai_broker ==
+coût_sortie`, exactement — **ce n'est pas un troisième terme de
+l'identité principale du module**, seulement une décomposition de
+`coût_sortie` déjà existant. `dérive_gestion` reste inchangée
+(toujours ≈0, détecteur de cohérence — voir l'entrée du 28/08 matin) :
+ce chantier ne prétend pas la "réparer" en la rendant non-nulle
+(mathématiquement impossible sans changer sa définition même), il
+répare le VRAI besoin derrière la demande — savoir où part le coût de
+sortie — en ajoutant deux champs dédiés, jamais en forçant un sens
+nouveau dans un champ qui a déjà une signification établie (contrôle
+de cohérence).
+
+**Choix assumé, à corriger si ce n'est pas l'intention** : un
+composant manquant (pas encore de `p_declenchement`, trades antérieurs
+à ce déploiement ou clôtures d'urgence) rend `survol_polling`/`délai_
+broker` à `None` — **n'affecte PAS** le drapeau `invalide` existant
+(réservé à "donnée présente mais implausible", jamais à "donnée
+absente" — même distinction que partout ailleurs dans ce module).
+
+Tests : 8 nouveaux (`decompose_gestion_delay` isolé, propagation dans
+`decompose_trade_leg`, pondération dans `aggregate_trade_decomposition`,
+persistance bout en bout via `manage_open_trades`). **959 tests
+passent, 100% de couverture sur `causal_decomposition.py`.**
+
+### Points 3/4 — pré-enregistrés dans `docs/HYPOTHESES.md` (entrée dédiée), pas encore exécutés
+
+Voir l'entrée du 28/08/2026 dans `docs/HYPOTHESES.md` pour le détail
+complet (citations de lignes des deux côtés sur la durée de vie d'un
+ordre limite, n minimum et seuils fixés avant tout calcul pour la
+Mesure A, règle commune de comptage par ÉPISODE pour la Mesure B).
+Aucune des deux mesures n'a encore de données forward suffisantes —
+rien calculé, uniquement le protocole.
+
+### Point 5 — étape 3, pas encore déclenchée
+
+Compté en production : `SELECT COUNT(*) FROM trade_causal_decomposition
+WHERE invalide=0 AND cout_sortie IS NOT NULL` — voir le chiffre exact
+dans la vérification post-déploiement ci-dessous. Le déclencheur (30
+trades démo clôturés avec instrumentation valide) n'est vraisemblablement
+pas encore atteint (déploiement de l'instrumentation elle-même trop
+récent) — rien calculé tant que le seuil n'est pas franchi, conformément
+à la règle.
+
+### Point 6 — inchangé
+
+Surveillance en tâche de fond maintenue, sans intervalle fixe,
+notification à la prochaine clôture COMPLÈTE pour valider l'identité
+de bout en bout avec les nouveaux champs peuplés.
+
+### Déploiement
+
+`git push` → `git pull` VPS → tests verts → 6 process redémarrés.
+
+---
+
 ## 2026-08-28 (suite 3) — Point 1 (bloquant) : passe de réconciliation des positions fantômes construite et déployée, 8 trades réels touchés
 
 Aucune passe de réconciliation n'existait avant ce chantier

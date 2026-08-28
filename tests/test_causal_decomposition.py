@@ -13,6 +13,7 @@ from src.causal_decomposition import (
     aggregate_by_hypothesis_asset_month,
     aggregate_trade_decomposition,
     compute_trade_causal_decomposition,
+    decompose_gestion_delay,
     decompose_trade_leg,
     is_cout_sortie_plausible,
     persist_trade_causal_decomposition,
@@ -103,6 +104,54 @@ def test_decompose_leg_derive_none_without_entry_real():
 
 
 # ---------------------------------------------------------------------------
+# decompose_gestion_delay (28/08/2026, point 2)
+# ---------------------------------------------------------------------------
+
+def test_gestion_delay_none_without_p_declenchement():
+    assert decompose_gestion_delay("long", 102.0, None, 101.8, 1.0) == (None, None)
+
+
+def test_gestion_delay_none_without_exit_real():
+    assert decompose_gestion_delay("long", 102.0, 101.9, None, 1.0) == (None, None)
+
+
+def test_gestion_delay_rejects_unknown_direction():
+    with pytest.raises(ValueError):
+        decompose_gestion_delay("sideways", 102.0, 101.9, 101.8, 1.0)
+
+
+def test_gestion_delay_long_splits_cout_sortie_exactly():
+    # Long : theorique=102, vu a la decision=101.9 (deja depasse de 0.1),
+    # reellement execute=101.8 (encore 0.1 de moins). stop=1.
+    survol, delai = decompose_gestion_delay("long", 102.0, 101.9, 101.8, 1.0)
+    assert survol == pytest.approx(0.1)   # 102 - 101.9
+    assert delai == pytest.approx(0.1)    # 101.9 - 101.8
+    # Identite : survol + delai == cout_sortie (102-101.8)/1 = 0.2
+    assert survol + delai == pytest.approx((102.0 - 101.8) / 1.0)
+
+
+def test_gestion_delay_short_splits_cout_sortie_exactly():
+    # Short : theorique=98, vu a la decision=98.1 (deja depasse, favorable
+    # pour un short), reellement execute=98.2 (encore plus favorable). stop=1.
+    survol, delai = decompose_gestion_delay("short", 98.0, 98.1, 98.2, 1.0)
+    assert survol == pytest.approx(0.1)   # -(98-98.1)
+    assert delai == pytest.approx(0.1)    # -(98.1-98.2)
+    assert survol + delai == pytest.approx(-(98.0 - 98.2) / 1.0)
+
+
+def test_decompose_leg_propagates_gestion_delay_fields():
+    leg = decompose_trade_leg("long", 100.0, 100.0, 102.0, 101.8, 1.0, p_declenchement=101.9)
+    assert leg.survol_polling == pytest.approx(0.1)
+    assert leg.delai_broker == pytest.approx(0.1)
+
+
+def test_decompose_leg_gestion_delay_none_without_p_declenchement():
+    leg = decompose_trade_leg("long", 100.0, 100.0, 102.0, 101.8, 1.0)
+    assert leg.survol_polling is None
+    assert leg.delai_broker is None
+
+
+# ---------------------------------------------------------------------------
 # aggregate_trade_decomposition
 # ---------------------------------------------------------------------------
 
@@ -120,6 +169,14 @@ def test_aggregate_weights_by_fraction():
     assert result.cout_sortie == pytest.approx(0.05)
     assert result.derive_gestion == pytest.approx(0.0)
     assert result.invalide is False
+
+
+def test_aggregate_weights_gestion_delay_fields_by_fraction():
+    leg1 = TradeLegDecomposition(r_theoretical=1.0, cout_entree=0.1, cout_sortie=0.05, derive_gestion=0.0, survol_polling=0.02, delai_broker=0.03)
+    leg2 = TradeLegDecomposition(r_theoretical=2.0, cout_entree=0.1, cout_sortie=0.05, derive_gestion=0.0, survol_polling=0.04, delai_broker=0.01)
+    result = aggregate_trade_decomposition([(0.5, leg1), (0.5, leg2)])
+    assert result.survol_polling == pytest.approx(0.03)
+    assert result.delai_broker == pytest.approx(0.02)
 
 
 def test_aggregate_component_none_if_any_leg_missing_it():

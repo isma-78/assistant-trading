@@ -3861,6 +3861,54 @@ cette entrée.
 
 ---
 
+## 2026-08-28 (suite) — Mesures A/B : citations de code demandées, seuils confirmés inchangés
+
+Complète l'entrée d'amendement ci-dessus (Mesures A/B/C) — ne la modifie
+pas. Demande explicite : citer les lignes exactes des deux côtés sur la
+durée de vie d'un ordre limite, avant tout calcul (toujours aucune
+donnée forward regardée).
+
+### Durée de vie d'un ordre limite — les deux côtés, cités
+
+- **Backtest** (`src/backtest_engine.py:115`, `entry_execution_price` ;
+  boucle principale `src/backtest_engine.py:282`, `replay_hypothesis`) :
+  remplissage INCONDITIONNEL à l'ouverture de la bougie suivante, pour
+  100% des signaux approuvés par `decide_entry`. **Aucune notion de
+  durée de vie n'existe** — grep confirmé : ni "expir", ni "stale", ni
+  "peremption" nulle part dans `backtest_engine.py`.
+- **Live**, DEUX mécanismes distincts, jamais à confondre :
+  1. `src/validator.py:38`, `STALENESS_FRACTION_OF_STOP_DISTANCE = 0.5`
+     — filtre appliqué AVANT le placement (rejette le SIGNAL si le prix
+     a déjà dérivé de plus de 50% de la distance de stop). Ne s'applique
+     jamais à un ordre déjà posé.
+  2. `src/executor.py:96`, `LIMIT_ORDER_EXPIRY_SECONDS = 15 * 60`,
+     appliqué par `cancel_stale_working_orders`
+     (`src/executor.py:918`) — un ordre limite RÉELLEMENT accepté par
+     le broker reste posé jusqu'à 15 minutes avant annulation par
+     péremption temporelle pure (jamais un test de prix).
+
+**Confirmation, pas une nouvelle conclusion** : l'asymétrie déjà notée
+dans l'amendement tient — le simulateur n'a tout simplement AUCUN
+concept comparable à ces deux mécanismes live. Tout écart de taux de
+remplissage mesuré sera donc mécaniquement imputable au simulateur,
+jamais un doute sur le live.
+
+### Seuils Mesure A, confirmés inchangés (déjà fixés dans l'amendement)
+
+n minimum = 30 signaux ayant atteint le stade "ordre réellement accepté
+par le broker" (catégories (b)+(c) de l'amendement — jamais (a), échec
+de placement, catégorie opérationnelle). Seuil : borne haute de l'IC de
+Wilson à 95% sur `remplis/(remplis+expirés)` < 0,80 ⇒ simulateur déclaré
+infidèle sur la jambe d'entrée. Rien de nouveau à fixer — l'amendement
+avait déjà anticipé cette demande.
+
+### Statut
+
+Toujours **non exécuté** — aucune donnée forward suffisante. Ce
+complément n'ajoute que les citations demandées, aucun chiffre.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4, #5, ou du backtest rétrospectif — jamais une modification de
 ce qui précède.*

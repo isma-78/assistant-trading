@@ -56,7 +56,32 @@ spread ≈ 25, contre <5 pour un cas réel authentique mesuré le même jour)
 — `is_cout_sortie_plausible` (seuil de RATIO, comparable entre actifs,
 jamais un seuil absolu) marque la ligne `invalide` au lieu de compter sur
 la discipline de ne jamais relire une ligne signalée dans un fichier de
-notes."""
+notes.
+
+**`coût_sortie` décomposé en deux (28/08/2026, point 2)** : `dérive_
+gestion` ne pouvant capturer aucun décalage de DÉCISION (voir ci-dessus),
+la question "où part le coût de sortie" se répond en instrumentant le
+moment de la DÉCISION elle-même — `executor._apply_management_action`
+capture désormais `p_déclenchement` (prix vu par le système au moment
+où `evaluate_position_management` décide, `snapshot.mid`) et
+`t_déclenchement` (`snapshot.captured_at_broker`, l'horodatage RÉEL du
+broker pour ce prix, jamais notre horloge). `decompose_gestion_delay`
+sépare alors `coût_sortie` (inchangé, toujours `prix_théorique −
+prix_réel`) en :
+- `survol_polling` = `prix_théorique − p_déclenchement` : ce que le
+  marché avait déjà dépassé la cible AVANT même que le système ne
+  s'en aperçoive (borné par l'intervalle de sondage, ~30-60s) ;
+- `délai_broker` = `p_déclenchement − prix_réel` : l'écart entre ce que
+  le système voyait au moment de sa décision et ce qui a RÉELLEMENT été
+  exécuté (latence broker/réseau entre la demande et l'exécution).
+
+Identité par construction : `survol_polling + délai_broker == coût_
+sortie` (vérifiée par test) — ce n'est PAS un troisième terme de
+l'identité principale du module, seulement une décomposition
+supplémentaire de `coût_sortie` déjà existant. `None` (les deux) si
+`p_déclenchement` est absent (trades antérieurs à ce déploiement,
+clôtures d'urgence sans décision de gestion) — jamais une valeur
+imputée, même convention que le reste du module."""
 
 from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Tuple
@@ -78,6 +103,8 @@ class TradeLegDecomposition:
     cout_entree: Optional[float]
     cout_sortie: Optional[float]
     derive_gestion: Optional[float]
+    survol_polling: Optional[float] = None
+    delai_broker: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +114,32 @@ class TradeCausalDecomposition:
     cout_sortie: Optional[float]
     derive_gestion: Optional[float]
     invalide: bool = False
+    survol_polling: Optional[float] = None
+    delai_broker: Optional[float] = None
+
+
+def decompose_gestion_delay(
+    direction: str,
+    exit_price_theoretical: float,
+    p_declenchement: Optional[float],
+    exit_price_real: Optional[float],
+    stop_distance: float,
+) -> Tuple[Optional[float], Optional[float]]:
+    """Sépare `coût_sortie` en (`survol_polling`, `délai_broker`) — voir
+    docstring du module. `None, None` si `p_declenchement` ou
+    `exit_price_real` manque (jamais une valeur imputée à partir d'une
+    seule composante connue)."""
+    if p_declenchement is None or exit_price_real is None:
+        return None, None
+    if direction == "long":
+        sign = 1.0
+    elif direction == "short":
+        sign = -1.0
+    else:
+        raise ValueError(f"direction inconnue : {direction!r}")
+    survol_polling = sign * (exit_price_theoretical - p_declenchement) / stop_distance
+    delai_broker = sign * (p_declenchement - exit_price_real) / stop_distance
+    return survol_polling, delai_broker
 
 
 def decompose_trade_leg(
@@ -96,6 +149,7 @@ def decompose_trade_leg(
     exit_price_theoretical: float,
     exit_price_real: Optional[float],
     stop_distance: float,
+    p_declenchement: Optional[float] = None,
 ) -> TradeLegDecomposition:
     """Décompose UNE jambe (une ligne `trade_partials`, ou le trade entier
     s'il n'a qu'une seule sortie). `stop_distance` : distance de stop
@@ -110,7 +164,10 @@ def decompose_trade_leg(
     28/08/2026, voir docstring du module) : calculé ICI, uniquement
     depuis `entry_price_real`/`exit_price_real` quand les deux sont
     connus — jamais réutilisé d'un champ externe (`trades.r_atteint`) qui
-    mélangerait des bases de prix incohérentes."""
+    mélangerait des bases de prix incohérentes.
+
+    `p_declenchement` (28/08/2026, point 2) : prix vu par le système au
+    moment de la décision de gestion — voir `decompose_gestion_delay`."""
     if stop_distance <= 0:
         raise ValueError(f"stop_distance doit être > 0, reçu {stop_distance!r}")
     if direction == "long":
@@ -135,8 +192,13 @@ def decompose_trade_leg(
         r_realized = sign * (exit_price_real - entry_price_real) / stop_distance
         derive_gestion = r_theoretical - r_realized - cout_entree - cout_sortie
 
+    survol_polling, delai_broker = decompose_gestion_delay(
+        direction, exit_price_theoretical, p_declenchement, exit_price_real, stop_distance,
+    )
+
     return TradeLegDecomposition(
         r_theoretical=r_theoretical, cout_entree=cout_entree, cout_sortie=cout_sortie, derive_gestion=derive_gestion,
+        survol_polling=survol_polling, delai_broker=delai_broker,
     )
 
 
@@ -170,8 +232,17 @@ def aggregate_trade_decomposition(
     if all(leg.derive_gestion is not None for _, leg in legs):
         derive_gestion = sum(fraction * leg.derive_gestion for fraction, leg in legs)
 
+    survol_polling: Optional[float] = None
+    if all(leg.survol_polling is not None for _, leg in legs):
+        survol_polling = sum(fraction * leg.survol_polling for fraction, leg in legs)
+
+    delai_broker: Optional[float] = None
+    if all(leg.delai_broker is not None for _, leg in legs):
+        delai_broker = sum(fraction * leg.delai_broker for fraction, leg in legs)
+
     return TradeCausalDecomposition(
         r_theoretical=r_theoretical, cout_entree=cout_entree, cout_sortie=cout_sortie, derive_gestion=derive_gestion,
+        survol_polling=survol_polling, delai_broker=delai_broker,
     )
 
 
@@ -208,7 +279,7 @@ def compute_trade_causal_decomposition(db_path: str, trade_id: int) -> Optional[
         if trade is None:
             return None
         partials = conn.execute(
-            "SELECT fraction, prix_sortie, prix_sortie_reel FROM trade_partials WHERE trade_id = ?",
+            "SELECT fraction, prix_sortie, prix_sortie_reel, p_declenchement FROM trade_partials WHERE trade_id = ?",
             (trade_id,),
         ).fetchall()
         spread_row = conn.execute(
@@ -233,6 +304,7 @@ def compute_trade_causal_decomposition(db_path: str, trade_id: int) -> Optional[
                 exit_price_theoretical=row["prix_sortie"],
                 exit_price_real=row["prix_sortie_reel"],
                 stop_distance=stop_distance,
+                p_declenchement=row["p_declenchement"],
             ),
         )
         for row in partials
@@ -251,11 +323,13 @@ def persist_trade_causal_decomposition(db_path: str, trade_id: int, decompositio
         conn.execute("DELETE FROM trade_causal_decomposition WHERE trade_id = ?", (trade_id,))
         conn.execute(
             "INSERT INTO trade_causal_decomposition "
-            "(trade_id, r_theoretical, cout_entree, cout_sortie, derive_gestion, invalide, computed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(trade_id, r_theoretical, cout_entree, cout_sortie, derive_gestion, invalide, "
+            "survol_polling, delai_broker, computed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 trade_id, decomposition.r_theoretical, decomposition.cout_entree,
-                decomposition.cout_sortie, decomposition.derive_gestion, int(decomposition.invalide), computed_at,
+                decomposition.cout_sortie, decomposition.derive_gestion, int(decomposition.invalide),
+                decomposition.survol_polling, decomposition.delai_broker, computed_at,
             ),
         )
 
@@ -273,7 +347,8 @@ def aggregate_by_hypothesis_asset_month(db_path: str) -> List[Dict[str, object]]
         rows = conn.execute(
             "SELECT t.source AS source, t.actif AS actif, substr(t.ferme_at, 1, 7) AS mois, "
             "d.r_theoretical AS r_theoretical, d.cout_entree AS cout_entree, "
-            "d.cout_sortie AS cout_sortie, d.derive_gestion AS derive_gestion "
+            "d.cout_sortie AS cout_sortie, d.derive_gestion AS derive_gestion, "
+            "d.survol_polling AS survol_polling, d.delai_broker AS delai_broker "
             "FROM trade_causal_decomposition d JOIN trades t ON t.id = d.trade_id "
             "WHERE d.invalide = 0"
         ).fetchall()
@@ -290,11 +365,15 @@ def aggregate_by_hypothesis_asset_month(db_path: str) -> List[Dict[str, object]]
         cout_entree_vals = [item["cout_entree"] for item in items]
         cout_sortie_vals = [item["cout_sortie"] for item in items]
         derive_vals = [item["derive_gestion"] for item in items]
+        survol_vals = [item["survol_polling"] for item in items]
+        delai_vals = [item["delai_broker"] for item in items]
         results.append({
             "source": source, "actif": actif, "mois": mois, "n": n,
             "r_theorique_moyen": r_theo_mean,
             "cout_entree_moyen": (sum(cout_entree_vals) / n) if all(v is not None for v in cout_entree_vals) else None,
             "cout_sortie_moyen": (sum(cout_sortie_vals) / n) if all(v is not None for v in cout_sortie_vals) else None,
             "derive_gestion_moyenne": (sum(derive_vals) / n) if all(v is not None for v in derive_vals) else None,
+            "survol_polling_moyen": (sum(survol_vals) / n) if all(v is not None for v in survol_vals) else None,
+            "delai_broker_moyen": (sum(delai_vals) / n) if all(v is not None for v in delai_vals) else None,
         })
     return results

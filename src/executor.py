@@ -1235,7 +1235,7 @@ def manage_open_trades(
 
             _apply_management_action(
                 db_path, client, state, action, envelope_managers, envelope_ids,
-                risk_engine=risk_engine, current_price=snapshot.mid,
+                risk_engine=risk_engine, current_price=snapshot.mid, trigger_time=snapshot.captured_at_broker,
                 anthropic_client=anthropic_client, bot_token=bot_token, chat_id=chat_id,
             )
         except Exception:
@@ -1305,9 +1305,21 @@ def _weighted_r_multiple_for_trade(db_path: str, trade_id: int) -> float:
 
 def _apply_management_action(
     db_path, client, state, action, envelope_managers, envelope_ids,
-    risk_engine=None, current_price=None,
+    risk_engine=None, current_price=None, trigger_time=None,
     anthropic_client=None, bot_token=None, chat_id=None,
 ) -> None:
+    """`current_price`/`trigger_time` (28/08/2026, voir docs/DECISIONS.md,
+    point 2) : le prix (`snapshot.mid`) et l'horodatage broker
+    (`snapshot.captured_at_broker`, `updateTime` — un champ RÉEL fourni
+    par Capital.com, jamais notre propre horloge) au moment où
+    `evaluate_position_management` a pris SA décision, persistés sur les
+    clôtures (`trade_partials.p_declenchement`/`t_declenchement`) pour
+    rendre mesurable l'écart entre ce que le marché montrait à la
+    décision et ce qui a réellement été exécuté — voir `causal_
+    decomposition.decompose_gestion_delay`. None pour Station X/H1
+    historiques (colonnes ajoutées après coup) et pour toute clôture
+    d'urgence (`force_close_all_open_trades`, aucun `evaluate_position_
+    management` associé) — jamais une valeur inventée."""
     if action.action == ManagementActionType.UPDATE_TRAILING_STOP:
         new_stop_price = action.new_stop_price
         if state.guaranteed_stop and risk_engine is not None and current_price is not None:
@@ -1418,11 +1430,12 @@ def _apply_management_action(
     with connection_scope(db_path) as conn:
         conn.execute(
             "INSERT INTO trade_partials (trade_id, palier, fraction, prix_sortie, r_atteint, motif, executed_at, "
-            "prix_sortie_reel, broker_executed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "prix_sortie_reel, broker_executed_at, t_declenchement, p_declenchement, t_demande) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 state.trade_id, palier, action.fraction_to_close, action.exit_price, action.r_multiple,
                 action.detail, now, real_exit_level, real_exit_executed_at,
+                trigger_time, current_price, close_requested_at,
             ),
         )
         if action.new_stop_price is not None:

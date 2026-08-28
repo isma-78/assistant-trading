@@ -1471,7 +1471,9 @@ def test_manage_open_trades_captures_real_exit_price_from_close_position(tmp_pat
         ).lastrowid
 
     client = MagicMock()
-    client.get_market_snapshot.return_value = {"snapshot": {"bid": 101.0, "offer": 101.2, "marketStatus": "TRADEABLE"}}
+    client.get_market_snapshot.return_value = {
+        "snapshot": {"bid": 101.0, "offer": 101.2, "marketStatus": "TRADEABLE", "updateTime": "2026-08-27T08:59:50.000"},
+    }
     client.get_prices.return_value = {"prices": []}
     client.close_position.return_value = {"level": 101.05, "executed_at": "2026-08-27T09:00:00", "confirmation": {}}
 
@@ -1487,6 +1489,10 @@ def test_manage_open_trades_captures_real_exit_price_from_close_position(tmp_pat
         assert partial["prix_sortie_reel"] == pytest.approx(101.05)
         assert partial["broker_executed_at"] == "2026-08-27T09:00:00"
         assert partial["prix_sortie"] is not None  # valeur théorique toujours présente, inchangée
+        # 28/08/2026 (voir docs/DECISIONS.md, point 2) : moment/prix de la décision persistés.
+        assert partial["t_declenchement"] == "2026-08-27T08:59:50.000"
+        assert partial["p_declenchement"] == pytest.approx(101.1)  # snapshot.mid = (101.0+101.2)/2
+        assert partial["t_demande"] is not None
     finally:
         conn.close()
     # 28/08/2026 (voir docs/DECISIONS.md) : second discriminant transmis.
