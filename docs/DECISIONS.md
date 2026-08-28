@@ -12,6 +12,47 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-28 (suite 12bis) — CHFJPY, point 2b : historique téléchargé (2019-01-01+ exploitable, jamais avant), intégrité bid/ask confirmée saine — mais MINUTE_15 ne remonte qu'à 2024-01-01
+
+**Téléchargement** (`scripts/download_historical_data.py --assets CHFJPY
+--resolutions HOUR,MINUTE_15,HOUR_4 --max-days-back 3200`, VPS,
+persistance `data/historical/CHFJPY_{resolution}.json`, même méthode que
+pour les 8 actifs existants) :
+
+| Résolution | n total | Plage disponible |
+|---|---|---|
+| HOUR | 54 567 | 2017-11-19 → 2026-08-28 |
+| HOUR_4 | 14 647 | 2017-07-17 → 2026-08-28 |
+| MINUTE_15 | 66 126 | **2024-01-01 → 2026-08-28** |
+
+**Vérification d'intégrité bid/ask, même méthode exacte qu'à l'origine
+(`openPrice.ask − openPrice.bid` par bougie, agrégé par année)** :
+0 valeur bid/ask manquante sur les 3 résolutions confondues.
+
+| Année | HOUR négatif/nul | HOUR_4 négatif/nul |
+|---|---|---|
+| 2017 | 3,7% / 55,0% | 25,2% / 14,0% |
+| 2018 | 4,1% / 0,2% | 14,9% / 0,4% |
+| **2019+** | **0,0% / 0,0%, sans exception, jusqu'à 2026** | **0,0% / 0,0%, sans exception, jusqu'à 2026** |
+
+**Confirmé : CHFJPY reproduit exactement le même défaut de fiabilité
+2017-2018 déjà documenté pour les 8 autres actifs, et le même plancher
+2019-01-01 s'applique sans exception.** La contrainte permanente n'est
+pas re-découverte à chaque session par hasard : elle est structurelle
+au flux de données brut de Capital.com, confirmée ici pour un 9e
+instrument par la même méthode.
+
+**Limite de profondeur nouvelle, à ne pas ignorer** : contrairement à
+HOUR/HOUR_4 (profondeur ~9 ans), **MINUTE_15 ne remonte que jusqu'au
+2024-01-01 sur ce compte démo pour CHFJPY** — aucune bougie M15
+disponible pour toute la fenêtre du holdout pristine (2019-01-01 →
+2024-06-13). Conséquence directe : **H2/H3/H4/H5 (toutes en MINUTE_15)
+n'auront jamais de données CHFJPY sur la portion du holdout antérieure
+à 2024-01-01** — pas un problème d'intégrité, une limite de
+disponibilité du compte démo, constatée telle quelle, aucune valeur
+comblée. **H1 (résolution HOUR) n'est pas concernée**, sa profondeur
+CHFJPY couvre tout le holdout sans lacune.
+
 ## 2026-08-28 (suite 12) — Points 6 et 7 : Mesure A toujours non lancée, Mesure B toujours en attente, compteur Étape 3 inchangé (0/30)
 
 ### Point 6 — Mesure A : NE PAS lancer, confirmé
