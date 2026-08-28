@@ -12,6 +12,44 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-28 (suite 7) — Structure de sortie : AXE CLOS. Cause confirmée (H4 natif ≈ A, loin de B) — le +0,102R était un artefact du trailing Donchian(20) imposé, pas un effet de troncature
+
+**Vérification unique autorisée par Ismaël, exécutée** (`scripts/_h4_native_check.py`,
+VPS, `~/costfix_staging`, aucune écriture DB, aucun appel réseau) : H4 rejoué
+avec `mean_reversion_strategy.evaluate_entry` **non enveloppé** par
+`force_structure` (donc son TP fixe natif, `is_donchian_trailing=False`),
+même fenêtre brûlée (2024-06-14→2026-08-28), mêmes 8 actifs, même
+confirmation de régime croisé US30/US100 :
+
+| Structure | n | brut | net |
+|---|---|---|---|
+| H4/A (50/30/20 imposé) | 4127 | -0,0019R | -0,2165R |
+| H4/B (Donchian(20) imposé) | 4740 | **+0,1006R** | -0,1148R |
+| H4/NATIF (TP fixe, aucun trailing — mécanisme propre) | 4213 | **-0,0199R** | -0,2352R |
+
+**H4 natif se comporte comme A (brut proche de zéro/légèrement négatif,
+net ≈ -0,22R à -0,24R), pas comme B.** L'écart de +0,102R observé en
+structure B n'apparaît pas quand H4 tourne sous son propre mécanisme de
+sortie. **Cause confirmée** : le trailing Donchian(20) générique,
+étranger au mécanisme natif de H4 (TP fixe, aucun trailing), produit une
+amélioration artificielle de l'ordre de grandeur observé — ce n'est pas
+un effet de troncature de queue droite spécifique au suivi de tendance,
+c'est un artefact de rejeu propre à la structure B imposée.
+
+**Décision, conformément à l'instruction reçue avant ce calcul** :
+l'axe structure de sortie est **CLOS**, quel qu'ait été ce résultat.
+Aucun test confirmatoire supplémentaire, aucun re-paramétrage, aucun
+nouveau rejeu des 128 combinaisons. Le +0,102R de H4 (structure B) est
+consigné comme **artefact identifié**, jamais comme un effet réel, et ne
+doit plus être cité comme argument pour ou contre une structure de
+sortie donnée. Les résultats H1/H3/H5 (structure B) restent eux aussi
+non retenus comme effet réel — la règle de décision pré-enregistrée
+(signe identique sur les 4 hypothèses, témoin H4 compris) avait déjà
+tranché pour l'artefact avant même cette vérification complémentaire ;
+celle-ci confirme seulement le mécanisme causal (trailing générique mal
+adapté à H4), elle ne rouvre pas la question. Aucun fichier de
+stratégie modifié, aucun paramètre déployé.
+
 ## 2026-08-28 (suite 6) — Résultat structure de sortie : artefact, pas un effet (H4 le confirme) ; CORRECTIF d'un chiffre faux publié plus tôt (435€) ; garde-fou de taille codé ; Mesure A débloque un bug de validation jamais vu
 
 ### Point 1 — RÉSULTAT : même signe partout, y compris H4 → ARTEFACT, pas un effet de structure
