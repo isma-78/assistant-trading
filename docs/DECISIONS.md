@@ -12,6 +12,137 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-28 (suite 11) — Bug `error.invalid.stoploss.maxvalue`/`minvalue` : distribution complète — 94% des occurrences ne sont PAS des signaux perdus (échec de resserrement de stop sur position déjà ouverte), seules 89 sont de vraies entrées perdues qui biaisent la Mesure A. Ni `minStepDistance` ni les champs `%StopOrProfitDistance` n'expliquent le seuil broker
+
+### Méthode et limite honnête sur la couverture temporelle
+
+Deux sources combinées : `logs/*.log` (persistants, mais tous figés au
+25/08/2026 ~17h57 UTC — les process ont depuis été redémarrés avec
+sortie captée uniquement par `tmux pipe-pane`, voir `/tmp/*_pipe.log`,
+mis en place le 26/08/2026) + `/tmp/*_pipe.log` (continuation jusqu'à
+aujourd'hui). **Aucune des deux sources ne porte de timestamp par
+ligne** (format `logging` sans `asctime`) — la répartition "par période"
+demandée n'est donc possible qu'en deux blocs (avant/après le
+redémarrage du 25-26/08), pas à la date ou à l'heure près. Signalé
+plutôt que reconstruit approximativement.
+
+### Point 5a — Distribution complète (5652 occurrences au total)
+
+**Découverte majeure qui change le sens de "33+ occurrences H4/BTCUSD"
+cité précédemment** : ce chiffre provenait de la fenêtre `/tmp/pipe.log`
+seule (partielle) — la valeur correcte et complète pour H4/BTCUSD/ENTRÉE
+est **36**, cohérente avec le chiffre initial une fois la fenêtre
+complétée. Mais la très large majorité des occurrences totales n'a
+STRICTEMENT RIEN à voir avec un signal d'entrée perdu :
+
+| Hypothèse | ENTRÉE (`/workingorders`, ordre initial) | GESTION_STOP (`/positions/{id}`, resserrement sur position déjà ouverte) | Total |
+|---|---|---|---|
+| Station X (`executor_loop`) | 2 | 0 | 2 |
+| H1 (`trend_executor`) | 6 | **312** | 318 |
+| H2 | 10 | 0 | 10 |
+| H3 | 15 | **5251** | 5266 |
+| H4 | 46 | 0 | 46 |
+| H5 | 10 | 0 | 10 |
+| **Total** | **89** | **5563** | **5652** |
+
+**94% des occurrences (5563/5652) sont des échecs de RESSERREMENT DE
+STOP sur une position DÉJÀ OUVERTE** (`update_position_stop`, appelée
+depuis `_apply_management_action`/`manage_open_trades` — trailing ou
+passage au breakeven), concentrés presque entièrement sur H3
+(BTCUSD 3023, ETHUSD 1855, US100 163, US30 100, EURUSD 63, USDJPY 47)
+et H1 (USDJPY 312, quasi exclusivement). **Ce ne sont PAS des signaux
+perdus** : le trade existe déjà en base (`statut='ouvert'`), seule sa
+mise à jour de stop échoue silencieusement — la position continue de
+tourner avec un stop PLUS LARGE que ce que la logique de trailing/
+breakeven avait décidé, jusqu'au prochain cycle de gestion qui
+retentera (succès non garanti, aucune donnée disponible ici sur le taux
+de réussite au retry).
+
+**Seules 89 occurrences (`ENTREE`, `/workingorders`) sont de vraies
+entrées jamais placées** — celles qui biaisent réellement la Mesure A
+et toute espérance live mesurée à ce jour, détail par hypothèse × actif :
+
+| Hypothèse | Actif | Type | n |
+|---|---|---|---|
+| H4 | BTCUSD | maxvalue | 36 |
+| H1 | EURUSD | minvalue | 6 |
+| H4 | GBPUSD | maxvalue | 5 |
+| H2 | BTCUSD | maxvalue | 4 |
+| H5 | BTCUSD | maxvalue | 4 |
+| H4 | USDJPY | maxvalue | 4 |
+| H2 | ETHUSD | maxvalue | 3 |
+| H2 | USDJPY | minvalue | 3 |
+| H5 | GOLD | minvalue | 3 |
+| H3 | EURUSD | maxvalue | 8 |
+| H3 | GOLD | maxvalue | 7 |
+| H5 | EURUSD | maxvalue | 2 |
+| H4 | ETHUSD | maxvalue | 1 |
+| H5 | ETHUSD | minvalue | 1 |
+| Station X | inconnu | max+min | 2 |
+
+### Point 5b — Nature min/max, et le seuil broker NE correspond PAS à `minStepDistance`
+
+**`maxvalue` domine largement dans le sous-ensemble ENTRÉE (75/89,
+84%)** — cohérent avec l'hypothèse déjà avancée : la logique
+d'élargissement du stop garanti (`_compute_guaranteed_stop_adjustment`)
+pousse le stop assez loin de l'entrée pour heurter une limite de
+distance MAXIMALE non modélisée. Dans le sous-ensemble GESTION_STOP,
+`minvalue`/`maxvalue` sont presque équilibrés (2787/2776) — cohérent
+avec un trailing qui peut resserrer le stop soit trop près (`minvalue`,
+dominant sur H1/USDJPY, 222 sur 312) soit, plus rarement, trop loin.
+
+**Vérifié en direct (lecture seule) : le seuil ne correspond À AUCUN
+champ statique de `dealingRules`** :
+- `minStepDistance` (déjà établi au point 4 comme gouvernant la
+  granularité de PRIX d'un niveau de stop, pas une distance min/max
+  depuis l'entrée) — écarté, mauvais champ, mêmes conclusions qu'au
+  point 4.
+- `minStopOrProfitDistance`/`maxStopOrProfitDistance` (les champs
+  correspondant le plus, par leur nom, à une distance min/max) —
+  vérifiés en direct pour les 8 actifs concernés : **0,01%/100% partout,
+  sans exception** — beaucoup trop lâches pour expliquer un seul des
+  rejets observés (aucune position n'a jamais un stop à 100% du prix).
+- `minControlledRiskStopDistance`/`minNormalStopOrLimitDistance` :
+  vides (`None`) pour ces 8 actifs.
+
+**Les valeurs numériques incluses dans chaque message d'erreur sont des
+NIVEAUX DE PRIX absolus** (ex. GOLD ≈4500-4520, BTCUSD ≈76000-77000,
+USDJPY ≈159-160, EURUSD ≈1,17 — chacune à l'échelle réelle de son
+actif au moment du rejet), pas des distances fixes en points — ce qui
+indique une bande calculée DYNAMIQUEMENT par le broker au moment de la
+requête (probablement relative au prix de marché courant), et non une
+constante exposée par `GET /markets/{epic}`. **Le seuil exact n'est donc
+pas déterminable à partir des specs statiques déjà consultées** — le
+déterminer précisément demanderait un test de reproduction en direct
+dédié (soumettre des stops à distances croissantes et observer le point
+de bascule), non fait ici (hors périmètre d'un rapport, pas de
+correction avant décision).
+
+### Point 5c — Conséquence chiffrée : biais réel limité à 89 occurrences ENTRÉE, jamais les 5563 GESTION_STOP
+
+**Les 89 échecs ENTRÉE sont aujourd'hui invisibles en tant que cause
+distincte** : le code les traite comme n'importe quel `CapitalApiError`
+de placement (`trades.statut='annule'`, `docs/DECISIONS.md` 25/08/2026)
+— indiscernables en base des échecs dus au rate-limiting 429 ou à un
+échec réseau générique. Ils biaisent donc bien la Mesure A (comptés
+comme "non-remplissage" générique) et toute espérance live calculée à
+ce jour, sans qu'aucune statistique existante ne les isole. **Cause à
+garder strictement séparée des deux autres déjà connues** (429 rate-
+limiting ; péremption de marché sur ordre limite, §2.8) dans tout futur
+comptage — les trois causes ont des implications de correction et de
+biais complètement différentes.
+
+**Les 5563 échecs GESTION_STOP ne biaisent PAS la Mesure A** (aucun
+signal perdu, le trade existe déjà) — mais représentent un problème de
+fidélité de gestion de risque séparé, jamais quantifié jusqu'ici :
+des positions H3 (BTCUSD/ETHUSD très majoritairement) et H1 (USDJPY)
+tournent régulièrement avec un stop plus large que celui que le
+mécanisme de trailing/breakeven avait décidé de leur donner. Signalé
+ici comme un axe distinct nécessitant sa propre décision — **aucune
+correction appliquée, aucune inférence sur l'ampleur du risque résultant
+(nécessiterait de recouper chaque échec avec le stop réellement en
+vigueur au moment de chaque clôture, non fait ici)**.
+
 ## 2026-08-28 (suite 10) — Clusters de corrélation : historique CORRIGÉ des pics d'exposition simultanée (pleine profondeur, ordres annulés exclus) — le cluster crypto DÉPASSE le seuil de 50€ ; proposition de plafond par cluster et de mécanisme (non déployé)
 
 ### Point 3a — Historique corrigé, pleine profondeur, ordres réellement envoyés uniquement
