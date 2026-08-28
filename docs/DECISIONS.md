@@ -12,6 +12,93 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-28 (suite 3) — Point 1 (bloquant) : passe de réconciliation des positions fantômes construite et déployée, 8 trades réels touchés
+
+Aucune passe de réconciliation n'existait avant ce chantier
+(`grep -rn "reconcil"` sur `src/` : rien). Construite comme demandé —
+une passe périodique, pas une rustine à chaque point d'appel qui
+rencontre un 404.
+
+### État réel avant correctif, vérifié compte par compte
+
+**Piège évité** : un premier diagnostic comparant TOUS les trades
+`statut='ouvert'` au compte Capital.com PAR DÉFAUT
+(`config.capital_account_id`) aurait fait apparaître 100% des trades
+H3/H5 comme fantômes — faux, chaque hypothèse a son PROPRE compte
+(`CAPITAL_ACCOUNT_ID_HYPOTHESIS{2,3,4,5}`, H1 partage le compte
+principal avec Station X). Revérifié avec le bon compte pour chaque
+source avant de conclure quoi que ce soit.
+
+**8 trades réellement fantômes** (`deal_id` absent des positions
+réelles du BON compte), remontant jusqu'à 8 jours :
+
+| Trade | Source/Actif | Ouvert depuis |
+|---|---|---|
+| 10 | hypothesis/BTCUSD | 2026-08-20 23:30 |
+| 11 | hypothesis/ETHUSD | 2026-08-21 01:35 |
+| 24 | hypothesis3/EURUSD | 2026-08-21 13:34 |
+| 25 | hypothesis3/US30 | 2026-08-21 15:42 |
+| 14183 | hypothesis3/US100 | 2026-08-25 06:25 |
+| 14240 | hypothesis3/USDJPY | 2026-08-28 05:25 (TP1 touché le jour même, puis disparu) |
+| 14312 | hypothesis5/GOLD | 2026-08-28 14:13 (TP1 touché le jour même, puis disparu) |
+| 14332 | hypothesis/US100 | 2026-08-28 15:01 |
+
+**Constat notable** : 14240 et 14312 ont eu un TP1 PARTIEL réussi et
+correctement instrumenté (voir suite 2) puis ont disparu peu après —
+la position réduite restante s'est donc fermée (probablement stop
+breakeven touché) SANS que ce système ne le détecte, alors même que le
+correctif `close_position` du jour fonctionne. Confirme que ceci est un
+problème de RÉCONCILIATION (le système ne revérifie jamais qu'une
+position marquée "ouverte" existe toujours), pas un problème du
+correctif de prix de la veille — les deux sont orthogonaux.
+
+**Créneaux bloqués** : 8 couples (actif, source) ne pouvaient plus
+générer aucun nouveau signal depuis leur fantômisation
+(`_has_active_signal_or_trade` bloque tant que `statut IN ('en_attente',
+'ouvert')`) — pour H3 en particulier, 4 de ses 8 actifs étaient
+bloqués simultanément au moment du diagnostic.
+
+### Correctif — passe périodique, pas une rustine
+
+`src/executor.py::reconcile_ghost_positions` (nouveau) : compare tous
+les trades `statut='ouvert'` (avec `deal_id` connu) à
+`client.get_open_positions()` — sur le compte DÉJÀ sélectionné par
+l'appelant (chaque process a le bon). Absent de la liste réelle ⇒
+nouveau statut `GHOST_TRADE_STATUS = "ferme_non_reconcilie"` —
+**jamais de prix imputé** (`r_multiple_total`/`pnl_net` restent NULL,
+`ferme_at` = l'instant de la DÉTECTION, pas un instant de marché).
+
+Exclusion des statistiques obtenue SANS modification ailleurs : `metrics.py`/
+`circuit_breaker_store.py`/`confidence_scorer.py` filtrent tous
+`statut = 'ferme'` littéralement — `'ferme_non_reconcilie'` en est déjà
+exclu par construction. Créneau libéré de la même façon : `_has_active_
+signal_or_trade` ne teste que `('en_attente', 'ouvert')`.
+
+**Écart assumé, documenté, pas corrigé** : si la position a réellement
+clôturé en gain/perte côté broker avant de disparaître, ce P&L réel
+n'est JAMAIS reflété dans l'enveloppe simulée (`capital_manager` non
+appelé par cette passe) — imputer une valeur serait pire que
+l'absence de valeur (règle du chantier). Écart entre l'enveloppe
+simulée et le solde réel du compte démo à surveiller si le phénomène
+se répète.
+
+Câblée dans les deux boucles, une fois par cycle, avant `check_pending_
+fills` : `run_executor_loop` (Station X, filtrée) et
+`technical_strategy_executor.run_technical_strategy_loop` (H1/H3/H4/H5,
+une source par process).
+
+### Tests, déploiement
+
+6 tests nouveaux, 100% de couverture sur `reconcile_ghost_positions`
+spécifiquement (le reste de `executor.py` reste au régime de couverture
+orchestration déjà établi, 86%, inchangé). **951 tests passent au
+total.** Déployé (push → pull VPS → tests verts → 6 process
+redémarrés). Les 8 trades fantômes reconciliés en production juste
+après redémarrage (première exécution de la passe) — voir la
+vérification post-déploiement ci-dessous.
+
+---
+
 ## 2026-08-28 (suite 2) — Suite de 35d2756 : prix_entree_reel revérifié (sain), garde-fou de plausibilité en code, second discriminant testé de force, bug de tautologie trouvé et corrigé sur dérive_gestion
 
 ### 1. `prix_entree_reel` — mécanisme DIFFÉRENT de `close_position`, revérifié sain

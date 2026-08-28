@@ -1088,6 +1088,72 @@ def check_pending_fills(
     return filled
 
 
+# Statuts terminaux : "ferme" = clôture normale (prix connu, compté dans
+# les statistiques) ; "ferme_non_reconcilie" = position disparue côté
+# broker sans qu'aucun mécanisme de clôture de ce système ne l'ait
+# constatée (28/08/2026, voir docs/DECISIONS.md) — jamais de prix
+# imputé, jamais compté dans une statistique (tous les filtres existants,
+# `metrics.py`/`circuit_breaker_store.py`/`confidence_scorer.py`, testent
+# `statut = 'ferme'` littéralement, excluant déjà celui-ci sans
+# modification). Un trade réconcilié libère son créneau (actif, source)
+# immédiatement : `_has_active_signal_or_trade` ne teste que
+# `('en_attente', 'ouvert')`.
+GHOST_TRADE_STATUS = "ferme_non_reconcilie"
+
+
+def reconcile_ghost_positions(
+    db_path: str, client: CapitalClient, source_filter: Optional[Callable[[str], bool]] = None,
+) -> int:
+    """Passe de réconciliation PÉRIODIQUE (28/08/2026, voir
+    docs/DECISIONS.md) — pas une rustine à chaque point d'appel qui peut
+    rencontrer un 404. Compare tous les trades `statut='ouvert'` (avec un
+    `deal_id` connu) à la liste RÉELLE des positions ouvertes côté broker
+    (`client.get_open_positions()`, sur le compte DÉJÀ sélectionné par
+    l'appelant — un trade H3 doit être vérifié avec un client authentifié
+    sur le compte H3, jamais le compte partagé Station X/H1, sans quoi
+    100% des trades H3 apparaîtraient à tort comme fantômes).
+
+    Trouvé en enquêtant le 28/08/2026 : 8 trades fantômes réels,
+    `deal_id` introuvable côté broker, remontant jusqu'au 20/08/2026 —
+    voir `docs/DECISIONS.md` pour le détail par couple.
+
+    Un trade dont le `deal_id` n'apparaît PAS dans les positions réelles
+    passe à `GHOST_TRADE_STATUS` — **jamais un prix imputé**
+    (`r_multiple_total`/`pnl_net` restent NULL, `ferme_at` = l'instant de
+    LA DÉTECTION, pas un instant de marché). Écart assumé et documenté :
+    si la position a réellement clôturé en gain/perte côté broker avant
+    de disparaître, ce P&L réel n'est jamais reflété dans l'enveloppe
+    simulée (`capital_manager` non appelé ici) — connu, pas corrigé
+    (imputer une valeur serait pire que l'absence de valeur).
+
+    Retourne le nombre de trades réconciliés."""
+    positions = client.get_open_positions()
+    real_position_ids = {p.get("position", {}).get("dealId") for p in positions}
+    now = _now()
+
+    reconciled = 0
+    with connection_scope(db_path) as conn:
+        pending = conn.execute(
+            "SELECT id, source, actif, deal_id FROM trades WHERE statut = 'ouvert' AND deal_id IS NOT NULL"
+        ).fetchall()
+        if source_filter is not None:
+            pending = [row for row in pending if source_filter(row["source"])]
+        for row in pending:
+            if row["deal_id"] in real_position_ids:
+                continue
+            conn.execute(
+                "UPDATE trades SET statut = ?, ferme_at = ? WHERE id = ?",
+                (GHOST_TRADE_STATUS, now, row["id"]),
+            )
+            logger.warning(
+                "Trade %s (%s/%s) réconcilié : deal_id %s introuvable côté broker — "
+                "position fantôme, créneau libéré, aucun prix imputé",
+                row["id"], row["source"], row["actif"], row["deal_id"],
+            )
+            reconciled += 1
+    return reconciled
+
+
 def manage_open_trades(
     db_path: str, client: CapitalClient, risk_engine: RiskEngine,
     envelope_managers: dict, envelope_ids: dict,
@@ -1694,6 +1760,7 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30, startup_
                 time.sleep(interval_seconds)
                 continue
 
+            reconcile_ghost_positions(db_path, client, source_filter=_stationx_filter)
             check_pending_fills(
                 db_path, client, source_filter=_stationx_filter,
                 bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,

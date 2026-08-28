@@ -20,6 +20,7 @@ from src.db import connection_scope, get_connection, init_db
 from src.envelope_store import load_or_create_envelope
 from src.confidence_scorer import PHASE_A_MIN_TRADES_BACKTEST, check_spread_condition, get_median_spread_ratio
 from src.executor import (
+    GHOST_TRADE_STATUS,
     ManagementActionType,
     OpenTradeState,
     _check_backtest_confidence_gate,
@@ -34,6 +35,7 @@ from src.executor import (
     force_close_all_open_trades,
     manage_open_trades,
     open_signal,
+    reconcile_ghost_positions,
 )
 from src.go_nogo import GoNoGoStatus
 from src.market_data import Candle
@@ -1218,6 +1220,120 @@ def test_check_pending_fills_sources_filter_ignores_other_sources(tmp_path):
     # cet appel (c'est celui de l'autre boucle qui s'en chargera).
     filled = check_pending_fills(db_path, client, sources=["hypothesis"])
     assert filled == 0
+
+
+# --- reconcile_ghost_positions (28/08/2026, position fantômes) ----------
+
+def _insert_ouvert_trade(db_path, deal_id, source="hypothesis3", actif="US30"):
+    signal_row = _insert_signal(db_path, actif=actif, source=source, statut="approuve", telegram_msg_id=hash(deal_id) % 1_000_000)
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_prevu, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, ?, ?, ?, 'demo', 'short', 0.01, 100.0, 101.0, 101.0, 10.0, 2.0, "
+            "'2026-08-16T00:00:00Z', 'ouvert')",
+            (signal_row["id"], deal_id, source, actif),
+        ).lastrowid
+    return trade_id
+
+
+def test_reconcile_marks_ghost_when_deal_id_absent_from_broker(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    trade_id = _insert_ouvert_trade(db_path, "deal-ghost")
+
+    client = MagicMock()
+    client.get_open_positions.return_value = []  # aucune position réelle
+
+    reconciled = reconcile_ghost_positions(db_path, client)
+
+    assert reconciled == 1
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT statut, r_multiple_total, pnl_net, ferme_at FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["statut"] == GHOST_TRADE_STATUS
+        assert trade["r_multiple_total"] is None  # jamais de prix impute
+        assert trade["pnl_net"] is None
+        assert trade["ferme_at"] is not None
+    finally:
+        conn.close()
+
+
+def test_reconcile_leaves_real_position_untouched(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    trade_id = _insert_ouvert_trade(db_path, "deal-reel")
+
+    client = MagicMock()
+    client.get_open_positions.return_value = [{"position": {"dealId": "deal-reel"}}]
+
+    reconciled = reconcile_ghost_positions(db_path, client)
+
+    assert reconciled == 0
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["statut"] == "ouvert"
+    finally:
+        conn.close()
+
+
+def test_reconcile_ignores_trades_without_deal_id(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_prevu, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, NULL, 'hypothesis3', 'US30', 'demo', 'short', 0.01, 100.0, 101.0, 101.0, 10.0, 2.0, "
+            "'2026-08-16T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        )
+    client = MagicMock()
+    client.get_open_positions.return_value = []
+
+    assert reconcile_ghost_positions(db_path, client) == 0
+
+
+def test_reconcile_respects_source_filter(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    trade_h3 = _insert_ouvert_trade(db_path, "deal-h3", source="hypothesis3")
+    trade_h5 = _insert_ouvert_trade(db_path, "deal-h5", source="hypothesis5")
+
+    client = MagicMock()
+    client.get_open_positions.return_value = []  # ni l'un ni l'autre reel sur CE compte
+
+    # Le compte interroge ici est celui de H3 uniquement -> H5 doit rester intact.
+    reconciled = reconcile_ghost_positions(db_path, client, source_filter=lambda s: s == "hypothesis3")
+
+    assert reconciled == 1
+    conn = get_connection(db_path)
+    try:
+        assert conn.execute("SELECT statut FROM trades WHERE id = ?", (trade_h3,)).fetchone()["statut"] == GHOST_TRADE_STATUS
+        assert conn.execute("SELECT statut FROM trades WHERE id = ?", (trade_h5,)).fetchone()["statut"] == "ouvert"
+    finally:
+        conn.close()
+
+
+def test_reconcile_frees_slot_for_new_signal(tmp_path):
+    # Verifie l'effet de bord demande : un trade reconcilie ne bloque
+    # plus _has_active_signal_or_trade (technical_strategy_executor).
+    from src.technical_strategy_executor import _has_active_signal_or_trade
+
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    _insert_ouvert_trade(db_path, "deal-ghost", source="hypothesis3", actif="US30")
+    assert _has_active_signal_or_trade(db_path, "US30", "hypothesis3") is True
+
+    client = MagicMock()
+    client.get_open_positions.return_value = []
+    reconcile_ghost_positions(db_path, client)
+
+    assert _has_active_signal_or_trade(db_path, "US30", "hypothesis3") is False
 
 
 def test_cancel_stale_working_orders_cancels_old_ones(tmp_path):

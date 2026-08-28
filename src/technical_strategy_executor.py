@@ -77,6 +77,7 @@ from src.executor import (
     force_close_all_open_trades,
     manage_open_trades,
     open_signal,
+    reconcile_ghost_positions,
 )
 from src.go_nogo import GoNoGoStatus
 from src.market_data import Candle, get_candles
@@ -444,6 +445,7 @@ def run_technical_strategy_loop(
                     confirmed_regime=regime_context.get(asset),
                 )
 
+            reconcile_ghost_positions(db_path, client, source_filter=lambda s: s == source)
             check_pending_fills(
                 db_path, client, sources=[source],
                 bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,
