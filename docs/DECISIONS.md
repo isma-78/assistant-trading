@@ -12,6 +12,173 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-28 (suite 6) — Résultat structure de sortie : artefact, pas un effet (H4 le confirme) ; CORRECTIF d'un chiffre faux publié plus tôt (435€) ; garde-fou de taille codé ; Mesure A débloque un bug de validation jamais vu
+
+### Point 1 — RÉSULTAT : même signe partout, y compris H4 → ARTEFACT, pas un effet de structure
+
+128 rejeux terminés (`scripts/_exit_structure_comparison.py`, fenêtre
+brûlée 2024-06-14→aujourd'hui) :
+
+| Hyp | Struct | n | brut | net | sigma | skew | p90 |
+|---|---|---|---|---|---|---|---|
+| H1 | A | 911 | +0,0482R | -0,0187R | 1,0677 | 0,25 | 1,44R |
+| H1 | B | 2242 | +0,0759R | +0,0161R | 1,1900 | 4,63 | 1,23R |
+| H3 | A | 2908 | +0,0237R | -0,0721R | 1,0530 | 0,31 | 1,42R |
+| H3 | B | 4727 | +0,0732R | -0,0255R | 1,3452 | 3,94 | 1,22R |
+| H4 | A | 4127 | -0,0019R | -0,2165R | 1,0595 | 0,51 | 1,30R |
+| H4 | B | 4740 | +0,1006R | -0,1148R | 1,6988 | 8,33 | 0,12R |
+| H5 | A | 3109 | +0,0139R | -0,1600R | 1,0666 | 0,38 | 1,36R |
+| H5 | B | 3282 | +0,0775R | -0,1112R | 1,9016 | 4,74 | 1,48R |
+
+Écarts net B−A : H1 +0,0348R, H3 +0,0466R, H4 **+0,1017R**, H5 +0,0488R
+— **le même signe (positif) sur les QUATRE, avec le plus grand écart sur
+H4**, exactement l'hypothèse prédite pour montrer l'effet OPPOSÉ ou
+nul. Conformément à la règle fixée avant le calcul : **c'est un
+artefact de mesure, pas un effet de troncature de queue droite
+spécifique au suivi de tendance.**
+
+**Vérifié, la borne basse corrigée (Bonferroni m=3 maintenu tel que
+pré-enregistré, z=2,1285 ; SE de la différence recalculée avec le sigma
+de CHAQUE structure, `√(σ_A²/n_A+σ_B²/n_B)`)** :
+
+| Hyp | écart net | SE diff | borne basse | ≥0,03R ET borne>0 ? |
+|---|---|---|---|---|
+| H1 | +0,0348R | 0,0434 | -0,058R | non |
+| H3 | +0,0466R | 0,0276 | -0,012R | non |
+| **H4** | **+0,1017R** | 0,0297 | **+0,039R** | **oui, mécaniquement** |
+| H5 | +0,0488R | 0,0383 | -0,033R | non |
+
+**Seul H4 "qualifie" mécaniquement — et c'est exactement le signal
+d'artefact, pas une confirmation.** H3 et H5 (les hypothèses pour
+lesquelles l'effet théorique était censé exister) ne passent PAS le
+seuil ; H4 (le témoin, prédit `B≤A`) le passe le plus largement de
+tous. Appliquer la règle mécaniquement conduirait à pré-enregistrer un
+test confirmatoire sur H4 — précisément l'hypothèse la moins motivée
+théoriquement. **Conclusion : aucun test confirmatoire pré-enregistré.
+L'axe reste ouvert mais suspect, pas fermé ni confirmé.**
+
+**Cause probable de l'artefact, identifiée** : la structure B testée
+ici utilise pour LES QUATRE hypothèses le MÊME mécanisme de trailing
+(Donchian(20) sur les bougies, celui natif de H1) — jamais le
+mécanisme propre de chaque hypothèse (ATR×2 pour H3/H5 après TP1/TP2,
+aucun trailing du tout pour H4 dans la réalité). Le résultat mesure
+donc "un trailing Donchian(20) générique laisse-t-il courir les gains
+mieux qu'un TP fixe, QUEL QUE SOIT le déclencheur d'entrée" — une
+question différente de "la queue droite du suivi de tendance est-elle
+tronquée". Refaire ce test avec le trailing NATIF de chaque hypothèse
+(ATR pour H3/H5, un trailing à construire pour H4 s'il en existait un)
+serait un chantier séparé, pré-enregistré, si Ismaël souhaite le
+poursuivre — non fait ici.
+
+Structure C toujours non testée (limitation de code confirmée le
+28/08/2026, section précédente) — sans incidence sur la conclusion
+ci-dessus (déjà négative sur A vs B).
+
+### Point 2 — CORRECTIF : le chiffre de 435€ publié précédemment était FAUX
+
+**Erreur trouvée en re-vérifiant avant d'écrire l'historique complet
+demandé** : le calcul précédent (entrée du 28/08, suite 5) sommait
+`risque_eur` de TOUS les trades `ouvert_at >= cutoff`, **y compris les
+trades `statut='annule'`** (jamais réellement envoyés au broker, deal_id
+NULL — voir Mesure A ci-dessous) comme s'ils portaient un risque réel.
+Une fois exclus, les pics réels sont **10 fois plus bas** :
+
+| Cluster | Pic RÉEL (€) | Date | Composition au pic |
+|---|---|---|---|
+| indices | 29,72 | 28/08 05:28 | US100/H4, US30/H5, US30/H1, US100/H3 (~10€ chacun) |
+| usd_majors | 38,95 | 28/08 14:13 | GBPUSD/H5, EURUSD/H5, USDJPY/H1, EURUSD/H1 (~10€ chacun) |
+| crypto | 39,97 | 28/08 16:26 | BTCUSD/H5, BTCUSD/H4, ETHUSD/H3, BTCUSD/H3, ETHUSD/H1, BTCUSD/H1 (~10€ chacun) |
+| gold | 19,93 | 28/08 16:01 | GOLD/H1, GOLD/Station X, GOLD/H3 |
+
+**Aucun de ces pics ne dépasse ~40€** — sous le seuil de 50€ (10% d'une
+enveloppe de 500€) pris isolément. Le CONSTAT STRUCTUREL reste
+valable (le plafond §2.3 ne raisonne jamais par cluster, seulement par
+enveloppe), mais **l'urgence était surestimée d'un facteur 10 par mon
+erreur** — corrigé ici plutôt que laissé tel quel. Le chiffre de 435€
+mentionné dans l'entrée précédente ne doit plus être cité.
+
+**Proposition de plafond par cluster (non appliquée)** : 10% de la
+somme des enveloppes actives du cluster à un instant donné (même
+principe que §2.3, agrégé). Mécanisme d'application proposé — vérifié
+AVANT sizing, même position dans le flux que le garde-fou Option B
+(`_check_backtest_confidence_gate`), jamais modifiable à chaud
+(invariant #6, redéploiement requis pour tout changement de seuil).
+**Non implémenté, en attente d'accord.**
+
+### Point 3 — garde-fou de taille : codé, testé, PAS déployé
+
+`src/risk_engine.py` : `AssetSpec.size_step` (nouveau champ optionnel,
+`None` par défaut — aucun actif existant affecté sans configuration
+explicite) + `evaluate_sizing_plausibility` (pure, 100% couverte) :
+vérifie, après arrondi à `min_units`, que le risque réel une fois
+ré-arrondi au VRAI pas du broker ne dévie pas de plus de 20% de la
+cible — sinon `RiskDecision.approved=False`,
+`RiskRejectionReason.POSITION_SIZE_STEP_DEVIATION`, journalisé dans
+`risk_decisions` (mécanisme générique déjà en place, aucune modification
+nécessaire côté `executor.py`). Ne modifie jamais le sizing réel
+(invariant #2), fail-safe si `size_step` est `None` (jamais un rejet
+faute de donnée).
+
+**Rétroactif, sur les 15 trades RÉELLEMENT placés (hors `annule`)
+depuis le déblocage sur US30/US100/BTCUSD/ETHUSD** (`size_step` =
+0,1/0,1/0,05/0,01, vérifiés le 28/08/2026) : **10 sur 15 (67%) auraient
+été rejetés, dont 6 à taille nulle.** Ce garde-fou, s'il était déployé
+tel quel, bloquerait donc la MAJORITÉ des trades sur ces 4 actifs au
+risque actuel (~10€/trade sur enveloppe 500€) — un compromis réel entre
+exécutabilité garantie et volume de trades, à trancher explicitement
+par Ismaël, pas une activation anodine. 6 tests nouveaux, **968 tests
+passent, 100% de couverture sur `risk_engine.py`. PAS déployé.**
+
+### Point 4 — Mesure A : bug de validation jamais vu trouvé, PAS un problème de 429
+
+**Catégorisation, fenêtre forward (27/08 19h→28/08 17h, ~22h)** :
+129 tentatives de placement au total — (a) échec de placement (deal_id
+NULL) = **101** ; (b) péremption réelle (deal_id présent, expirée à 15
+min) = **5** ; (c) remplie = **23**. Taux de remplissage `c/(b+c)` =
+23/28 = **82,1%** — n=28 sous le seuil pré-enregistré de 30, **pas de
+verdict de fidélité rendu** (règle respectée, pas assouplie).
+
+**Découverte en creusant la catégorie (a), qui change le diagnostic** :
+codes d'erreur RÉELS extraits des logs des 6 process —
+`error.not-found.dealId` (1296/1517 occurrences — la tempête de 404 sur
+positions fantômes, RÉSOLUE par la réconciliation déployée plus tôt ce
+jour), `error.too-many.requests` (44 à 69 par process — le 429 déjà
+connu), et surtout **`error.invalid.stoploss.maxvalue`/`minvalue`,
+JAMAIS DOCUMENTÉ AVANT AUJOURD'HUI** : 33 occurrences pour H4/BTCUSD
+seul, plusieurs autres sur H1/H5 (GOLD, EURUSD, US30) — le broker
+rejette l'ordre quand la distance de stop calculée (après élargissement
+pour stop garanti, `_compute_guaranteed_stop_adjustment`) dépasse une
+distance MAXIMALE que ce code n'a jamais vérifiée (seule la distance
+MINIMALE est gérée aujourd'hui). **C'est la cause dominante des échecs
+de placement, pas le rate-limiting** — un bug réel, distinct, non
+corrigé dans ce chantier (aucune modification de code sans rapport
+préalable), signalé pour arbitrage.
+
+### Point 5 — Mesure B : règle de comptage par épisode, rappelée
+
+Inchangée depuis l'amendement du 28/08/2026 (matin) : compter des
+ÉPISODES (suites de lignes `trades` consécutives pour le même `(actif,
+source, direction)`), jamais des lignes brutes — sans ça, toute
+comparaison de comptages de signaux live/backtest reste invalide.
+Aucune donnée forward suffisante pour l'appliquer à un chiffre
+aujourd'hui (le volume de la fenêtre forward, ~130 tentatives sur 22h,
+est encore dominé par les épisodes de re-tentative liés aux échecs de
+placement du point 4, pas par une dynamique de marché stable).
+
+### Point 6 — étape 3 : compteur inchangé
+
+`trade_causal_decomposition` : 0 ligne `invalide=0 AND cout_sortie IS
+NOT NULL` sur 11 lignes totales. Seuil de 30 non atteint. Rien calculé.
+
+### Tests, déploiement
+
+968 tests passent (959 avant ce lot), 100% de couverture maintenue sur
+`risk_engine.py`. **Aucun déploiement** : le garde-fou de taille
+(point 3) et le plafond par cluster (point 2, non implémenté) restent
+en attente d'accord explicite d'Ismaël, conformément à la consigne.
+
+---
+
 ## 2026-08-28 (suite 5) — Chantier "structure de sortie" : prémisse corrigée, points 3/4/5/6 mesurés, point 1 en cours
 
 ### Prémisse vérifiée AVANT tout calcul — partiellement fausse

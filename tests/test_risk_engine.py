@@ -14,6 +14,7 @@ from src.risk_engine import (
     TradeSignal,
     compute_r_multiple,
     compute_weighted_r_multiple,
+    evaluate_sizing_plausibility,
 )
 
 
@@ -83,6 +84,60 @@ def test_assetspec_invalid_min_units_raises():
 def test_assetspec_invalid_pip_value_raises():
     with pytest.raises(ValueError):
         AssetSpec(symbol="EURUSD", min_units=1000, pip_value_per_unit=0)
+
+
+def test_assetspec_size_step_defaults_to_none():
+    spec = AssetSpec(symbol="EURUSD", min_units=1000, pip_value_per_unit=0.0001)
+    assert spec.size_step is None
+
+
+def test_assetspec_invalid_size_step_raises():
+    with pytest.raises(ValueError):
+        AssetSpec(symbol="US30", min_units=0.001, pip_value_per_unit=1.0, size_step=0)
+
+
+# --- evaluate_sizing_plausibility (28/08/2026, point 3) ---
+
+def test_sizing_plausibility_always_true_without_size_step():
+    plausible, detail = evaluate_sizing_plausibility(
+        units=0.048, target_risk_eur=10.0, stop_distance=40.0, pip_value_per_unit=0.86, size_step=None,
+    )
+    assert plausible is True
+    assert detail == ""
+
+
+def test_sizing_plausibility_zero_after_step_rounding_rejected():
+    # Reproduit le cas reel US30 (28/08/2026) : 0.048 unites, pas reel 0.1 -> 0.
+    plausible, detail = evaluate_sizing_plausibility(
+        units=0.048, target_risk_eur=9.92, stop_distance=40.0, pip_value_per_unit=0.8643, size_step=0.1,
+    )
+    assert plausible is False
+    assert "= 0" in detail
+
+
+def test_sizing_plausibility_within_tolerance_accepted():
+    # units=2.314 (position plus grande, le pas de 0.1 pese peu en relatif)
+    # -> arrondi a 2.3 : ecart ~0.6%, tres sous le seuil de 20%.
+    plausible, detail = evaluate_sizing_plausibility(
+        units=2.314, target_risk_eur=10.0, stop_distance=5.0, pip_value_per_unit=0.8643, size_step=0.1,
+    )
+    assert plausible is True
+
+
+def test_sizing_plausibility_beyond_tolerance_rejected():
+    # 0.187 units, pas 0.1 -> arrondi a 0.1 : ecart ~46%, au-dela du seuil.
+    plausible, detail = evaluate_sizing_plausibility(
+        units=0.187, target_risk_eur=9.8, stop_distance=40.0, pip_value_per_unit=0.8643, size_step=0.1,
+    )
+    assert plausible is False
+    assert "%" in detail
+
+
+def test_sizing_plausibility_zero_target_risk_never_divides_by_zero():
+    plausible, detail = evaluate_sizing_plausibility(
+        units=1.0, target_risk_eur=0.0, stop_distance=1.0, pip_value_per_unit=1.0, size_step=0.1,
+    )
+    assert plausible is True
 
 
 # --- evaluate_new_entry : cas nominal ---
@@ -258,6 +313,32 @@ def test_entry_rejected_position_size_below_minimum():
     )
     assert decision.approved is False
     assert decision.reason == RiskRejectionReason.POSITION_SIZE_BELOW_MINIMUM
+
+
+def test_entry_rejected_position_size_step_deviation():
+    # Reproduit le cas reel US30 (28/08/2026, voir docs/DECISIONS.md) :
+    # min_units du code (0.001) beaucoup plus fin que le pas reel du
+    # broker (0.1) -> deviation du risque reel au-dela de 20%.
+    whitelist = {"US30": AssetSpec(symbol="US30", min_units=0.001, pip_value_per_unit=0.8643, size_step=0.1)}
+    engine = RiskEngine(caps=make_caps(), whitelist=whitelist)
+    # entree=53713.3, stop=53673.3 (distance=40) -> raw_units ~ (500*0.02)/(40*0.8643) ~ 0.289
+    signal = make_signal(asset="US30", direction="long", entry_price=53713.3, stop_price=53673.3)
+    decision = engine.evaluate_new_entry(
+        signal, envelope_balance=500.0, confidence_threshold=0.75, go_nogo_ok=True,
+    )
+    assert decision.approved is False
+    assert decision.reason == RiskRejectionReason.POSITION_SIZE_STEP_DEVIATION
+
+
+def test_entry_approved_within_size_step_tolerance():
+    whitelist = {"US30": AssetSpec(symbol="US30", min_units=0.001, pip_value_per_unit=0.8643, size_step=0.1)}
+    engine = RiskEngine(caps=make_caps(), whitelist=whitelist)
+    # Stop plus serre -> raw_units plus grand -> arrondi au pas 0.1 reste proche de la cible.
+    signal = make_signal(asset="US30", direction="long", entry_price=53713.3, stop_price=53708.3)  # distance=5
+    decision = engine.evaluate_new_entry(
+        signal, envelope_balance=500.0, confidence_threshold=0.75, go_nogo_ok=True,
+    )
+    assert decision.approved is True
 
 
 def test_entry_internal_error_is_caught_fail_safe():

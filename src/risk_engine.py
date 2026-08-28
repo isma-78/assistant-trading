@@ -34,6 +34,7 @@ class RiskRejectionReason(str, Enum):
     AVERAGING_DOWN = "averaging_down"
     ENVELOPE_DEPLETED = "envelope_depleted"
     POSITION_SIZE_BELOW_MINIMUM = "position_size_below_minimum"
+    POSITION_SIZE_STEP_DEVIATION = "position_size_step_deviation"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -66,12 +67,21 @@ class AssetSpec:
     min_units: float
     pip_value_per_unit: float  # valeur d'1 unité de mouvement de prix, en devise du compte
     weekend_tradable: bool = False
+    # `size_step` (28/08/2026, voir docs/DECISIONS.md, point 3) : pas de
+    # taille RÉEL Capital.com (`minStepDistance`, vérifié en direct via
+    # GET /markets/{epic}) — DISTINCT de `min_units` (`minDealSize`) sur
+    # 4/8 actifs de la liste blanche (US100/US30 : ×100 ; BTCUSD : ×500 ;
+    # ETHUSD : ×10). None = pas encore vérifié pour cet actif, jamais
+    # traité comme "aucun écart" (voir evaluate_sizing_plausibility).
+    size_step: Optional[float] = None
 
     def __post_init__(self):
         if self.min_units <= 0:
             raise ValueError(f"min_units doit être > 0 pour {self.symbol}")
         if self.pip_value_per_unit <= 0:
             raise ValueError(f"pip_value_per_unit doit être > 0 pour {self.symbol}")
+        if self.size_step is not None and self.size_step <= 0:
+            raise ValueError(f"size_step doit être > 0 si fourni pour {self.symbol}")
 
 
 @dataclass(frozen=True)
@@ -105,6 +115,51 @@ class RiskDecision:
     risk_amount_eur: float = 0.0
     reason: Optional[RiskRejectionReason] = None
     detail: str = ""
+
+
+# Écart maximal toléré (28/08/2026, voir docs/DECISIONS.md, point 3)
+# entre le risque cible et le risque réel une fois la taille arrondie au
+# VRAI pas du broker (`AssetSpec.size_step`) — au-delà, le backtest
+# mesurerait une stratégie non exécutable sur cet actif à ce risque.
+MAX_SIZE_STEP_RISK_DEVIATION = 0.20
+
+
+def evaluate_sizing_plausibility(
+    units: float,
+    target_risk_eur: float,
+    stop_distance: float,
+    pip_value_per_unit: float,
+    size_step: Optional[float],
+    max_deviation: float = MAX_SIZE_STEP_RISK_DEVIATION,
+) -> Tuple[bool, str]:
+    """Pure, 100% couverte. Vérifie que le risque RÉEL, une fois `units`
+    (déjà arrondi à `min_units`) re-arrondi au PAS RÉEL du broker
+    (`size_step` — distinct de `min_units` sur plusieurs actifs, voir
+    docs/DECISIONS.md 28/08/2026), ne dévie pas de plus de
+    `max_deviation` de `target_risk_eur`.
+
+    Toujours plausible (`True, ""`) si `size_step` est `None` ou <= 0 —
+    fail-safe : un actif pas encore vérifié n'est JAMAIS rejeté faute de
+    donnée (même convention que `causal_decomposition.
+    is_cout_sortie_plausible`). Ne modifie jamais `units` — signale
+    seulement, ne recalcule jamais le sizing à la hausse (invariant #2)."""
+    if size_step is None or size_step <= 0:
+        return True, ""
+    steps = int(units / size_step)
+    step_rounded_units = round(steps * size_step, 10)
+    if step_rounded_units <= 0:
+        return False, (
+            f"Taille arrondie au pas réel du broker ({size_step}) = 0 "
+            f"(taille calculée avant arrondi de pas : {units}) — signal inexécutable, jamais envoyé au broker"
+        )
+    real_risk = step_rounded_units * stop_distance * pip_value_per_unit
+    deviation = abs(real_risk - target_risk_eur) / target_risk_eur if target_risk_eur > 0 else 0.0
+    if deviation > max_deviation:
+        return False, (
+            f"Risque réel estimé après arrondi au pas réel ({size_step}) = {real_risk:.2f}€ "
+            f"contre cible {target_risk_eur:.2f}€ — écart {deviation * 100:.1f}% > {max_deviation * 100:.0f}%"
+        )
+    return True, ""
 
 
 class RiskEngine:
@@ -224,6 +279,24 @@ class RiskEngine:
             )
 
         actual_risk = units * stop_distance * asset_spec.pip_value_per_unit
+
+        # Garde-fou de plausibilité de taille (28/08/2026, voir
+        # docs/DECISIONS.md, point 3) : `units` ci-dessus est arrondi au
+        # pas `min_units` (souvent trop FIN — vérifié en direct contre
+        # `minStepDistance` réel sur 4/8 actifs, écart ×10 à ×500). Ne
+        # change PAS le sizing réel (invariant #2, pas de fail-safe qui
+        # modifierait le risque à la hausse ni de nouvelle valeur
+        # imputée) — vérifie seulement, avant tout envoi au broker, que
+        # le risque réel une fois arrondi au VRAI pas resterait dans une
+        # tolérance de 20% de la cible. Sans effet tant qu'aucun
+        # `size_step` n'est renseigné (fail-safe : absence de donnée
+        # n'est jamais un motif de rejet).
+        plausible, detail = evaluate_sizing_plausibility(
+            units, risk_amount_eur, stop_distance, asset_spec.pip_value_per_unit, asset_spec.size_step,
+        )
+        if not plausible:
+            return RiskDecision(approved=False, reason=RiskRejectionReason.POSITION_SIZE_STEP_DEVIATION, detail=detail)
+
         return RiskDecision(approved=True, units=units, risk_amount_eur=round(actual_risk, 2))
 
     @staticmethod
