@@ -14,9 +14,12 @@ appelants (`market_data.py`, `executor.py`) restent seuls responsables de
 toute logique de décision.
 """
 
+import logging
 from typing import Optional
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 class CapitalApiError(RuntimeError):
@@ -255,16 +258,39 @@ class CapitalClient:
 
         Retourne {"level": <prix réel ou None>, "executed_at": <date de
         la confirmation ou None>, "confirmation": <réponse complète ou
-        None>}."""
+        None>}.
+
+        **Log diagnostique temporaire (28/08/2026, voir docs/DECISIONS.md)** :
+        la première clôture réelle observée après le déploiement du
+        27/08/2026 a révélé que la confirmation résolue pour une clôture
+        PARTIELLE semble refléter l'ORDRE D'OUVERTURE d'origine (même
+        prix, même horodatage à quelques secondes près), pas la clôture
+        elle-même — hypothèse non confirmée faute de la réponse brute.
+        Chaque appel journalise désormais `body`/`result`/`deal_reference`/
+        `confirmation` en clair pour diagnostiquer la PROCHAINE clôture
+        avant toute correction définitive. À retirer une fois la cause
+        confirmée et corrigée."""
         body = {"size": size} if size is not None else None
         result = self.delete(f"/positions/{deal_id}", body=body)
         deal_reference = result.get("dealReference")
+        logger.info(
+            "close_position(deal_id=%s, size=%s) -> DELETE result=%s",
+            deal_id, size, result,
+        )
         if not deal_reference:
             return {"level": None, "executed_at": None, "confirmation": None}
         try:
             confirmation = self.get(f"/confirms/{deal_reference}")
         except CapitalApiError:
+            logger.exception(
+                "close_position(deal_id=%s) : échec de la résolution de /confirms/%s",
+                deal_id, deal_reference,
+            )
             return {"level": None, "executed_at": None, "confirmation": None}
+        logger.info(
+            "close_position(deal_id=%s) -> GET /confirms/%s = %s",
+            deal_id, deal_reference, confirmation,
+        )
         return {
             "level": confirmation.get("level"),
             "executed_at": confirmation.get("date"),
