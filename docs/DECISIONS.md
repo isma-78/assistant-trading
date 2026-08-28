@@ -139,13 +139,21 @@ un sauvetage — pas de nouveau calcul tant que n reste à 1.
 
 ### 5. Déploiement et rattrapage des lignes déjà corrompues
 
-`git push` → `git pull` VPS → tests verts → 6 process redémarrés
-(mêmes 6 que d'habitude). Une fois vivant : recalcul et republication
-de `trade_causal_decomposition` pour les trades 14231 et 14239 (déjà
-clôturés avant ce correctif, jamais recalculés automatiquement — aucun
-déclencheur ne revisite un trade déjà fermé) via un script ponctuel en
-lecture-écriture ciblée (ces deux `trade_id` seulement, aucun autre
-touché) — les deux doivent désormais apparaître `invalide=1`.
+`git push` (`159523a`) → `git pull` VPS → 946 tests verts → 6 process
+redémarrés (mêmes 6 que d'habitude, tous vivants, watchdog propre).
+Rattrapage exécuté (script ponctuel en lecture-écriture ciblée, ces
+deux `trade_id` seulement) :
+
+- **14239 : `invalide=1`** — le garde-fou fonctionne, exactement le cas
+  qu'il visait (`cout_sortie=1,0292` inchangé, mais désormais exclu de
+  toute agrégation).
+- **14231 : `invalide=0`, `cout_sortie=None`** — pas un échec du
+  garde-fou : ce trade a DEUX jambes (TP1 corrompu, stop jamais résolu
+  du tout) ; `aggregate_trade_decomposition` met déjà `cout_sortie` à
+  `None` dès qu'UNE jambe manque, avant même que le garde-fou entre en
+  jeu. Résultat honnête (aucune fausse précision affichée), même si la
+  cause profonde (confirmation périmée sur la jambe TP1) reste la même
+  — rien à corriger de plus ici, le comportement `None` est le bon.
 
 ### Tests
 
