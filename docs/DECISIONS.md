@@ -12,6 +12,76 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-28 — Amendement fidélité (Mesures A/B/C) spécifiées ; découverte en creusant : les 9 "annulations" H5/GBPUSD sont des échecs de PLACEMENT (probable 429), pas des péremptions marché ; bug de réconciliation trailing signalé (non corrigé)
+
+Voir `docs/HYPOTHESES.md` (28/08/2026, entrée d'amendement) pour la
+spécification complète des Mesures A/B/C — résumé et contexte
+opérationnel ici. **Aucune correction de code appliquée** (demande
+explicite). Aucun regard sur un résultat en R.
+
+### Ce qui a motivé l'amendement, et ce que ça s'est révélé être
+
+H5/GBPUSD a produit 9 lignes `trades` consécutives (un par cycle ~63s,
+27/08 20:06-20:14 UTC) toutes `statut='annule'`. Vérifié avant toute
+conclusion : **les 9 ont `deal_id IS NULL`** — `executor.open_signal`
+(ligne 891-897) marque `'annule'` directement sur une
+`CapitalApiError` levée par `place_limit_order` lui-même, AVANT qu'un
+ordre existe côté broker. Ce n'est PAS la voie de péremption
+(`cancel_stale_working_orders`, qui exige un `deal_id` réel après 15
+minutes) que l'amendement suppose au départ. Cause probable, non
+confirmée (le log historique de ce moment n'a pas été capturé — le
+`tmux pipe-pane` de diagnostic n'a été activé qu'après) : rate-limiting
+(429) dans la fenêtre de charge accrue qui suit le déblocage du 27/08.
+**Peu importe la cause exacte de ce cas précis : creuser l'a de toute
+façon révélé, l'angle mort tient dans le code lui-même** —
+`backtest_engine.entry_execution_price` (lignes 115-138) remplit
+inconditionnellement 100% des signaux approuvés, sans aucune notion
+d'ordre en attente ni d'expiration — un fait vérifiable sans données
+forward, qui rend tout écart de taux de remplissage mesuré côté live
+automatiquement imputable au simulateur.
+
+### Mesures A/B/C
+
+- **A (taux de remplissage)** : catégorisation obligatoire des
+  non-remplissages live en (a) échec de placement [opérationnel, jamais
+  un signal de fidélité] / (b) péremption réelle [seule catégorie
+  comparable à l'absence de modélisation du backtest] / (c) rempli.
+  n min = 30 signaux ayant atteint (b)+(c), seuil = borne haute de l'IC
+  de Wilson à 95% sur `c/(b+c)` < 0,80 → infidèle sur cette jambe.
+- **B (cadence)** : le "ratio 14,3x" pressenti hier n'est pas un ratio
+  fixe — dépend du nombre de tentatives avant résolution côté live,
+  lui-même variable. Règle commune proposée pour toute comparaison
+  future de comptages : compter des ÉPISODES (suites de lignes `trades`
+  consécutives pour le même `(actif, source, direction)`), jamais des
+  lignes brutes.
+- **C (réserve rétroactive)** : table f=0/15/30/50% → MDE H3/H4
+  consignée telle que fournie. Rend les MDE déjà publiés SOUS-ESTIMÉS
+  (trop optimistes en précision) si f>0, **sans jamais inverser leur
+  signe** — H3/H4 (et tous les bilans négatifs de la semaine) restent
+  négatifs quel que soit f. Aucun test rejoué.
+
+### Trouvaille annexe, signalée mais NON corrigée (hors périmètre de ce chantier)
+
+En creusant les 9 annulations, confirmation d'un bug distinct déjà
+signalé le 27/08/2026 (soir) : `_apply_management_action`, branche
+`UPDATE_TRAILING_STOP`, n'a AUCUNE réconciliation en cas de 404
+(`error.not-found.dealId`) contrairement aux branches de clôture — les
+trades 10 (BTCUSD/H1), 11 (ETHUSD/H1), 25 (US30/H3), 14183 (US100/H3)
+semblent déjà fermés côté broker mais échouent en boucle sur chaque
+tentative de mise à jour du trailing, sans jamais se réconcilier. Ne
+touche à rien tant qu'Ismaël n'a pas tranché.
+
+### Volet 1 (instrumentation `prix_sortie_reel`) — inchangé, toujours en attente
+
+Toujours aucune clôture réelle exploitable pour confirmer le correctif
+diagnostique déployé le 27/08 (log complet `close_position`). Un log
+diagnostique temporaire est en place (`src/capital_client.py`,
+committé `f1f7eb4`, 6 process redémarrés) ; surveillance en tâche de
+fond, notification dès la prochaine clôture — pas de vérification
+périodique manuelle.
+
+---
+
 ## 2026-08-27 (suite 2) — Pré-enregistrement fidélité (Volet 2), spec étape 3 normalisée par le spread (Volet 3), clôture honnête GOLD (Volet 4), coupe transversale gardée fermée (Volet 5)
 
 Suite de `feb9679`. Volet 1 (vérification de l'instrumentation sur les

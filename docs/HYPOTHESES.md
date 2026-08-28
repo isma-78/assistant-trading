@@ -3709,6 +3709,158 @@ dans `docs/DECISIONS.md`, jamais une modification de cette entrée.
 
 ---
 
+## 2026-08-28 — AMENDEMENT au pré-enregistrement du 27/08/2026 (fidélité du simulateur) : angle mort du design apparié, ajout des Mesures A/B/C
+
+Amende l'entrée du 27/08/2026 ("PRÉ-ENREGISTREMENT : fidélité du
+simulateur de backtest, design apparié...") citée ci-dessus — **non
+supprimée, non modifiée**, toujours en vigueur pour ce qu'elle couvre.
+Motif STRUCTUREL (vérifié dans le code, pas déduit d'un résultat) : le
+design apparié ne produit une paire QUE si le trade démo a été REMPLI.
+Un signal jamais rempli en live ne produit aucune paire — le test
+apparié tel que pré-enregistré ne peut donc jamais détecter que le
+simulateur remplit des ordres que la réalité aurait annulés. C'est un
+angle mort de construction, pas un défaut d'exécution du design
+d'origine.
+
+### Observation qui a révélé l'angle mort (contexte, pas une conclusion)
+
+H5/GBPUSD : 9 signaux consécutifs (un par cycle de ~63s, 27/08/2026
+20:06-20:14 UTC) tous `statut='annule'`. **Creusé avant d'écrire cette
+entrée** : les 9 ont `deal_id IS NULL` — ils n'ont JAMAIS été acceptés
+comme ordre par le broker (`executor.open_signal`, l'exception
+`CapitalApiError` à la ligne 891-897 marque `'annule'` directement sur
+un ÉCHEC DE PLACEMENT, avant même qu'un ordre limite existe côté
+broker) — **PAS** la voie normale de péremption
+(`cancel_stale_working_orders`, qui n'agit que sur des ordres avec un
+`deal_id` réel, après `LIMIT_ORDER_EXPIRY_SECONDS`). Cause probable
+(non confirmée, log historique non capturé) : rate-limiting (429) au
+moment du placement, dans la fenêtre de charge accrue qui suit le
+déblocage du garde-fou démo le 27/08/2026 (voir `docs/DECISIONS.md`,
+"Vérification 2"). **Cette observation précise est donc probablement
+un artefact opérationnel (échec de placement), pas une preuve de
+péremption par le marché** — mais elle a révélé, en creusant le code,
+que le design apparié du 27/08/2026 ne peut de toute façon capturer NI
+l'un NI l'autre : les deux sont des signaux jamais remplis, donc
+absents de tout appariement. D'où l'amendement, indépendant du fait que
+cette observation précise soit ou non elle-même un cas de péremption
+par le marché.
+
+### MESURE A — Taux de remplissage, live vs backtest
+
+**Fait vérifié dans le code AVANT tout calcul, cité** :
+- **Backtest (`src/backtest_engine.py:115-138`,
+  `entry_execution_price`) : remplissage INCONDITIONNEL à l'ouverture
+  de la bougie SUIVANTE, pour 100% des signaux approuvés par
+  `decide_entry`. Aucune notion d'ordre "en attente", aucune fenêtre de
+  résistance au prix, **aucun mécanisme d'expiration n'existe dans
+  `replay_hypothesis`**. Le taux de remplissage simulé est donc 100%
+  par construction, pas une valeur à mesurer.
+- **Live (`src/executor.py:96`, `LIMIT_ORDER_EXPIRY_SECONDS = 900`
+  secondes = 15 minutes ; `src/executor.py:918`,
+  `cancel_stale_working_orders`) : un ordre limite RÉELLEMENT accepté
+  par le broker reste posé jusqu'à 15 minutes avant annulation par
+  péremption temporelle — AUCUN rapport avec `validator.
+  STALENESS_FRACTION_OF_STOP_DISTANCE` (`src/validator.py:38`, 0,5),
+  qui est un filtre appliqué AVANT placement (rejette le SIGNAL si le
+  prix a déjà trop dérivé), pas une durée de vie d'ordre posé.** Ces
+  deux mécanismes sont distincts et répondent à des questions
+  différentes — à ne jamais confondre dans la mesure.
+
+**Conséquence mécanique, déjà établie sans données forward** : le
+backtest ne modélise structurellement AUCUN scénario de non-remplissage
+par le marché. Tout écart de taux de remplissage mesuré côté live sera
+donc, par construction, imputable au simulateur (jamais un doute sur
+lequel des deux "a raison" — le backtest n'a simplement pas cette
+notion).
+
+**Protocole, catégorisation obligatoire des non-remplissages live**
+(nouveau, motivé par l'observation ci-dessus) — distinguer :
+  (a) **échec de placement** (`deal_id IS NULL`, `statut='annule'` via
+      l'exception de `open_signal`) — catégorie OPÉRATIONNELLE, jamais
+      un signal de fidélité de marché, à rapporter séparément, jamais
+      mélangée à (b) ;
+  (b) **péremption réelle** (`deal_id` présent, `statut='annule'` via
+      `cancel_stale_working_orders`) — le SEUL cas comparable à
+      l'absence de modélisation du backtest ;
+  (c) **rempli** (`statut IN ('ouvert', 'ferme')`).
+Taux de remplissage retenu pour la comparaison à la fidélité =
+`c / (b + c)`, JAMAIS `c / (a+b+c)` (mélanger (a) sous-estimerait le
+taux pour une raison sans rapport avec le marché).
+
+**n minimum et seuil, fixés maintenant** : n=30 signaux ayant atteint
+le stade b+c (ordre réellement accepté par le broker), poolé par
+hypothèse si un couple (hypothèse, actif) individuel est trop
+clairsemé (même convention que le 27/08/2026). **Seuil de décision** :
+IC de Wilson à 95% (proportion binomiale, adapté à un taux de
+remplissage — pas le bootstrap par blocs calendaires, réservé aux
+R-multiples) sur le taux `c/(b+c)` ; si la **borne HAUTE** de cet IC
+est **< 0,80**, **simulateur déclaré INFIDÈLE sur la jambe
+remplissage** (conséquence : voir Mesure C). Sinon, fidèle sur cette
+jambe pour l'instant. Sous n=30 signaux (b+c) accumulés : pas de
+verdict.
+
+### MESURE B — Cadence d'émission, règle commune
+
+**Vérifié dans le code** : le backtest n'a pas de "problème de cadence"
+au sens où le pré-enregistrement du 27/08/2026 le supposait — parce
+qu'il remplit inconditionnellement au premier bar (Mesure A ci-dessus),
+une condition persistante produit exactement UN trade par épisode
+(`open_state` occupe immédiatement le garde-fou une position à la
+fois). Le live, lui, PEUT produire plusieurs LIGNES `trades` pour le
+même épisode si la première tentative ne se résout pas immédiatement
+(péremption normale à 15 minutes, OU — cas newly découvert ci-dessus —
+échec de placement qui libère `_has_active_signal_or_trade`
+(`src/technical_strategy_executor.py:135-150`) dès le cycle suivant,
+bien avant les 15 minutes). **Asymétrie confirmée, mécanisme identifié**
+— pas un ratio fixe "14,3x" (le rapport dépend du nombre de tentatives
+avant résolution, lui-même dépendant du taux d'échec de placement,
+variable).
+
+**Règle commune proposée pour toute comparaison future de comptages de
+signaux** : compter des **ÉPISODES**, jamais des lignes `trades`
+brutes. Un épisode = une suite de lignes `trades` consécutives pour le
+même `(actif, source, direction)` où chaque `ouvert_at` suit de près
+(même cycle ou le suivant) la résolution (`annule`/`ferme`) de la
+précédente — collapsées en UNE observation avant toute comparaison
+live/backtest. Toute comparaison de comptages qui ne fait pas cette
+distinction (par ex. "signaux/semaine" bruts) est invalide et ne doit
+plus être utilisée telle quelle dans une future analyse.
+
+### MESURE C — Conséquence rétroactive sur les MDE déjà publiés (réserve, aucun rejeu)
+
+Si une fraction `f` des remplissages simulés n'aurait jamais eu lieu en
+réalité, le n effectif de tout backtest déjà publié est `n×(1-f)`, et
+tout MDE déjà cité est SOUS-ESTIMÉ (`MDE ∝ 1/√n`). Table déjà calculée,
+consignée ici sans recalcul :
+
+| f | MDE H4 (n=4128 nominal) | MDE H3 (n=2934 nominal) |
+|---|---|---|
+| 0% | 0,0405R | 0,0480R |
+| 15% | 0,0439R | 0,0520R |
+| 30% | 0,0484R | 0,0574R |
+| 50% | 0,0572R | 0,0679R |
+
+**Ce biais rend les conclusions passées TROP OPTIMISTES EN PRÉCISION
+(un MDE réel plus grand que celui cité), il n'inverse JAMAIS leur
+signe** : H3/H4 (et tous les autres bilans pondérés négatifs de la
+semaine) étaient négatifs — un MDE plus large ne change rien à un signe
+déjà négatif, il affaiblit seulement la confiance dans la PRÉCISION du
+chiffre, pas dans la conclusion de clôture elle-même. **Aucun test
+rejoué, aucune clôture rouverte** — réserve méthodologique consignée,
+à lever seulement une fois la Mesure A exécutée.
+
+### Statut d'exécution
+
+Mesures A et B : **spécifiées, non exécutées** — ne dépendent pas de la
+clôture d'un trade démo (contrairement au design apparié du
+27/08/2026), peuvent démarrer dès que les compteurs (a)/(b)/(c)
+ci-dessus sont accumulés sur la fenêtre forward en cours. Mesure C :
+**consignée, définitive** (aucun calcul restant). Résultat des Mesures
+A/B à documenter dans `docs/DECISIONS.md`, jamais une modification de
+cette entrée.
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4, #5, ou du backtest rétrospectif — jamais une modification de
 ce qui précède.*
