@@ -1297,8 +1297,9 @@ def _apply_management_action(
     # de cette fonction.
     real_exit_level: Optional[float] = None
     real_exit_executed_at: Optional[str] = None
+    close_requested_at = _now()  # second discriminant de close_position(), voir docs/DECISIONS.md 28/08/2026
     try:
-        close_result = client.close_position(state.deal_id, size=close_size)
+        close_result = client.close_position(state.deal_id, size=close_size, requested_at=close_requested_at)
         if isinstance(close_result, dict):
             real_exit_level = close_result.get("level")
             real_exit_executed_at = close_result.get("executed_at")

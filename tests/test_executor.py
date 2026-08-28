@@ -1373,6 +1373,8 @@ def test_manage_open_trades_captures_real_exit_price_from_close_position(tmp_pat
         assert partial["prix_sortie"] is not None  # valeur théorique toujours présente, inchangée
     finally:
         conn.close()
+    # 28/08/2026 (voir docs/DECISIONS.md) : second discriminant transmis.
+    assert client.close_position.call_args.kwargs["requested_at"] is not None
 
 
 def test_manage_open_trades_persists_causal_decomposition_on_full_close(tmp_path):

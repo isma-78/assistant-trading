@@ -12,6 +12,149 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-28 (suite 2) — Suite de 35d2756 : prix_entree_reel revérifié (sain), garde-fou de plausibilité en code, second discriminant testé de force, bug de tautologie trouvé et corrigé sur dérive_gestion
+
+### 1. `prix_entree_reel` — mécanisme DIFFÉRENT de `close_position`, revérifié sain
+
+Vérifié dans le code AVANT toute conclusion : `check_pending_fills`
+(`src/executor.py:1041-1066`) alimente `prix_entree_reel` depuis
+`client.get_open_positions()` (`GET /positions`, un instantané des
+positions RÉELLEMENT ouvertes côté broker), `position_data.get("level")`
+— **jamais** `GET /confirms/{dealReference}`. Le bug trouvé dans
+`close_position` (confirmation périmée via `dealReference = "p_" +
+deal_id`, réutilisable/périmable) **ne s'applique structurellement pas**
+ici : `/positions` n'a pas de `dealReference` à réutiliser, c'est un
+instantané de l'état courant, pas le journal d'une transaction
+identifiée par une clé dérivée.
+
+**Revérifié empiriquement malgré tout**, sur 15 remplissages réels
+capturés depuis le déploiement du 27/08/2026 (donnée entièrement
+NOUVELLE, jamais utilisée dans la mesure du 26/08/2026) : **0/15 pires
+que le prix demandé, 11 meilleurs, 4 exacts** — même distribution que
+les 47 remplissages du 26/08/2026 (0 pire, 36 meilleurs, 11 exacts),
+aucun écart défavorable sur cet échantillon, cohérent avec un ordre
+limite qui ne peut structurellement jamais s'exécuter plus mal que son
+prix. **Aucune dégradation, la mesure du 26/08/2026 (retrait du
+slippage d'entrée) reste valide.**
+
+### 2. Garde-fou de plausibilité déterministe (remplace la note dans un fichier)
+
+`src/causal_decomposition.py::is_cout_sortie_plausible` (pure, 100%
+couverte) : ratio `|coût_sortie(R)| × stop_distance / spread` — comparable
+entre actifs (contrairement à un seuil absolu, écart déjà documenté
+EURUSD/BTCUSD). Seuil `MAX_PLAUSIBLE_COUT_SORTIE_SPREAD_RATIO = 10`,
+calibré sur le cas réel corrompu (trade 14239, ratio ≈25,5) vs les cas
+réels authentiques du même jour (ratio <5). `spread` lu sur
+`market_snapshots` du signal d'origine du trade — absent, JAMAIS
+invalidant (fail-safe distinct : absence de donnée ≠ donnée aberrante).
+
+Nouvelle colonne `trade_causal_decomposition.invalide` (migration +
+schéma), posée par `compute_trade_causal_decomposition`,
+**automatiquement exclue** par `aggregate_by_hypothesis_asset_month`
+(`WHERE d.invalide = 0`) — un garde-fou déterministe, plus une
+discipline de lecture. Les deux lignes déjà corrompues (14231, 14239)
+seront recalculées et marquées après déploiement (voir section 5).
+
+### 3. Cas d'erreur forcé + second discriminant orthogonal
+
+`tests/test_capital_client.py::
+test_close_position_forced_stale_open_confirmation_retries_then_returns_none` :
+rejoue EXACTEMENT le cas réel (`status="OPEN"`, horodatage de
+l'ouverture d'origine) plutôt que d'attendre qu'il se reproduise —
+vérifie la retentative puis l'abandon sur `None`.
+
+**Second discriminant ajouté**, orthogonal à `status="CLOSED"` :
+`close_position(deal_id, size, requested_at=...)` — une confirmation
+n'est acceptée que si `confirmation["date"] > requested_at`. `executor.
+_apply_management_action` capture `close_requested_at = _now()` AVANT
+l'appel et le transmet. Fail-safe : date de confirmation manquante ou
+illisible = jamais fraîche (le doute profite à l'absence de donnée,
+jamais à son acceptation). 6 nouveaux tests dédiés (accepte/rejette
+selon l'ordre des horodatages, date manquante, date illisible,
+compatibilité arrière sans `requested_at`). **44 tests sur
+`capital_client.py`, 100% de couverture.**
+
+### 4. Identité vérifiée sur le partiel (trade 14240) — bug de tautologie trouvé et corrigé
+
+Tentée immédiatement sur la jambe TP1 du trade 14240 (USDJPY/H3),
+**sans attendre de clôture complète**, comme demandé. Résultat :
+**l'identité ne pouvait pas se vérifier de façon significative — elle
+était mathématiquement FORCÉE, quelle que soit la donnée.**
+
+Cause : `trades.r_atteint` (persisté par `executor.
+evaluate_position_management`) est calculé via `compute_r_multiple(...,
+state.entry_price, ...)` où `state.entry_price` vient de
+`trade_row["prix_entree_reel"] or prix_entree_prevu`
+(`executor.py:991`) — **l'entrée RÉELLE**, mais contre un niveau de
+sortie **THÉORIQUE** (`state.tp1`, la cible prix fixe). L'ancien
+`decompose_trade_leg` réutilisait directement ce `r_atteint` comme
+"R réalisé" alors que son propre `r_theoretical` utilise l'entrée
+THÉORIQUE — bases incohérentes. Développement algébrique (vérifié à la
+main sur le trade 14240) : avec cette incohérence, **`dérive_gestion`
+était égal à `-coût_sortie`, EXACTEMENT, pour toute jambe, quelles que
+soient les valeurs réelles** — jamais un signal de "dérive de gestion",
+un artefact de calcul déguisé en mesure.
+
+**Corrigé** : `decompose_trade_leg` ne reçoit plus de `r_realized`
+externe — il le calcule lui-même, uniquement depuis
+`entry_price_real`/`exit_price_real` (`sign×(sortie_réelle−entrée_réelle)
+/stop`), jamais depuis un champ dont la base de calcul est étrangère à
+cette décomposition. **Conséquence, vérifiée algébriquement puis par
+test** : avec des prix cohérents, `dérive_gestion` est désormais
+**TOUJOURS ≈0 pour une jambe isolée** — coût_entrée + coût_sortie
+expliquent alors EXACTEMENT tout l'écart entre théorique et réel, par
+pure arithmétique. Ce n'est pas une limite du correctif, c'est une
+limite du modèle lui-même, maintenant honnête : **une décomposition par
+écarts de PRIX ne peut structurellement jamais capturer un décalage de
+DÉCISION de gestion (trailing en retard, séquencement des sorties
+partielles, latence de polling)** — cela demanderait de comparer le
+niveau théorique d'une politique de gestion idéalisée (réaction
+instantanée) au niveau réellement décidé (cadencé par le polling), pas
+de comparer un prix théorique à un prix réel. `dérive_gestion` reste
+dans le module comme **détecteur de cohérence** (un écart non-nul
+significatif signalerait un bug de données ailleurs, jamais une
+"dérive" réelle) — jamais comme mesure de gestion, docstring corrigée
+en conséquence.
+
+Recalcul sur trade 14240 avec le correctif : `r_théorique=1,0`,
+`coût_entrée=0,0`, `coût_sortie=-0,0672` (favorable), `dérive_gestion=0,0`
+exactement. `tests/test_causal_decomposition.py` réécrit (31 tests,
+100% de couverture) : tous les appels à `decompose_trade_leg` perdent
+leur paramètre `r_realized` (signature changée), nouveaux tests pour
+`is_cout_sortie_plausible` et le garde-fou `invalide` de bout en bout.
+
+### À consigner sans sur-interpréter (trade 14240)
+
+Sortie réelle 159,812 vs théorique 159,796 = +1,13 spread USDJPY, EN
+FAVEUR du trade — le modèle §2.6 facture 1,0 spread de slippage de
+sortie comme coût SYSTÉMATIQUE ; cette première mesure réelle est de
+signe opposé. **n=1, anecdote, pas résultat.** Question ouverte, pas
+tranchée : slippage de sortie systématiquement défavorable (hypothèse du
+modèle) ou de moyenne nulle avec dispersion ? Consigné d'avance pour
+éviter tout emballement : même une réduction de MOITIÉ du coût/R
+laisserait H3 à net=-0,0242R et un seuil brut de 0,0744R contre un brut
+observé de 0,0237R — déficit ×3,1, **aucun verdict de la semaine n'est
+renversé par cette voie**. La mesure sert la fidélité du simulateur, pas
+un sauvetage — pas de nouveau calcul tant que n reste à 1.
+
+### 5. Déploiement et rattrapage des lignes déjà corrompues
+
+`git push` → `git pull` VPS → tests verts → 6 process redémarrés
+(mêmes 6 que d'habitude). Une fois vivant : recalcul et republication
+de `trade_causal_decomposition` pour les trades 14231 et 14239 (déjà
+clôturés avant ce correctif, jamais recalculés automatiquement — aucun
+déclencheur ne revisite un trade déjà fermé) via un script ponctuel en
+lecture-écriture ciblée (ces deux `trade_id` seulement, aucun autre
+touché) — les deux doivent désormais apparaître `invalide=1`.
+
+### Tests
+
+946 tests passent au total (931 avant ce lot), 100% de couverture
+maintenue sur `capital_client.py`/`causal_decomposition.py`/tous les
+modules critiques.
+
+---
+
 ## 2026-08-28 (suite) — Volet 1 : bug d'instrumentation confirmé et corrigé (confirmation de clôture périmée, `dealReference` non unique), déployé, 1 exemple propre confirmé
 
 Cause racine trouvée grâce au log diagnostique déployé le 27/08/2026

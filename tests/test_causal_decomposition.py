@@ -1,8 +1,9 @@
 """
-Tests de causal_decomposition.py (27/08/2026, voir docs/DECISIONS.md).
-Couche pure (decompose_trade_leg, aggregate_trade_decomposition) : 100%
-de couverture. Orchestration (compute_.../persist_.../aggregate_by_...) :
-testée avec une DB temporaire réelle.
+Tests de causal_decomposition.py (27-28/08/2026, voir docs/DECISIONS.md).
+Couche pure (decompose_trade_leg, aggregate_trade_decomposition,
+is_cout_sortie_plausible) : 100% de couverture. Orchestration
+(compute_.../persist_.../aggregate_by_...) : testée avec une DB
+temporaire réelle.
 """
 
 import pytest
@@ -13,6 +14,7 @@ from src.causal_decomposition import (
     aggregate_trade_decomposition,
     compute_trade_causal_decomposition,
     decompose_trade_leg,
+    is_cout_sortie_plausible,
     persist_trade_causal_decomposition,
 )
 from src.db import connection_scope, init_db
@@ -24,17 +26,17 @@ from src.db import connection_scope, init_db
 
 def test_decompose_leg_rejects_non_positive_stop_distance():
     with pytest.raises(ValueError):
-        decompose_trade_leg("long", 100.0, 100.0, 101.0, 101.0, 0.0, 1.0)
+        decompose_trade_leg("long", 100.0, 100.0, 101.0, 101.0, 0.0)
 
 
 def test_decompose_leg_rejects_unknown_direction():
     with pytest.raises(ValueError):
-        decompose_trade_leg("sideways", 100.0, 100.0, 101.0, 101.0, 1.0, 1.0)
+        decompose_trade_leg("sideways", 100.0, 100.0, 101.0, 101.0, 1.0)
 
 
 def test_decompose_leg_long_theoretical_r():
     # Long, entrée théorique 100, sortie théorique 102, stop=1 -> R théorique = 2.
-    leg = decompose_trade_leg("long", 100.0, None, 102.0, None, 1.0, r_realized=2.0)
+    leg = decompose_trade_leg("long", 100.0, None, 102.0, None, 1.0)
     assert leg.r_theoretical == pytest.approx(2.0)
     assert leg.cout_entree is None
     assert leg.cout_sortie is None
@@ -43,54 +45,59 @@ def test_decompose_leg_long_theoretical_r():
 
 def test_decompose_leg_short_theoretical_r():
     # Short, entrée théorique 100, sortie théorique 98, stop=1 -> R théorique = 2.
-    leg = decompose_trade_leg("short", 100.0, None, 98.0, None, 1.0, r_realized=2.0)
+    leg = decompose_trade_leg("short", 100.0, None, 98.0, None, 1.0)
     assert leg.r_theoretical == pytest.approx(2.0)
 
 
 def test_decompose_leg_long_unfavorable_entry_fill_is_positive_cost():
     # Long, rempli PLUS CHER que demandé (100.1 au lieu de 100) -> coût positif.
-    leg = decompose_trade_leg("long", 100.0, 100.1, 102.0, None, stop_distance=1.0, r_realized=1.9)
+    leg = decompose_trade_leg("long", 100.0, 100.1, 102.0, None, stop_distance=1.0)
     assert leg.cout_entree == pytest.approx(0.1)
 
 
 def test_decompose_leg_short_unfavorable_entry_fill_is_positive_cost():
     # Short, rempli à un prix DE VENTE plus bas que demandé (99.9 au lieu de 100) -> défavorable.
-    leg = decompose_trade_leg("short", 100.0, 99.9, 98.0, None, stop_distance=1.0, r_realized=1.9)
+    leg = decompose_trade_leg("short", 100.0, 99.9, 98.0, None, stop_distance=1.0)
     assert leg.cout_entree == pytest.approx(0.1)
 
 
 def test_decompose_leg_long_unfavorable_exit_fill_is_positive_cost():
     # Long, sortie réelle plus basse que la théorique (101.9 au lieu de 102) -> défavorable.
-    leg = decompose_trade_leg("long", 100.0, 100.0, 102.0, 101.9, stop_distance=1.0, r_realized=1.9)
+    leg = decompose_trade_leg("long", 100.0, 100.0, 102.0, 101.9, stop_distance=1.0)
     assert leg.cout_sortie == pytest.approx(0.1)
 
 
 def test_decompose_leg_short_unfavorable_exit_fill_is_positive_cost():
     # Short, rachat réel plus cher que la théorique (98.1 au lieu de 98) -> défavorable.
-    leg = decompose_trade_leg("short", 100.0, 100.0, 98.0, 98.1, stop_distance=1.0, r_realized=1.9)
+    leg = decompose_trade_leg("short", 100.0, 100.0, 98.0, 98.1, stop_distance=1.0)
     assert leg.cout_sortie == pytest.approx(0.1)
 
 
-def test_decompose_leg_derive_gestion_is_residual_identity():
-    # R_réalisé = R_théorique - coût_entrée - coût_sortie - dérive_gestion
-    # -> dérive_gestion se déduit arithmétiquement, jamais mesuré à part.
-    leg = decompose_trade_leg("long", 100.0, 100.1, 102.0, 101.8, stop_distance=1.0, r_realized=1.5)
-    # r_theoretical = 2.0 ; cout_entree = 0.1 ; cout_sortie = 0.2
+def test_decompose_leg_derive_gestion_is_always_zero_with_consistent_prices():
+    # Correctif du 28/08/2026 (voir docs/DECISIONS.md, découvert en
+    # vérifiant l'identité sur un trade réel, trade 14240) : le R
+    # réellement réalisé est désormais calculé ICI depuis les prix
+    # réels (jamais réutilisé d'un champ externe à base incohérente,
+    # ancien bug) -> coût_entrée + coût_sortie expliquent alors
+    # EXACTEMENT tout l'écart, par construction arithmétique.
+    # dérive_gestion == 0.0 est donc l'identité ATTENDUE ici, pas une
+    # coïncidence : ça confirme que le module ne mesure QUE des écarts
+    # de prix, jamais un décalage de décision de gestion.
+    leg = decompose_trade_leg("long", 100.0, 100.1, 102.0, 101.8, stop_distance=1.0)
     assert leg.r_theoretical == pytest.approx(2.0)
     assert leg.cout_entree == pytest.approx(0.1)
     assert leg.cout_sortie == pytest.approx(0.2)
-    # 1.5 == 2.0 - 0.1 - 0.2 - derive => derive = 0.2
-    assert leg.derive_gestion == pytest.approx(0.2)
+    assert leg.derive_gestion == pytest.approx(0.0, abs=1e-9)
 
 
 def test_decompose_leg_derive_none_without_exit_real():
-    leg = decompose_trade_leg("long", 100.0, 100.1, 102.0, None, stop_distance=1.0, r_realized=1.5)
+    leg = decompose_trade_leg("long", 100.0, 100.1, 102.0, None, stop_distance=1.0)
     assert leg.cout_sortie is None
     assert leg.derive_gestion is None
 
 
 def test_decompose_leg_derive_none_without_entry_real():
-    leg = decompose_trade_leg("long", 100.0, None, 102.0, 101.8, stop_distance=1.0, r_realized=1.5)
+    leg = decompose_trade_leg("long", 100.0, None, 102.0, 101.8, stop_distance=1.0)
     assert leg.cout_entree is None
     assert leg.derive_gestion is None
 
@@ -112,6 +119,7 @@ def test_aggregate_weights_by_fraction():
     assert result.cout_entree == pytest.approx(0.1)
     assert result.cout_sortie == pytest.approx(0.05)
     assert result.derive_gestion == pytest.approx(0.0)
+    assert result.invalide is False
 
 
 def test_aggregate_component_none_if_any_leg_missing_it():
@@ -121,6 +129,38 @@ def test_aggregate_component_none_if_any_leg_missing_it():
     assert result.cout_entree == pytest.approx(0.1)  # présent sur les deux jambes
     assert result.cout_sortie is None  # manquant sur une jambe -> tout le trade est None
     assert result.derive_gestion is None
+
+
+# ---------------------------------------------------------------------------
+# is_cout_sortie_plausible
+# ---------------------------------------------------------------------------
+
+def test_plausible_when_cout_sortie_none():
+    assert is_cout_sortie_plausible(None, spread=1.0, stop_distance=10.0) is True
+
+
+def test_plausible_when_spread_none():
+    assert is_cout_sortie_plausible(1.0, spread=None, stop_distance=10.0) is True
+
+
+def test_plausible_when_spread_zero_or_negative():
+    assert is_cout_sortie_plausible(1.0, spread=0.0, stop_distance=10.0) is True
+    assert is_cout_sortie_plausible(1.0, spread=-1.0, stop_distance=10.0) is True
+
+
+def test_plausible_within_default_ratio():
+    # cout_sortie(R)=0.1, stop=10 -> cout_sortie_price=1.0 ; spread=0.2 -> ratio=5 <= 10
+    assert is_cout_sortie_plausible(0.1, spread=0.2, stop_distance=10.0) is True
+
+
+def test_implausible_beyond_default_ratio():
+    # Réplique le cas réel corrompu (trade 14239) : cout_sortie(R)=1.0292,
+    # stop_distance=44.52, spread=1.8 -> ratio ~ 25.5 > 10.
+    assert is_cout_sortie_plausible(1.0292209943528332, spread=1.8, stop_distance=44.5239654568) is False
+
+
+def test_plausibility_uses_absolute_value_of_cout_sortie():
+    assert is_cout_sortie_plausible(-1.0292209943528332, spread=1.8, stop_distance=44.5239654568) is False
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +224,8 @@ def test_compute_single_leg_long_trade(tmp_path):
     assert result.r_theoretical == pytest.approx(2.0)
     assert result.cout_entree == pytest.approx(0.1)
     assert result.cout_sortie == pytest.approx(0.2)
-    assert result.derive_gestion == pytest.approx(0.2)
+    assert result.derive_gestion == pytest.approx(0.0, abs=1e-9)
+    assert result.invalide is False  # pas de market_snapshots -> spread inconnu -> jamais invalidé
 
 
 def test_compute_multi_leg_trade_missing_one_exit_real_makes_sortie_none(tmp_path):
@@ -199,6 +240,70 @@ def test_compute_multi_leg_trade_missing_one_exit_real_makes_sortie_none(tmp_pat
     assert result.cout_entree == pytest.approx(0.0)
     assert result.cout_sortie is None
     assert result.derive_gestion is None
+
+
+def _insert_trade_with_signal_and_spread(db_path, spread, direction="long", entry_prevu=100.0,
+                                          entry_reel=100.0, stop_initial=99.0, partials=None,
+                                          actif="GOLD", source="hypothesis5"):
+    with connection_scope(db_path) as conn:
+        raw_id = conn.execute(
+            "INSERT INTO raw_messages (telegram_msg_id, channel, received_at, raw_text, message_type) "
+            "VALUES (1, 'x', '2026-06-01T00:00:00Z', 't', 'signal')"
+        ).lastrowid
+        signal_id = conn.execute(
+            "INSERT INTO signals (raw_message_id, source, actif, sens, entree_min, entree_max, stop_loss, "
+            "confiance, statut, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 1.0, 'approuve', '2026-06-01T00:00:00Z')",
+            (raw_id, source, actif, direction, entry_prevu, entry_prevu, stop_initial),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO market_snapshots (signal_id, bid, ask, spread, captured_at) "
+            "VALUES (?, ?, ?, ?, '2026-06-01T00:00:00Z')",
+            (signal_id, entry_prevu, entry_prevu + spread, spread),
+        )
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_prevu, prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, ferme_at, statut) "
+            "VALUES (?, ?, ?, 'demo', ?, 0.01, ?, ?, ?, ?, 10.0, 2.0, "
+            "'2026-06-01T00:00:00Z', '2026-06-02T00:00:00Z', 'ferme')",
+            (signal_id, source, actif, direction, entry_prevu, entry_reel, stop_initial, stop_initial),
+        ).lastrowid
+        for fraction, r_atteint, prix_sortie, prix_sortie_reel in partials:
+            conn.execute(
+                "INSERT INTO trade_partials (trade_id, palier, fraction, prix_sortie, r_atteint, executed_at, prix_sortie_reel) "
+                "VALUES (?, 'tp', ?, ?, ?, '2026-06-02T00:00:00Z', ?)",
+                (trade_id, fraction, prix_sortie, r_atteint, prix_sortie_reel),
+            )
+    return trade_id
+
+
+def test_compute_marks_invalide_when_cout_sortie_implausible_vs_spread(tmp_path):
+    # Réplique le cas réel corrompu (trade 14239, 28/08/2026) : confirmation
+    # de clôture périmée -> prix_sortie_reel == prix d'entrée.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    trade_id = _insert_trade_with_signal_and_spread(
+        db_path, spread=1.8, direction="long", entry_prevu=29558.4, entry_reel=29558.4,
+        stop_initial=29513.876034543184,
+        partials=[(1.0, 1.0292209943528332, 29604.225, 29558.4)],  # prix_sortie_reel = prix d'entree (corrompu)
+    )
+    result = compute_trade_causal_decomposition(db_path, trade_id)
+    assert result is not None
+    assert result.invalide is True
+
+
+def test_compute_not_invalide_when_cout_sortie_plausible_vs_spread(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    trade_id = _insert_trade_with_signal_and_spread(
+        db_path, spread=1.8, direction="short", entry_prevu=53652.3, entry_reel=53652.3,
+        stop_initial=53713.3,
+        partials=[(1.0, 1.0, 53591.3, 53582.3)],  # cas réel authentique, trade 14249
+    )
+    result = compute_trade_causal_decomposition(db_path, trade_id)
+    assert result is not None
+    assert result.invalide is False
 
 
 def test_persist_and_aggregate_by_hypothesis_asset_month(tmp_path):
@@ -220,6 +325,21 @@ def test_persist_and_aggregate_by_hypothesis_asset_month(tmp_path):
     assert row["n"] == 1
     assert row["cout_entree_moyen"] == pytest.approx(0.1)
     assert row["cout_sortie_moyen"] == pytest.approx(0.2)
+
+
+def test_aggregate_excludes_invalide_rows(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    trade_id = _insert_trade_with_signal_and_spread(
+        db_path, spread=1.8, direction="long", entry_prevu=29558.4, entry_reel=29558.4,
+        stop_initial=29513.876034543184, actif="US100", source="hypothesis4",
+        partials=[(1.0, 1.0292209943528332, 29604.225, 29558.4)],
+    )
+    decomposition = compute_trade_causal_decomposition(db_path, trade_id)
+    assert decomposition.invalide is True
+    persist_trade_causal_decomposition(db_path, trade_id, decomposition, "2026-06-02T00:00:00Z")
+
+    assert aggregate_by_hypothesis_asset_month(db_path) == []
 
 
 def test_persist_is_idempotent_replace(tmp_path):

@@ -16,6 +16,7 @@ toute logique de décision.
 
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests
@@ -31,6 +32,18 @@ logger = logging.getLogger(__name__)
 # broker est nul, contrairement au coût d'une donnée fausse persistée.
 _CLOSE_CONFIRM_MAX_ATTEMPTS = 4
 _CLOSE_CONFIRM_RETRY_DELAY_SECONDS = 1.0
+
+
+def _parse_broker_datetime(value: str) -> datetime:
+    """Parse un horodatage ISO 8601, broker (souvent sans fuseau — traité
+    comme UTC implicite, cohérent avec le reste de l'API Capital.com) ou
+    interne (`executor._now()`, toujours avec fuseau explicite). Les deux
+    formats doivent être comparables entre eux (28/08/2026, voir
+    docs/DECISIONS.md — second discriminant de `close_position`)."""
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 class CapitalApiError(RuntimeError):
@@ -249,9 +262,18 @@ class CapitalClient:
     def get_working_orders(self) -> list:
         return self.get("/workingorders").get("workingOrders", [])
 
-    def close_position(self, deal_id: str, size: Optional[float] = None) -> dict:
+    def close_position(self, deal_id: str, size: Optional[float] = None, requested_at: Optional[str] = None) -> dict:
         """Ferme une position, totalement (size=None) ou partiellement
         (size=fraction de la taille ouverte, pour TP1/TP2 — §2.10).
+
+        `requested_at` (ISO 8601, optionnel — 28/08/2026, voir
+        docs/DECISIONS.md) : second discriminant, ORTHOGONAL à
+        `status="CLOSED"` ci-dessous. Si fourni, une confirmation n'est
+        acceptée que si sa `date` est POSTÉRIEURE à `requested_at` — un
+        chemin qui vient de prouver qu'il produit du plausible-mais-faux
+        (`status="OPEN"` périmé) mérite deux vérifications indépendantes,
+        pas une seule. Sans objet si omis (compatibilité arrière,
+        aucun appelant existant cassé).
 
         Résout la confirmation (27/08/2026, voir docs/DECISIONS.md) —
         même mécanisme que `_submit_and_confirm` pour l'ouverture (POST/
@@ -308,7 +330,7 @@ class CapitalClient:
                 "close_position(deal_id=%s) -> GET /confirms/%s (tentative %d/%d) = %s",
                 deal_id, deal_reference, attempt + 1, _CLOSE_CONFIRM_MAX_ATTEMPTS, confirmation,
             )
-            if confirmation.get("status") == "CLOSED":
+            if confirmation.get("status") == "CLOSED" and self._is_confirmation_fresh(confirmation, requested_at):
                 return {
                     "level": confirmation.get("level"),
                     "executed_at": confirmation.get("date"),
@@ -318,11 +340,33 @@ class CapitalClient:
                 time.sleep(_CLOSE_CONFIRM_RETRY_DELAY_SECONDS)
 
         logger.warning(
-            "close_position(deal_id=%s) : confirmation jamais 'CLOSED' après %d tentatives "
-            "(dernier status=%s) — prix réel non capturé pour cette jambe",
-            deal_id, _CLOSE_CONFIRM_MAX_ATTEMPTS, confirmation.get("status") if confirmation else None,
+            "close_position(deal_id=%s) : confirmation jamais 'CLOSED' fraîche après %d tentatives "
+            "(dernier status=%s, dernière date=%s, requested_at=%s) — prix réel non capturé pour cette jambe",
+            deal_id, _CLOSE_CONFIRM_MAX_ATTEMPTS,
+            confirmation.get("status") if confirmation else None,
+            confirmation.get("date") if confirmation else None,
+            requested_at,
         )
         return {"level": None, "executed_at": None, "confirmation": confirmation}
+
+    @staticmethod
+    def _is_confirmation_fresh(confirmation: dict, requested_at: Optional[str]) -> bool:
+        """Second discriminant (28/08/2026) : sans `requested_at`,
+        toujours fraîche (compatibilité arrière). Avec, exige
+        `confirmation["date"] > requested_at` — une confirmation
+        antérieure à la DEMANDE de clôture ne peut, par construction,
+        décrire cette clôture. Fail-safe : une date manquante ou
+        illisible est traitée comme PAS fraîche (jamais l'inverse — le
+        doute profite à "pas de donnée", jamais à "donnée acceptée")."""
+        if requested_at is None:
+            return True
+        raw_date = confirmation.get("date")
+        if not raw_date:
+            return False
+        try:
+            return _parse_broker_datetime(raw_date) > _parse_broker_datetime(requested_at)
+        except ValueError:
+            return False
 
     def update_position_stop(self, deal_id: str, new_stop_level: float, guaranteed_stop: bool = False) -> dict:
         """Déplace le stop d'une position déjà ouverte (resserrement

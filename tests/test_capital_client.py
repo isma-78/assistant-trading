@@ -253,6 +253,97 @@ def test_close_position_gives_up_after_max_attempts_never_closed(monkeypatch):
     assert result == {"level": None, "executed_at": None, "confirmation": {"status": "OPEN", "level": 100.0, "date": "2026-08-28T05:24:19"}}
 
 
+def test_close_position_forced_stale_open_confirmation_retries_then_returns_none(monkeypatch):
+    # 28/08/2026 (voir docs/DECISIONS.md, demande explicite) : force le
+    # scénario réellement observé (trade 14231/14239) plutôt que de
+    # l'attendre — status ET horodatage identiques à l'OUVERTURE
+    # d'origine, jamais status="CLOSED". Doit retenter puis abandonner
+    # sur None, jamais renvoyer la valeur périmée.
+    client, session = _logged_in_client()
+    session.delete.return_value = _fake_response(json_body={"dealReference": "p_pos-1"})
+    stale_open_confirmation = {
+        "date": "2026-08-27T22:05:17.839",  # horodatage de l'OUVERTURE d'origine
+        "status": "OPEN", "dealStatus": "ACCEPTED", "epic": "ETHUSD",
+        "affectedDeals": [{"dealId": "pos-1", "status": "OPENED"}],
+        "level": 2511.76, "size": 0.1, "direction": "BUY",
+    }
+    session.get.return_value = _fake_response(json_body=stale_open_confirmation)
+    sleeps = []
+    monkeypatch.setattr("src.capital_client.time.sleep", lambda s: sleeps.append(s))
+
+    result = client.close_position("pos-1", requested_at="2026-08-28T01:19:03.424")
+
+    from src.capital_client import _CLOSE_CONFIRM_MAX_ATTEMPTS
+    assert session.get.call_count == _CLOSE_CONFIRM_MAX_ATTEMPTS
+    assert len(sleeps) == _CLOSE_CONFIRM_MAX_ATTEMPTS - 1
+    assert result["level"] is None
+    assert result["executed_at"] is None
+    assert result["confirmation"] == stale_open_confirmation  # conservée pour diagnostic, jamais utilisée comme prix réel
+
+
+def test_close_position_rejects_closed_confirmation_older_than_request():
+    # Second discriminant, orthogonal a status="CLOSED" : une confirmation
+    # "CLOSED" mais ANTERIEURE a la demande de cloture ne peut pas
+    # decrire CETTE cloture (ex. cloture precedente d'une autre jambe).
+    client, session = _logged_in_client()
+    session.delete.return_value = _fake_response(json_body={"dealReference": "ref-close-1"})
+    session.get.return_value = _fake_response(json_body={
+        "status": "CLOSED", "level": 100.0, "date": "2026-08-28T05:00:00",
+    })
+
+    result = client.close_position("pos-1", requested_at="2026-08-28T06:00:00", size=None)
+
+    assert result["level"] is None
+    assert result["executed_at"] is None
+
+
+def test_close_position_accepts_closed_confirmation_newer_than_request():
+    client, session = _logged_in_client()
+    session.delete.return_value = _fake_response(json_body={"dealReference": "ref-close-1"})
+    session.get.return_value = _fake_response(json_body={
+        "status": "CLOSED", "level": 100.0, "date": "2026-08-28T06:00:00",
+    })
+
+    result = client.close_position("pos-1", requested_at="2026-08-28T05:00:00")
+
+    assert result["level"] == 100.0
+
+
+def test_close_position_without_requested_at_skips_freshness_check():
+    # Compatibilite arriere explicite : aucun appelant existant ne casse.
+    client, session = _logged_in_client()
+    session.delete.return_value = _fake_response(json_body={"dealReference": "ref-close-1"})
+    session.get.return_value = _fake_response(json_body={
+        "status": "CLOSED", "level": 100.0, "date": "2020-01-01T00:00:00",
+    })
+
+    result = client.close_position("pos-1")
+
+    assert result["level"] == 100.0
+
+
+def test_close_position_missing_confirmation_date_treated_as_not_fresh(monkeypatch):
+    client, session = _logged_in_client()
+    session.delete.return_value = _fake_response(json_body={"dealReference": "ref-close-1"})
+    session.get.return_value = _fake_response(json_body={"status": "CLOSED", "level": 100.0})
+    monkeypatch.setattr("src.capital_client.time.sleep", lambda s: None)
+
+    result = client.close_position("pos-1", requested_at="2026-08-28T05:00:00")
+
+    assert result["level"] is None
+
+
+def test_close_position_unparseable_confirmation_date_treated_as_not_fresh(monkeypatch):
+    client, session = _logged_in_client()
+    session.delete.return_value = _fake_response(json_body={"dealReference": "ref-close-1"})
+    session.get.return_value = _fake_response(json_body={"status": "CLOSED", "level": 100.0, "date": "not-a-date"})
+    monkeypatch.setattr("src.capital_client.time.sleep", lambda s: None)
+
+    result = client.close_position("pos-1", requested_at="2026-08-28T05:00:00")
+
+    assert result["level"] is None
+
+
 def test_close_position_without_deal_reference_returns_none_fields():
     client, session = _logged_in_client()
     session.delete.return_value = _fake_response(json_body={"status": "closed"})

@@ -205,6 +205,7 @@ CREATE TABLE IF NOT EXISTS trade_causal_decomposition (
     cout_entree REAL,
     cout_sortie REAL,
     derive_gestion REAL,
+    invalide INTEGER NOT NULL DEFAULT 0,  -- ajout 28/08/2026 : garde-fou de plausibilité (ratio cout_sortie/spread), voir docs/DECISIONS.md
     computed_at TEXT NOT NULL
 );
 
@@ -470,6 +471,7 @@ _COLUMN_MIGRATIONS = [
     ("trades", "anomalie_technique", "TEXT"),
     ("trade_partials", "prix_sortie_reel", "REAL"),
     ("trade_partials", "broker_executed_at", "TEXT"),
+    ("trade_causal_decomposition", "invalide", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

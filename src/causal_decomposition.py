@@ -22,26 +22,54 @@ arithmétique) :
   gestion (`trade_partials.prix_sortie`) et le prix RÉELLEMENT exécuté
   (`trade_partials.prix_sortie_reel`, ajouté le 27/08/2026 — voir
   `capital_client.close_position`/`executor._apply_management_action`).
-  None tant que cette colonne n'est pas renseignée (tout trade clôturé
-  AVANT ce déploiement, structurellement).
-- dérive_gestion : résidu arithmétique (jamais mesuré indépendamment) —
-  absorbe tout ce que les deux coûts de prix n'expliquent pas
-  (décalage de polling entre déclenchement et exécution, séquencement
-  des sorties partielles). None dès que `coût_sortie` est None (le
-  résidu ne peut pas être isolé sans lui).
+  None tant que cette colonne n'est pas renseignée.
+- dérive_gestion : **identité de cohérence, PAS une mesure indépendante**
+  (correctif du 28/08/2026, voir docs/DECISIONS.md — trouvé en vérifiant
+  l'identité sur un trade réel, comme demandé). `R_réalisé` est calculé
+  ICI directement depuis les prix RÉELS (`sign×(exit_réel-entrée_réel)/
+  stop`), jamais réutilisé depuis `trade_partials.r_atteint` (qui mélange
+  entrée RÉELLE et niveau de sortie THÉORIQUE — base incohérente qui
+  rendait `dérive_gestion` algébriquement égal à `-coût_sortie` À CHAQUE
+  FOIS, quelle que soit la donnée, un artefact de calcul déguisé en
+  mesure). Avec un `R_réalisé` cohérent, `dérive_gestion` est
+  algébriquement **toujours ≈0 pour une jambe isolée** (coût_entrée +
+  coût_sortie expliquent alors EXACTEMENT tout l'écart, par construction
+  arithmétique — aucune notion de "décalage de trailing/polling" n'est
+  capturable à ce niveau, qui ne compare que des PRIX, jamais des
+  décisions de gestion prises à des instants différents). Conservé
+  néanmoins : un `dérive_gestion` significativement non-nul est
+  IMPOSSIBLE si toutes les entrées sont cohérentes — sa seule valeur
+  restante est de servir de **détecteur d'incohérence de données**,
+  jamais de mesure de "gestion".
 
 Deux couches, même convention que risk_engine.py/backtest_engine.py :
-- Calcul pur (`decompose_trade_leg`, `aggregate_trade_decomposition`) :
-  100% de couverture.
+- Calcul pur (`decompose_trade_leg`, `aggregate_trade_decomposition`,
+  `is_cout_sortie_plausible`) : 100% de couverture.
 - Orchestration I/O (`compute_trade_causal_decomposition`,
   `persist_trade_causal_decomposition`, `aggregate_by_month`) : lecture/
   écriture DB, pas soumise à la même exigence littérale.
-"""
 
-from dataclasses import dataclass
+**Garde-fou de plausibilité (28/08/2026)** : une confirmation de clôture
+périmée (voir `capital_client.close_position`) peut produire un
+`coût_sortie` numériquement énorme (ex. trade 14239 : ratio coût_sortie/
+spread ≈ 25, contre <5 pour un cas réel authentique mesuré le même jour)
+— `is_cout_sortie_plausible` (seuil de RATIO, comparable entre actifs,
+jamais un seuil absolu) marque la ligne `invalide` au lieu de compter sur
+la discipline de ne jamais relire une ligne signalée dans un fichier de
+notes."""
+
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Tuple
 
 from src.db import connection_scope
+
+# Ratio coût_sortie/spread au-delà duquel une ligne est jugée implausible
+# (28/08/2026, voir docs/DECISIONS.md) — calibré sur le cas réel corrompu
+# du 28/08 (ratio ≈25) vs les cas réels authentiques du même jour
+# (ratio <5). Comparable entre actifs par construction (jamais un seuil
+# absolu en unités de prix, qui varierait d'un facteur >10000 entre
+# EURUSD et BTCUSD).
+MAX_PLAUSIBLE_COUT_SORTIE_SPREAD_RATIO = 10.0
 
 
 @dataclass(frozen=True)
@@ -58,6 +86,7 @@ class TradeCausalDecomposition:
     cout_entree: Optional[float]
     cout_sortie: Optional[float]
     derive_gestion: Optional[float]
+    invalide: bool = False
 
 
 def decompose_trade_leg(
@@ -67,7 +96,6 @@ def decompose_trade_leg(
     exit_price_theoretical: float,
     exit_price_real: Optional[float],
     stop_distance: float,
-    r_realized: float,
 ) -> TradeLegDecomposition:
     """Décompose UNE jambe (une ligne `trade_partials`, ou le trade entier
     s'il n'a qu'une seule sortie). `stop_distance` : distance de stop
@@ -76,7 +104,13 @@ def decompose_trade_leg(
     `risk_engine.py`).
 
     `direction` : "long" ou "short", sinon ValueError (fail-safe côté
-    appelant — cette fonction ne devine jamais un sens par défaut)."""
+    appelant — cette fonction ne devine jamais un sens par défaut).
+
+    Le R RÉELLEMENT réalisé n'est PAS un paramètre (correctif du
+    28/08/2026, voir docstring du module) : calculé ICI, uniquement
+    depuis `entry_price_real`/`exit_price_real` quand les deux sont
+    connus — jamais réutilisé d'un champ externe (`trades.r_atteint`) qui
+    mélangerait des bases de prix incohérentes."""
     if stop_distance <= 0:
         raise ValueError(f"stop_distance doit être > 0, reçu {stop_distance!r}")
     if direction == "long":
@@ -97,7 +131,8 @@ def decompose_trade_leg(
         cout_sortie = sign * (exit_price_theoretical - exit_price_real) / stop_distance
 
     derive_gestion: Optional[float] = None
-    if cout_entree is not None and cout_sortie is not None:
+    if entry_price_real is not None and exit_price_real is not None:
+        r_realized = sign * (exit_price_real - entry_price_real) / stop_distance
         derive_gestion = r_theoretical - r_realized - cout_entree - cout_sortie
 
     return TradeLegDecomposition(
@@ -115,7 +150,9 @@ def aggregate_trade_decomposition(
     Un composant devient None dès qu'IL MANQUE sur AU MOINS une jambe —
     jamais une moyenne partielle silencieuse sur les jambes connues
     (fail-safe : mieux vaut "inconnu pour ce trade" que "faux parce que
-    incomplet"). Lève ValueError si `legs` est vide."""
+    incomplet"). `invalide` reste à False (défaut) — la plausibilité se
+    juge en orchestration, avec le spread de l'actif, hors de portée de
+    cette fonction pure. Lève ValueError si `legs` est vide."""
     if not legs:
         raise ValueError("Au moins une jambe est requise.")
 
@@ -138,22 +175,45 @@ def aggregate_trade_decomposition(
     )
 
 
+def is_cout_sortie_plausible(
+    cout_sortie: Optional[float], spread: Optional[float], stop_distance: float,
+    max_ratio: float = MAX_PLAUSIBLE_COUT_SORTIE_SPREAD_RATIO,
+) -> bool:
+    """`cout_sortie` est en R (÷ stop_distance) ; reconverti en unités de
+    prix (`× stop_distance`) puis comparé au spread — le RATIO est
+    comparable entre actifs, jamais le coût absolu (25/08/2026, écart
+    EURUSD/BTCUSD déjà documenté). Toujours plausible (True) si
+    `cout_sortie` ou `spread` est None, ou `spread<=0` : l'ABSENCE de
+    donnée n'est jamais un motif d'invalidation (fail-safe distinct du
+    cas "donnée présente mais aberrante", seul visé ici)."""
+    if cout_sortie is None or spread is None or spread <= 0:
+        return True
+    ratio = abs(cout_sortie) * stop_distance / spread
+    return ratio <= max_ratio
+
+
 def compute_trade_causal_decomposition(db_path: str, trade_id: int) -> Optional[TradeCausalDecomposition]:
     """Construit les jambes d'un trade clôturé depuis `trades`/
-    `trade_partials` et retourne sa décomposition agrégée. None si le
-    trade n'existe pas, n'est pas clôturé, ou n'a aucune jambe de sortie
-    persistée (jamais géré comme une décomposition à zéro par défaut)."""
+    `trade_partials` et retourne sa décomposition agrégée, `invalide`
+    posé selon `is_cout_sortie_plausible` (spread pris sur
+    `market_snapshots` du signal d'origine du trade — absent, jamais
+    invalidant, voir sa docstring). None si le trade n'existe pas, n'est
+    pas clôturé, ou n'a aucune jambe de sortie persistée (jamais géré
+    comme une décomposition à zéro par défaut)."""
     with connection_scope(db_path) as conn:
         trade = conn.execute(
-            "SELECT direction, prix_entree_prevu, prix_entree_reel, stop_loss_initial "
+            "SELECT direction, prix_entree_prevu, prix_entree_reel, stop_loss_initial, signal_id "
             "FROM trades WHERE id = ? AND statut = 'ferme'", (trade_id,),
         ).fetchone()
         if trade is None:
             return None
         partials = conn.execute(
-            "SELECT fraction, r_atteint, prix_sortie, prix_sortie_reel FROM trade_partials WHERE trade_id = ?",
+            "SELECT fraction, prix_sortie, prix_sortie_reel FROM trade_partials WHERE trade_id = ?",
             (trade_id,),
         ).fetchall()
+        spread_row = conn.execute(
+            "SELECT spread FROM market_snapshots WHERE signal_id = ?", (trade["signal_id"],),
+        ).fetchone()
     if not partials:
         return None
 
@@ -173,12 +233,14 @@ def compute_trade_causal_decomposition(db_path: str, trade_id: int) -> Optional[
                 exit_price_theoretical=row["prix_sortie"],
                 exit_price_real=row["prix_sortie_reel"],
                 stop_distance=stop_distance,
-                r_realized=row["r_atteint"],
             ),
         )
         for row in partials
     ]
-    return aggregate_trade_decomposition(legs)
+    decomposition = aggregate_trade_decomposition(legs)
+    spread = spread_row["spread"] if spread_row is not None else None
+    plausible = is_cout_sortie_plausible(decomposition.cout_sortie, spread, stop_distance)
+    return replace(decomposition, invalide=not plausible)
 
 
 def persist_trade_causal_decomposition(db_path: str, trade_id: int, decomposition: TradeCausalDecomposition, computed_at: str) -> None:
@@ -189,11 +251,11 @@ def persist_trade_causal_decomposition(db_path: str, trade_id: int, decompositio
         conn.execute("DELETE FROM trade_causal_decomposition WHERE trade_id = ?", (trade_id,))
         conn.execute(
             "INSERT INTO trade_causal_decomposition "
-            "(trade_id, r_theoretical, cout_entree, cout_sortie, derive_gestion, computed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(trade_id, r_theoretical, cout_entree, cout_sortie, derive_gestion, invalide, computed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 trade_id, decomposition.r_theoretical, decomposition.cout_entree,
-                decomposition.cout_sortie, decomposition.derive_gestion, computed_at,
+                decomposition.cout_sortie, decomposition.derive_gestion, int(decomposition.invalide), computed_at,
             ),
         )
 
@@ -201,16 +263,19 @@ def persist_trade_causal_decomposition(db_path: str, trade_id: int, decompositio
 def aggregate_by_hypothesis_asset_month(db_path: str) -> List[Dict[str, object]]:
     """Agrège `trade_causal_decomposition` par (source, actif, mois) —
     le livrable demandé : où part l'argent, jamais une espérance globale
-    de plus. `cout_sortie`/`derive_gestion` restent NULL pour tout groupe
-    dont AU MOINS un trade n'a pas encore de sortie réelle capturée
-    (moyenne honnête sur les seules valeurs connues aurait masqué un
-    manque de données comme un résultat)."""
+    de plus. **Exclut automatiquement toute ligne `invalide=1`**
+    (28/08/2026 — garde-fou déterministe, plus une discipline
+    manuelle de relecture). `cout_sortie`/`derive_gestion` restent NULL
+    pour tout groupe dont AU MOINS un trade (valide) n'a pas encore de
+    sortie réelle capturée (moyenne honnête sur les seules valeurs
+    connues aurait masqué un manque de données comme un résultat)."""
     with connection_scope(db_path) as conn:
         rows = conn.execute(
             "SELECT t.source AS source, t.actif AS actif, substr(t.ferme_at, 1, 7) AS mois, "
             "d.r_theoretical AS r_theoretical, d.cout_entree AS cout_entree, "
             "d.cout_sortie AS cout_sortie, d.derive_gestion AS derive_gestion "
-            "FROM trade_causal_decomposition d JOIN trades t ON t.id = d.trade_id"
+            "FROM trade_causal_decomposition d JOIN trades t ON t.id = d.trade_id "
+            "WHERE d.invalide = 0"
         ).fetchall()
 
     groups: Dict[Tuple[str, str, str], List[dict]] = {}
