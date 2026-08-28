@@ -12,6 +12,117 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-28 (suite 10) — Clusters de corrélation : historique CORRIGÉ des pics d'exposition simultanée (pleine profondeur, ordres annulés exclus) — le cluster crypto DÉPASSE le seuil de 50€ ; proposition de plafond par cluster et de mécanisme (non déployé)
+
+### Point 3a — Historique corrigé, pleine profondeur, ordres réellement envoyés uniquement
+
+Requête sur la base de production (`data/assistant_trading.db`, lecture
+seule) : tous les trades avec `deal_id` non nul ET `statut != 'annule'`
+(un ordre annulé — péremption ou échec réseau — n'a jamais porté de
+risque de marché réel, exclu comme demandé ; `ferme_non_reconcilie`
+inclus : c'était une position réellement ouverte chez le broker tant
+qu'elle est restée non détectée comme fermée). Algorithme de balayage
+(sweep-line) sur les intervalles `[ouvert_at, ferme_at]` par cluster,
+pic = maximum de la somme `risque_eur` simultanément ouverte.
+
+Clusters utilisés (empiriques du 28/08/2026, voir entrée "Clusters de
+corrélation" précédente — `{US30,US100}` ρ=0,75 ; `{EURUSD,GBPUSD,
+USDJPY}` même facteur USD, USDJPY signe inversé ; `{BTCUSD,ETHUSD}`
+ρ=0,83 ; `{GOLD}` seul) :
+
+| Cluster | Pic historique | Date/heure du pic | N positions simultanées |
+|---|---|---|---|
+| indices (US30, US100) | 58,84€ | 2026-08-25 14:06 UTC | 6 |
+| fx_majors_jpy (EURUSD, GBPUSD, USDJPY) | 58,61€ | 2026-08-21 18:51 UTC | 6 |
+| **crypto (BTCUSD, ETHUSD)** | **79,81€** | 2026-08-21 08:37 UTC | **8** |
+| gold (GOLD) | 39,76€ | 2026-08-25 13:32 UTC | 4 |
+
+**Trois clusters sur quatre dépassent le seuil de 50€ (10% de 500€,
+référence par-enveloppe déjà en place) une fois agrégés — pas juste le
+crypto.** Correction par rapport à l'entrée précédente ("pics réels
+29-40€, sous les 50€") : ce chiffre-là couvrait une fenêtre récente
+partielle, pas la pleine profondeur demandée ici — ne doit plus être
+cité comme "l'historique complet".
+
+**Composition du pic crypto (79,81€, 8 positions), inspectée trade par
+trade** : 4 des 8 positions (id 26-29, ETHUSD/hypothesis3, +40,27€) sont
+l'incident déjà connu et déjà corrigé le 25/08/2026 (fenêtre de course
+du garde-fou anti-doublon, 4 signaux dupliqués sur le même mouvement
+Donchian/MA200 le 21/08/2026 07:15-07:20 UTC — déjà exclu des
+statistiques via `anomalie_technique`, jamais du risque réel encouru).
+2 autres (id 10, 11) sont des positions fantômes réconciliées le
+28/08/2026 (ouvertes du 20-21/08 au 28/08, largement à cause d'une
+fenêtre de non-détection, pas d'une vraie durée de détention voulue).
+Seules 2 positions (id 14, 16) sont des ouvertures normales et
+distinctes. **Ce pic n'est donc pas un nouveau mécanisme inconnu — c'est
+la première preuve chiffrée que le bug déjà corrigé du 25/08/2026 a eu,
+en plus de son effet sur les statistiques, un effet réel et non détecté
+sur l'exposition de marché simultanée, exactement le type d'incident
+qu'un plafond par cluster aurait dû intercepter AVANT qu'il ne se
+produise, indépendamment de sa cause.**
+
+### Point 3b — Plafond par cluster et mécanisme d'application (proposition, non déployée)
+
+**Constat structurel confirmé** : `circuit_breaker_store.get_open_risk_eur`
+et `circuit_breaker.evaluate_exposure_cap` (§2.3) raisonnent par
+(actif, source) contre l'enveloppe de CETTE source uniquement — un
+cluster de corrélation n'est jamais vu comme une unité, ni au sein d'une
+même hypothèse (BTCUSD + ETHUSD) ni entre les 5 hypothèses (chacune peut
+indépendamment engager jusqu'à 10% de SA propre enveloppe sur le même
+actif, sans qu'aucun garde-fou existant ne les additionne).
+
+**Proposition (à trancher par Ismaël, RIEN appliqué)** :
+
+- Nouvelle correspondance actif→cluster (constante statique, même patron
+  que `_QUOTE_CURRENCY`) : `{"US30":"indices","US100":"indices",
+  "EURUSD":"fx_majors_jpy","GBPUSD":"fx_majors_jpy",
+  "USDJPY":"fx_majors_jpy","CHFJPY":"fx_majors_jpy","BTCUSD":"crypto",
+  "ETHUSD":"crypto","GOLD":"gold"}` — **CHFJPY intégrée au cluster
+  fx_majors_jpy dès sa création (point 2), jamais traitée comme
+  indépendante**, conformément au cadrage écrit avant tout chiffre.
+- Nouvelle fonction pure `evaluate_cluster_exposure_cap(cluster_open_risk_eur,
+  cluster_cap_eur, new_risk_eur) -> bool`, même forme que
+  `evaluate_exposure_cap` existante (§2.3) — testable, 100% couverte,
+  aucune dépendance réseau.
+- Nouvelle fonction de lecture `get_cluster_open_risk_eur(db_path, cluster_assets)`
+  — somme `risque_eur` de TOUS les trades `statut='ouvert'` dont l'actif
+  appartient au cluster, **toutes sources confondues** (contrairement à
+  `get_open_risk_eur`, scopée à une seule source) — c'est précisément ce
+  qui manque aujourd'hui.
+- **Câblage** : appelé dans `open_signal`, **avant le sizing**
+  (avant l'appel à `risk_engine.evaluate_new_entry`, comme demandé —
+  un signal qui dépasserait déjà le plafond de cluster n'a pas besoin
+  d'être dimensionné), même point d'insertion architectural que le
+  garde-fou Option B (`_check_backtest_confidence_gate`), pas le même
+  mécanisme. Un dépassement produit un `RiskDecision(approved=False, ...)`
+  avant tout calcul de taille, journalisé dans `risk_decisions` comme les
+  rejets existants.
+- **Valeur du plafond, deux options chiffrées** :
+  - **Option recommandée — 50€ fixe par cluster, toutes sources
+    confondues** (même référence que le plafond par-enveloppe déjà en
+    place, §2.3, 10% de 500€). Aurait bloqué le pic crypto de 79,81€ dès
+    la 6e position (~50,3€), et les deux autres clusters dès leur 6e
+    position également. Simple, cohérent avec la convention existante,
+    conservateur — le risque est de bloquer une diversification
+    légitime entre hypothèses non corrélées entre elles sur le même
+    actif, jugé acceptable vu le stade (compte démo, priorité à la
+    détection).
+  - **Option alternative — plafond proportionnel au nombre d'enveloppes
+    actives sur ce cluster** (ex. 20€ par source active, plafonné à
+    100€ total) — laisse plus de marge à la diversification inter-
+    hypothèses mais n'aurait pas empêché le pic crypto observé (79,81€
+    < 100€) ; reproduit une partie du problème actuel à plus petite
+    échelle.
+- **Invariant #6 respecté** : le plafond est une constante de module
+  (comme `EXPOSURE_CAP_FRACTION` aujourd'hui), jamais une valeur lue en
+  base ou modifiable à chaud — seul un redéploiement change sa valeur.
+
+**Rien de ce point n'est appliqué ni déployé.** Décision d'Ismaël
+attendue sur : (i) la valeur du plafond (50€ fixe recommandé vs.
+proportionnel), (ii) le rattachement définitif de CHFJPY au cluster
+fx_majors_jpy (déjà proposé par défaut au point 2, à confirmer), (iii)
+le calendrier de mise en œuvre.
+
 ## 2026-08-28 (suite 9) — CORRECTIF majeur : le "10 trades sur 15 rejetés" du garde-fou de taille était un artefact — mauvais champ API utilisé (`minStepDistance` au lieu de `minSizeIncrement`). Corrigé : 0/54 trades réels dévient de plus de 20%. Le garde-fou est structurellement un no-op avec le bon champ, mais garde une valeur de défense en profondeur pour l'onboarding de futurs actifs
 
 **Erreur trouvée avant de répondre au point 4 (arbitrage), en vérifiant le
