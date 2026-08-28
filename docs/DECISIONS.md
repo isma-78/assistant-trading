@@ -92,10 +92,19 @@ une source par process).
 6 tests nouveaux, 100% de couverture sur `reconcile_ghost_positions`
 spécifiquement (le reste de `executor.py` reste au régime de couverture
 orchestration déjà établi, 86%, inchangé). **951 tests passent au
-total.** Déployé (push → pull VPS → tests verts → 6 process
-redémarrés). Les 8 trades fantômes reconciliés en production juste
-après redémarrage (première exécution de la passe) — voir la
-vérification post-déploiement ci-dessous.
+total.** Déployé (push `f4a12ca` → pull VPS → tests verts → 6 process
+redémarrés).
+
+**Vérifié en production, premier cycle après redémarrage** : 7/8
+trades marqués `ferme_non_reconcilie` immédiatement (10, 11, 24, 25,
+14183, 14240, 14312) ; le 8e (14332) s'était refermé NORMALEMENT entre
+le diagnostic et le redémarrage (`statut='ferme'`, `ferme_at` antérieur
+au redémarrage) — coïncidence de timing, pas un défaut de la passe.
+Effet de bord observé au passage, sans lien avec ce chantier :
+`hypothesis5_executor` tournait depuis un moment sur des 429 répétés
+(`GET /prices/USDJPY`) avant ce redémarrage — résolu par le redémarrage
+lui-même, à surveiller si ça se reproduit (cohérent avec la marge de
+rate-limit déjà signalée insuffisante le 27/08/2026).
 
 ---
 
