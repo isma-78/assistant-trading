@@ -17,8 +17,9 @@ class _FakeSignal:
 
 
 def test_hypothesis4_assets_matches_hypothesis1_2_and_3():
+    # CHFJPY ajoutée le 28/08/2026 (voir docs/DECISIONS.md, point 2).
     assert set(HYPOTHESIS4_ASSETS) == {
-        "US30", "EURUSD", "GBPUSD", "USDJPY", "ETHUSD", "GOLD", "US100", "BTCUSD",
+        "US30", "EURUSD", "GBPUSD", "USDJPY", "ETHUSD", "GOLD", "US100", "BTCUSD", "CHFJPY",
     }
 
 

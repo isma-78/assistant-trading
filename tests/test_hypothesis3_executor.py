@@ -20,8 +20,9 @@ class _FakeSignal:
 def test_hypothesis3_assets_matches_hypothesis1():
     # Décision documentée dans docs/HYPOTHESES.md (20/08/2026) : mêmes 8
     # actifs que l'Hypothèse #1, compte totalement séparé.
+    # CHFJPY ajoutée le 28/08/2026 (voir docs/DECISIONS.md, point 2).
     assert set(HYPOTHESIS3_ASSETS) == {
-        "US30", "EURUSD", "GBPUSD", "USDJPY", "ETHUSD", "GOLD", "US100", "BTCUSD",
+        "US30", "EURUSD", "GBPUSD", "USDJPY", "ETHUSD", "GOLD", "US100", "BTCUSD", "CHFJPY",
     }
 
 

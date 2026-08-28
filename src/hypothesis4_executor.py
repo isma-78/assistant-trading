@@ -59,7 +59,7 @@ from src.hypothesis_params import apply_bollinger_std_override, apply_overrides,
 from src.mean_reversion_strategy import evaluate_entry
 from src.technical_strategy_executor import run_technical_strategy_loop
 
-HYPOTHESIS4_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD"]
+HYPOTHESIS4_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD", "CHFJPY"]
 
 _CHANNEL = "hypothesis4_strategy"
 _PROCESS_NAME = "hypothesis4_executor"

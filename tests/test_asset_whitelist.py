@@ -10,6 +10,9 @@ from src.asset_whitelist import ASSET_WHITELIST, build_asset_whitelist
 
 EXPECTED_ASSETS = {
     "GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD",
+    # CHFJPY ajoutée le 28/08/2026 (voir docs/DECISIONS.md, point 2) —
+    # ajout de périmètre, pas une variable de stratégie (invariant #10).
+    "CHFJPY",
 }
 
 
@@ -40,6 +43,7 @@ def test_build_asset_whitelist_uses_provided_rates():
     assert whitelist["GOLD"].pip_value_per_unit == 0.9
     assert whitelist["EURUSD"].pip_value_per_unit == 0.9
     assert whitelist["USDJPY"].pip_value_per_unit == 0.006
+    assert whitelist["CHFJPY"].pip_value_per_unit == 0.006
 
 
 def test_build_asset_whitelist_preserves_min_units_from_default():

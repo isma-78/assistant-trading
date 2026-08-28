@@ -53,7 +53,7 @@ from src.hypothesis3_strategy import evaluate_entry
 from src.hypothesis_params import apply_overrides, get_resolution_override
 from src.technical_strategy_executor import run_technical_strategy_loop
 
-HYPOTHESIS3_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD"]
+HYPOTHESIS3_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD", "CHFJPY"]
 
 _CHANNEL = "hypothesis3_strategy"
 _PROCESS_NAME = "hypothesis3_executor"

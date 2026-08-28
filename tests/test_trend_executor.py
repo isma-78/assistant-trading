@@ -155,11 +155,12 @@ def test_generate_and_queue_signal_skipped_when_already_active(tmp_path):
 
 def test_hypothesis_assets_matches_asset_whitelist():
     # Garde-fou de non-régression : depuis l'extension du périmètre du
-    # 20/08/2026 (docs/DECISIONS.md), le Flux B couvre les 8 actifs de
+    # 20/08/2026 (docs/DECISIONS.md), le Flux B couvre les actifs de
     # la liste blanche — doit rester exactement ceux-ci sans une
-    # nouvelle entrée datée dans trend_executor.py.
+    # nouvelle entrée datée dans trend_executor.py. CHFJPY ajoutée le
+    # 28/08/2026 (voir docs/DECISIONS.md, point 2).
     assert set(HYPOTHESIS_ASSETS) == {
-        "US30", "EURUSD", "GBPUSD", "USDJPY", "ETHUSD", "GOLD", "US100", "BTCUSD",
+        "US30", "EURUSD", "GBPUSD", "USDJPY", "ETHUSD", "GOLD", "US100", "BTCUSD", "CHFJPY",
     }
 
 

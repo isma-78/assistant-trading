@@ -63,7 +63,10 @@ logger = logging.getLogger(__name__)
 # quand même dessus (voir docs/DECISIONS.md). Toute évolution de cette
 # liste = nouvelle entrée datée dans ce fichier de référence, pas un
 # ajustement silencieux de cette constante.
-HYPOTHESIS_ASSETS = ["US30", "EURUSD", "GBPUSD", "USDJPY", "ETHUSD", "GOLD", "US100", "BTCUSD"]
+# CHFJPY ajoutée le 28/08/2026 (voir docs/DECISIONS.md, point 2) — ajout
+# de PÉRIMÈTRE demandé par Ismaël pour les 5 hypothèses, pas une
+# variable de stratégie, ne consomme aucun budget invariant #10.
+HYPOTHESIS_ASSETS = ["US30", "EURUSD", "GBPUSD", "USDJPY", "ETHUSD", "GOLD", "US100", "BTCUSD", "CHFJPY"]
 
 _CHANNEL = "trend_strategy"
 _PROCESS_NAME = "trend_executor"

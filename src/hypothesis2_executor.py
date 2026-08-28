@@ -38,7 +38,7 @@ from src.executor import HYPOTHESIS2_SOURCE
 from src.hypothesis2_strategy import evaluate_entry
 from src.technical_strategy_executor import run_technical_strategy_loop
 
-HYPOTHESIS2_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD"]
+HYPOTHESIS2_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD", "CHFJPY"]
 
 _CHANNEL = "hypothesis2_strategy"
 _PROCESS_NAME = "hypothesis2_executor"

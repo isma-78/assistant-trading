@@ -63,6 +63,12 @@ _MIN_UNITS = {
     "USDJPY": 100,
     "BTCUSD": 0.0001,
     "ETHUSD": 0.001,
+    # CHFJPY (28/08/2026, voir docs/DECISIONS.md, point 2) : ajout de
+    # PÉRIMÈTRE (5 hypothèses), pas une variable de stratégie — ne
+    # consomme aucun budget invariant #10. minDealSize=minSizeIncrement
+    # vérifiés en direct sur l'API Capital.com le 28/08/2026, identiques
+    # trait pour trait à USDJPY (même paire yen).
+    "CHFJPY": 100,
 }
 
 # Devise de cotation par actif : détermine quel taux de conversion EUR
@@ -74,6 +80,7 @@ _QUOTE_CURRENCY = {
     "GOLD": "USD", "US100": "USD", "US30": "USD",
     "EURUSD": "USD", "GBPUSD": "USD", "USDJPY": "JPY",
     "BTCUSD": "USD", "ETHUSD": "USD",
+    "CHFJPY": "JPY",  # coté en JPY, même conversion que USDJPY
 }
 
 
