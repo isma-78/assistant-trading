@@ -12,6 +12,125 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 22) — Suite post-point 17 : exploitation du pic de spread (règle de blocage horaire codée), financement asymétrique confirmé sur 2 nuits, seuil de lisibilité de l'attribution fixé
+
+╔═══════════════════════════════════════════════════════════════╗
+║ RIEN N'AVANCE TANT QUE docs/DEPLOIEMENT_V2.md N'EST PAS EXÉCUTÉ ║
+║ Le trading démo (9 actifs, CHFJPY comprise), le cycle           ║
+║ d'ajustement continu et le test de fidélité restent à l'arrêt   ║
+║ pour cette seule raison — H2/L2 confirmé positif (entrée         ║
+║ ci-dessous) ne change rien à ce blocage.                        ║
+╚═══════════════════════════════════════════════════════════════╝
+
+### Point 2/3 — Vérification du modèle de coûts du calcul H2-H5 : close, aucune action requise
+
+Déjà entièrement traité et documenté dans l'entrée précédente
+("Vérification préalable du modèle de coûts") : **Cas A confirmé,
+indépendamment, par deux voies convergentes** — (a) moi-même, avant le
+verdict, en lisant `entry_execution_price`/`exit_execution_price`
+(`backtest_engine.py`) et en mesurant directement sur
+`GBPUSD_HOUR.json` que le spread réel de la donnée historique porte
+déjà le pic ×4-5 aux heures 21-22h UTC (0,00018 en journée →
+0,000884 à 22h) ; (b) le calcul lui-même (H2-H5), qui confirme que
+`sigma`/`cost0`/`mean_r` sont tous des agrégats des R-multiples déjà
+produits par `replay_hypothesis` sur le bid/ask réel de chaque bougie,
+jamais une moyenne recalculée à côté. **`backtest_engine.py` n'a donc
+jamais eu besoin d'être modifié** — la prémisse du point 3 du prompt
+reçu ("remplace le spread moyen par un spread horaire") ne s'applique
+pas : il n'y a jamais eu de spread moyen dans ce module, à aucun
+moment de son existence. Vérifié que le garde-fou Option B
+(`executor._check_backtest_confidence_gate`) et toute statistique nette
+existante (`confidence_scorer.py`, `metrics.py`) lisent ces mêmes
+R-multiples déjà hour-corrects — un seul modèle de coûts coexiste en
+base, pas deux.
+
+### Point 1 — Règle de blocage horaire : chiffrée, codée, testée, PAS déployée
+
+**Mesure (a), coût imputé** (lecture seule, base de production,
+`src/spread_analysis.py` étendu — `compute_expensive_hours`/
+`compute_expensive_hours_by_asset`/`is_expensive_hour`/
+`compute_expensive_hour_cost`, 100% couvert, 24 tests) :
+
+- **Règle mécanique de matérialité fixée AVANT tout calcul par actif**
+  (jamais un choix visuel) : une heure est "chère" pour un actif si son
+  spread moyen mesuré ≥ 2× la MÉDIANE de ses 24 heures.
+- **Heures chères dérivées, par actif, de la courbe réelle** :
+  EURUSD={21,22}, GBPUSD={21}, USDJPY={21,22}, US30={21} —
+  GOLD/BTCUSD/ETHUSD/US100 n'ont AUCUNE heure chère selon ce seuil
+  (US100 culmine à ×1,5 en journée, sous le seuil ×2 — pas de blocage
+  proposé pour ces 4 actifs, un choix mécanique, pas une omission).
+- **Coût économisé, calculé déterministiquement** (`(spread_heure_chère
+  − spread_médian_hors_fenêtre) / distance_de_stop_RÉELLE_du_trade`,
+  sommé sur chaque trade réel déjà ouvert dans une heure chère — jamais
+  un stop "typique" supposé) : **0R sur les sources LIVE** (aucun trade
+  réellement passé, sur les sources `hypothesis`/`hypothesis3`/etc.
+  hors `_backtest`, n'est encore tombé dans une heure chère à ce jour —
+  le volume live est encore trop faible pour avoir rencontré la
+  fenêtre) ; **≈29,60R cumulés sur les sources `*_backtest`** (recherche
+  seulement, jamais un coût réel) — détail par (source, actif) dans les
+  logs de calcul, le plus concentré étant `hypothesis5_v2_backtest`/
+  USDJPY (n=41, 6,10R) et `hypothesis4_v2_backtest`/EURUSD (n=19, 4,86R).
+
+**Qualification, comme demandé** : cette règle est une CORRECTION DE
+COÛT (même statut que le retrait du slippage d'entrée du 26/08/2026) —
+elle ne sélectionne rien sur un rendement attendu, elle évite un coût
+mesuré et déterministe. **Aucune amélioration d'espérance de signal
+n'est revendiquée** : bloquer ces heures change la population de
+trades de chaque hypothèse, un effet non mesuré et qui ne le sera que
+par un test a posteriori une fois la règle active.
+
+**Construit** (`src/technical_strategy_executor.py`,
+`_generate_and_queue_signal`/`run_technical_strategy_loop` étendus avec
+`expensive_hours_by_asset: Optional[Dict[str, Set[int]]] = None`) :
+si fourni et que l'heure UTC courante est chère pour l'actif, **aucun
+appel réseau n'est fait et aucun signal n'est évalué** — économise
+aussi la sollicitation API pendant les heures déjà identifiées comme
+les plus exposées au 429. `None` par défaut : comportement strictement
+inchangé pour les 6 process actuels, qui ne l'activent pas (aucun
+appelant ne passe encore ce paramètre — prêt à être activé au même
+moment que le reste du déploiement, PAS déployé seul).
+
+### Point 4 — Financement asymétrique : confirmé réel sur 2 nuits, encore loin d'un n exploitable
+
+Capture relancée aujourd'hui (`scripts/capture_financing.py`, exécution
+manuelle hors des 6 process, table dédiée) : **12 transactions réelles
+au total sur 2 nuits (28→29 et 29→30/08/2026)**. Nouvelle observation,
+non anticipée : **GBPUSD (-0,25€) et GOLD (-0,02€) sont identiques les
+deux nuits** (position tenue inchangée, taux stable) mais **USDJPY
+passe de +0,23€ à -0,21€ et EURUSD de +0,01€ à -0,12€ d'une nuit à
+l'autre, sur la MÊME direction détenue** — le financement réel n'est
+donc pas qu'une fonction de (actif, sens), il **flotte réellement jour
+par jour** (différentiel de taux interbancaire, ajustement broker,
+possible majoration certains jours de la semaine — cause exacte non
+investiguée, hors périmètre). Conséquence méthodologique : le modèle
+de remplacement ne pourra pas être "une constante par (actif, sens)"
+mais devra probablement rester une série datée — la capture déjà
+construite (point 7) produit exactement cette série, rien à changer
+côté infrastructure. **n=2 par groupe (actif, sens) — trop tôt pour
+toute moyenne, aucune constante proposée.** La capture continue
+(cron à installer au déploiement, étape 7 de docs/DEPLOIEMENT_V2.md).
+
+### Point 5 — Attribution : pourquoi si peu, et seuil de lisibilité fixé maintenant
+
+**En une ligne** : la capture de `prix_sortie_reel` (nécessaire à TOUT
+calcul de `cout_sortie`) n'existe que depuis le 27/08/2026 — les
+10 448 trades fermés dans la base sont presque tous antérieurs, donc
+structurellement inéligibles ; ce n'est pas un manque d'instrumentation
+aujourd'hui, c'est l'historique qui précède l'instrumentation.
+
+**Seuil de lisibilité, fixé maintenant, avant tout nouveau regard** :
+la boucle d'attribution du point 4 devient lisible à partir de **n≥30
+trades décomposés valides** (par groupe rapporté — hypothèse, ou
+hypothèse×actif selon la coupe), **même seuil que partout ailleurs
+dans ce chantier** (fidélité du simulateur, Mesure A) — pas un nouveau
+chiffre inventé pour l'occasion. Compteur actuel, revérifié
+aujourd'hui : **54 décomposés / 10 448 fermés (0,5%), 53 valides**,
+inchangé depuis le dernier relevé — sous le seuil de 30 par groupe
+individuel dans tous les cas (les 53 sont dispersés sur 22 couples
+(source, actif) différents, voir la table du point 4).
+
+---
+
 ## 2026-08-29 (suite 21) — Point 17 : calibration H2-H5 — H2/L2 CONFIRMÉ POSITIF (premier edge confirmé du projet), H3/H4 clos au raccourci point 14, H5 clos au test d'information
 
 Exécuté dans l'ordre pré-enregistré (docs/HYPOTHESES.md, entrée du

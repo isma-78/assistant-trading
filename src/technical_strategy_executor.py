@@ -63,7 +63,7 @@ trade_analyzer.analyze_closed_trade (narratif post-trade uniquement).
 
 import logging
 from datetime import datetime, timezone
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Set
 
 import requests
 
@@ -84,6 +84,7 @@ from src.market_data import Candle, get_candles
 from src.regime_confirmation import compute_index_regimes, derive_confirmed_regime
 from src.retry import retry_with_backoff
 from src.risk_engine import RiskCaps, RiskEngine
+from src.spread_analysis import is_expensive_hour
 from src.trend_strategy import MA_PERIOD
 
 # Heures UTC d'ouverture de session (Asie/Londres/New York) — H2/H3/H4/H5
@@ -169,6 +170,7 @@ def _generate_and_queue_signal(
     require_regime_confirmation: bool = False,
     confirmed_regime: Optional[str] = None,
     extra_resolutions: Optional[List[str]] = None,
+    expensive_hours_by_asset: Optional[Dict[str, Set[int]]] = None,
 ) -> None:
     """Évalue `entry_fn` sur `asset` et, si un signal se déclenche et
     qu'aucun signal/trade de cette source n'est déjà actif dessus,
@@ -219,9 +221,26 @@ def _generate_and_queue_signal(
     candles_h1, candles_h4)`), que le contrat générique à une seule
     résolution ne permettait pas. `None` par défaut : H1/H3/H4/H5
     strictement inchangées (un seul appel `entry_fn(asset, candles)`,
-    comme avant)."""
+    comme avant).
+
+    `expensive_hours_by_asset` (29/08/2026, voir docs/DECISIONS.md,
+    règle de blocage horaire — CORRECTION DE COÛT, jamais une variable
+    de stratégie) : si l'heure UTC courante est "chère" pour `asset`
+    (voir `spread_analysis.compute_expensive_hours_by_asset`), AUCUN
+    appel réseau n'est fait et AUCUN signal n'est évalué — le filtre
+    agit avant même la lecture de bougies, pas seulement avant
+    l'écriture du signal (économise aussi l'appel API pendant les heures
+    déjà identifiées comme les plus sujettes au 429, voir docs/
+    DECISIONS.md point 6). `None` par défaut : comportement strictement
+    inchangé (aucune heure jamais bloquée) tant que ce paramètre n'est
+    pas fourni explicitement par l'appelant."""
     if _has_active_signal_or_trade(db_path, asset, source):
         return
+
+    if expensive_hours_by_asset is not None:
+        current_hour = datetime.now(timezone.utc).hour
+        if is_expensive_hour(asset, current_hour, expensive_hours_by_asset):
+            return
 
     candles = get_candles(client, asset, resolution=resolution, count=CANDLE_COUNT)
     if extra_resolutions:
@@ -303,6 +322,7 @@ def run_technical_strategy_loop(
     confirming_resolution: Optional[str] = None,
     extra_resolutions: Optional[List[str]] = None,
     legacy_sources: Optional[List[str]] = None,
+    expensive_hours_by_asset: Optional[Dict[str, Set[int]]] = None,
 ) -> None:
     """Boucle continue générique d'une stratégie technique complémentaire
     (§2.11). Un seul point de variation par appelant : `source`,
@@ -371,7 +391,18 @@ def run_technical_strategy_loop(
     surveillerait plus jamais leur `source`). `None` par défaut :
     comportement strictement inchangé pour tout appelant existant
     (H2/H4/H5, aucune position ouverte au moment de leur bascule — voir
-    docs/DECISIONS.md)."""
+    docs/DECISIONS.md).
+
+    `expensive_hours_by_asset` (29/08/2026, voir docs/DECISIONS.md,
+    règle de blocage horaire — CORRECTION DE COÛT, jamais une variable
+    de stratégie) : calculée UNE FOIS par l'appelant avant de démarrer
+    la boucle (`spread_analysis.compute_expensive_hours_by_asset`),
+    jamais recalculée à chaque itération (même convention que
+    `whitelist`/`risk_engine` ci-dessus). Transmise telle quelle à
+    `_generate_and_queue_signal` — voir sa docstring. `None` par défaut :
+    comportement strictement inchangé pour tout appelant existant, aucun
+    des 6 process de production ne l'active tant que ce paramètre n'est
+    pas explicitement fourni."""
     import time
 
     import anthropic
@@ -493,6 +524,7 @@ def run_technical_strategy_loop(
                     require_regime_confirmation=require_regime_confirmation,
                     confirmed_regime=regime_context.get(asset),
                     extra_resolutions=extra_resolutions,
+                    expensive_hours_by_asset=expensive_hours_by_asset,
                 )
 
             reconcile_ghost_positions(db_path, client, source_filter=lambda s: s in management_sources)

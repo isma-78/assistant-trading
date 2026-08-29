@@ -11,6 +11,7 @@ test_trend_executor.py (dont l'existence, avant le refactor du
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -149,6 +150,66 @@ def test_generate_and_queue_signal_extra_resolutions_fetched_and_forwarded(tmp_p
     assert calls[0].kwargs["resolution"] == "MINUTE_15"
     assert calls[1] == (("EURUSD",), {"resolution": "HOUR", "max_bars": EXTRA_RESOLUTION_CANDLE_COUNT})
     assert calls[2] == (("EURUSD",), {"resolution": "HOUR_4", "max_bars": EXTRA_RESOLUTION_CANDLE_COUNT})
+
+
+def test_generate_and_queue_signal_skips_during_expensive_hour(tmp_path):
+    # Point 1 (29/08/2026, voir docs/DECISIONS.md) : correction de coût,
+    # jamais une variable de strategie. Aucun appel reseau, aucun signal.
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.return_value = {"prices": []}
+    fixed_now = datetime(2026, 6, 1, 21, 30, 0, tzinfo=timezone.utc)
+    with patch("src.technical_strategy_executor.datetime") as mock_dt:
+        mock_dt.now.return_value = fixed_now
+        _generate_and_queue_signal(
+            db_path, client, "GBPUSD",
+            source="hypothesis_v2", resolution="HOUR", entry_fn=_fake_entry_fn,
+            channel="test_channel", hypothesis_label="Hypothèse #1",
+            expensive_hours_by_asset={"GBPUSD": {21, 22}},
+        )
+    client.get_prices.assert_not_called()
+    conn = get_connection(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) AS n FROM signals").fetchone()["n"] == 0
+    finally:
+        conn.close()
+
+
+def test_generate_and_queue_signal_proceeds_outside_expensive_hour(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.return_value = {"prices": []}
+    fixed_now = datetime(2026, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
+    with patch("src.technical_strategy_executor.datetime") as mock_dt:
+        mock_dt.now.return_value = fixed_now
+        _generate_and_queue_signal(
+            db_path, client, "GBPUSD",
+            source="hypothesis_v2", resolution="HOUR", entry_fn=_fake_entry_fn,
+            channel="test_channel", hypothesis_label="Hypothèse #1",
+            expensive_hours_by_asset={"GBPUSD": {21, 22}},
+        )
+    client.get_prices.assert_called_once()
+    conn = get_connection(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) AS n FROM signals").fetchone()["n"] == 1
+    finally:
+        conn.close()
+
+
+def test_generate_and_queue_signal_expensive_hours_none_never_blocks(tmp_path):
+    # Comportement historique inchangé tant que le parametre n'est pas fourni.
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.return_value = {"prices": []}
+    _generate_and_queue_signal(
+        db_path, client, "GBPUSD",
+        source="hypothesis_v2", resolution="HOUR", entry_fn=_fake_entry_fn,
+        channel="test_channel", hypothesis_label="Hypothèse #1",
+    )
+    client.get_prices.assert_called_once()
 
 
 def test_generate_and_queue_signal_no_extra_fetch_when_extra_resolutions_none(tmp_path):
