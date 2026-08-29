@@ -12,6 +12,65 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 12) — Point 3 : vérification complète du câblage CHFJPY sur les 5 modules _v2
+
+Checklist demandée par Ismaël avant déploiement ("jamais silencieusement
+écartée en cas d'échec"), vérifiée point par point plutôt que reprise de
+mémoire d'une vérification antérieure au correctif du garde-fou de taille
+(28/08/2026) :
+
+- **Présence dans les 5 exécuteurs _v2** : `CHFJPY` est le dernier élément
+  de `HYPOTHESISN_ASSETS` dans `trend_executor.py:94`,
+  `hypothesis2_executor.py:44`, `hypothesis3_executor.py:47`,
+  `hypothesis4_executor.py:46`, `hypothesis5_executor.py:45` — les 5
+  boucles _v2 (pas les anciennes) l'incluent.
+- **`epic`/`minDealSize`/`minSizeIncrement`** : re-vérifiés en direct sur
+  l'API Capital.com aujourd'hui (`GET /markets/CHFJPY`, marché `CLOSED`
+  au moment du contrôle, hors-heures) — `minDealSize=100`,
+  `minSizeIncrement=100` : identiques trait pour trait à la mesure du
+  28/08/2026, aucune dérive.
+- **`size_step` (garde-fou du 28/08/2026, point 4)** : `asset_whitelist.
+  py::build_asset_whitelist` (ligne 107) fixe `size_step=min_units` de
+  façon générique, dans la boucle `for symbol, min_units in
+  _MIN_UNITS.items()` — CHFJPY (`_MIN_UNITS["CHFJPY"]=100`, ligne 71)
+  est couverte par construction, aucun code spécifique à écrire ni à
+  oublier. Le déploiement du garde-fou de taille et celui de CHFJPY sont
+  le MÊME commit — prérequis satisfait par construction, pas par
+  coïncidence.
+- **Spread réel** : la lecture en direct de ce contrôle (bid=197.581,
+  offer=197.796, spread=0.215) n'est PAS comparable à la moyenne
+  ~0.028 mesurée le 28/08/2026 (`scripts/_chfjpy_discovery.py`,
+  20 lectures) — celle-ci a été prise marché `CLOSED` (prix indicatif de
+  clôture, pas un spread tradeable). La mesure de référence pour la
+  décision reste celle du 28/08/2026, prise marché ouvert.
+- **Sizing exécutable** : vérifié par calcul (JPY_TO_EUR≈0.005426,
+  prix≈197.8, enveloppe 500€, risque 2%=10€) sur une plage réaliste de
+  distances de stop ATR-typiques (0.15 à 1.0 JPY) : taille arrondie au
+  pas de 100 va de 1 800 à 12 200 unités dans tous les cas, très
+  au-dessus de `minDealSize=100` — aucun risque de rejet
+  `POSITION_SIZE_BELOW_MINIMUM` sur cette paire aux distances de stop
+  attendues des 5 hypothèses.
+- **Rattachement au cluster JPY dès le premier trade** :
+  `circuit_breaker.CORRELATION_CLUSTERS["CHFJPY"]="fx_majors_jpy"`
+  (même cluster qu'EURUSD/GBPUSD/USDJPY, ligne 57) — vérifié que ce
+  n'est pas un attribut mort : `executor.py::open_signal` (lignes
+  826-829) fait `CORRELATION_CLUSTERS.get(asset)` puis agrège
+  `cluster_open_risk_eur` sur TOUS les actifs du même cluster avant
+  d'appliquer le plafond — un signal CHFJPY sera donc automatiquement
+  compté avec EURUSD/GBPUSD/USDJPY dès son tout premier trade, sans
+  aucun code spécifique à CHFJPY dans ce chemin.
+
+**Conclusion** : les 6 sous-points de la checklist du point 3 sont
+vérifiés et passent. CHFJPY trade sur les 5 hypothèses dès le
+déploiement (docs/DEPLOIEMENT_V2.md, point 1) mais reste EXCLUE des
+calculs de calibration/gate/confirmation (historique de découverte
+insuffisant — 2024-01-01 seulement, voir amendement du 29/08/2026 sur la
+profondeur M15/HOUR) : périmètre de trading ≠ périmètre statistique,
+distinction déjà actée pour cet actif. Aucun échec constaté, donc aucun
+correctif à proposer à ce stade.
+
+---
+
 ## 2026-08-29 (suite 11) — Points 14-15 : H1/L1 CLOSE côté recherche — négatif bien puissant, process de CV imbriquée tué. Point 16 : bug de grille (DEFAULT_LOOKBACK=220) identifié avant H2-H5
 
 ### Point 14 — Process de CV imbriquée tué, règle générale pré-enregistrée pour H2-H5
