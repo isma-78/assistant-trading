@@ -12,6 +12,69 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 9) — AMENDEMENT au pré-enregistrement (avant tout calcul) : H2/H3/H4/H5 basculent en résolution HOUR — la profondeur M15 réelle du broker s'arrête au 2024-01-01, pas notre garde-fou local
+
+### Sondage demandé, exécuté AVANT toute décision (lecture seule, aucun téléchargement de masse)
+
+`scripts/_m15_depth_probe2.py` (VPS, `~/costfix_staging`) : pour chacun
+des 8 actifs, requêtes ponctuelles (fenêtre de 24h, aucune écriture
+disque) sur des dates candidates de 2017-01-01 à 2024-01-01. **Résultat
+uniforme et net sur les 8 actifs, sans exception** : `ABSENT` à toutes
+les dates testées jusqu'au 2023-12-30 inclus, `DONNEES` exactement au
+**2024-01-01**, pour GOLD, US100, US30, EURUSD, GBPUSD, USDJPY, BTCUSD,
+ET ETHUSD.
+
+**Confirmé : ce n'est PAS notre `SAFETY_MAX_DAYS_BACK=800` (qui
+tombait par coïncidence sur 2024-06-14, jamais relevé pour M15,
+contrairement à HOUR_4 le 25/08/2026)** — la profondeur maximale a été
+sondée avec une valeur bien supérieure (le téléchargement complet de
+GOLD/M15 avec `--max-days-back 3200` a lui-même atteint
+`error.prices.not-found` au 2023-12-14, confirmant que 2024-01-01 est
+la vraie limite servie par Capital.com sur ce compte démo, uniforme sur
+les 8 actifs — probablement une politique de rétention de données M15
+à ~2 ans côté broker, pas un artefact de notre code.
+
+**CAS B confirmé** (profondeur M15 réelle vers 2024, pas 2019) —
+décision déjà fixée par Ismaël pour ce cas : **H2, H3, H4, H5 basculent
+en résolution HOUR**, aucune fenêtre M15 raccourcie proposée ni
+retenue.
+
+### Justification de l'amendement (écrite avant tout calcul, comme exigé)
+
+- Aucune des 4 logiques (confluence multi-TF, pullback, divergence
+  RSI/OBV, compression/expansion) n'exige structurellement le M15 —
+  toutes opèrent sur `List[Candle]` générique, indépendamment de la
+  résolution native.
+- La profondeur HOUR est déjà confirmée jusqu'à 2017 pour les 8 actifs
+  (et CHFJPY) — la fenêtre de découverte 2019-01-01→2022-12-31
+  pré-enregistrée reste donc applicable TELLE QUELLE, sans réécriture.
+- Effet mécanique déjà anticipé, tranché par le gate de puissance du
+  point G, pas ici : coût(T)=c0/√T avec T×4 (M15→HOUR) divise le
+  coût/R par 2 ; la fréquence de trades divisée par ~4 double le MDE.
+  Les deux effets entrent directement dans le calcul du point G,
+  aucune estimation anticipée nécessaire.
+- Raccourcir la fenêtre M15 à 2024-2025 était explicitement écarté :
+  chevauche la fenêtre déjà brûlée (2024-06-14+) et la période démo en
+  cours, n dérisoire.
+
+### Conséquence de câblage pour H2 spécifiquement : les 3 TF fixes remappés
+
+H2/L2 utilisait 3 résolutions fixes (M15 native + H1 + H4, rapport
+×4/×4). En HOUR natif, le même rapport multiplicatif donne HOUR
+(natif) + HOUR_4 (×4) + **DAY** (×4 supplémentaire, vérifié
+disponible en direct sur l'API le 29/08/2026 avant utilisation,
+`resolution=DAY` répond correctement) — remplace le HOUR/HOUR_4
+d'origine. Aucune nouvelle variable : mêmes 3 TF fixes, seulement
+renommés pour respecter le même facteur ×4/×4 depuis la nouvelle
+résolution native. `EXTRA_RESOLUTION_CANDLE_COUNT=100` inchangé
+(toujours suffisant pour EMA/Ichimoku/RSI sur DAY).
+
+**H1 reste en HOUR, inchangée par cet amendement.**
+
+Rien de calculé sur la base de cet amendement avant cette entrée — mise
+en œuvre du câblage (changement du seul paramètre `resolution`,
++ remap H2) dans l'entrée suivante.
+
 ## 2026-08-29 (suite 8) — Points D et E : test d'information H1 fait (r non discernable de zéro) ; test H5 BLOQUÉ — découverte qu'aucun des 8 actifs n'a de M15 avant 2024 ; retry adaptatif du point E déjà codé (voir commit précédent) — incident de manipulation de données signalé et corrigé
 
 ### Point D — Test d'information H1 : fait, résultat négatif (informatif seulement)
