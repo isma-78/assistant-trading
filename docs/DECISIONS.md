@@ -12,6 +12,41 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite) — Point 11 exécuté : garde-fou de taille (`size_step`) et plafond par cluster (50€, toutes sources) codés, testés (100%), COMMITTÉS — pas encore déployés sur le VPS à ce stade de cette entrée
+
+Les deux seules exceptions autorisées à l'infrastructure gelée pendant
+ce chantier (§11 du prompt reçu), prérequis à tout onboarding d'actif :
+
+- `src/asset_whitelist.py` : `size_step=min_units` câblé dans
+  `AssetSpec` pour les 9 instruments (`minSizeIncrement` vérifié en
+  direct le 28/08/2026, identique à `minDealSize`/`min_units` partout).
+- `src/circuit_breaker.py` : `CORRELATION_CLUSTERS` (4 clusters,
+  CHFJPY → `fx_majors_jpy` avec USDJPY/EURUSD/GBPUSD) et
+  `evaluate_cluster_exposure_cap` (pure, plafond fixe 50€, même forme
+  que `evaluate_exposure_cap` existant).
+- `src/circuit_breaker_store.py` : `get_cluster_open_risk_eur` — agrège
+  TOUTES les sources (contrairement à `get_open_risk_eur`, scopée à
+  une seule), c'est exactement ce qui manquait.
+- `src/executor.py::open_signal` : plafond de cluster vérifié AVANT
+  `decide_entry` (donc avant tout sizing), comme demandé — le risque
+  incrémental n'étant pas encore connu à ce stade, approximé par le
+  taux BOOSTÉ (4%, le maximum possible) × solde d'enveloppe, jamais
+  sous-estimé (même parti pris fail-safe que le reste du projet).
+  Rejet journalisé (`risk_decisions.reason='cluster_exposure_cap'`).
+- **10 nouveaux tests** (dont un prouvant explicitement que le plafond
+  de cluster intercepte un scénario que le plafond par-enveloppe
+  existant ne peut PAS voir : 4 sources différentes à 10€ chacune sur
+  GOLD, aucune n'approchant individuellement son propre plafond).
+  **1 test existant adapté** (`test_open_signal_rejected_when_exposure_
+  cap_exceeded` : enveloppe réduite à 100€ pour isoler le garde-fou
+  par-enveloppe du nouveau garde-fou de cluster, GOLD étant un cluster à
+  lui seul — les deux plafonds coïncidaient numériquement dans l'ancien
+  montage à 500€, masquant lequel des deux avait réellement tranché).
+- **982 tests passent, 100% de couverture maintenue** sur les 16
+  modules critiques/stratégiques suivis. Committé (`0e2bd21`).
+  **Déploiement VPS effectué dans la foulée** — voir l'entrée suivante
+  pour la vérification post-déploiement.
+
 ## 2026-08-29 — Chantier refonte H1-H5 (L1-L6) : décision bloquante du point 1 — Ichimoku FIGÉ à 9/26/52 pour H2/L2, jamais balayé
 
 **Décision technique déléguée (autonomie du 16/08/2026, choix
