@@ -12,6 +12,79 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 14) — Point 4 : rapport d'attribution construit, premier tirage réel, un bug réel trouvé et corrigé
+
+`aggregate_by_hypothesis_asset_month` existait déjà (chantier du
+27-28/08/2026, `causal_decomposition.py`) mais n'était croisée avec
+rien et n'était appelée par aucun script — le livrable manquant était
+le croisement outcome/session/durée + la règle de classification, PAS
+la décomposition par trade elle-même (déjà déterministe, déjà
+100% couverte).
+
+**Construit** (`src/causal_decomposition.py`, 100% couvert, 79 tests) :
+- `session_bucket_from_ouvert_at`/`holding_duration_hours`/
+  `duration_bucket`/`outcome_label` : dimensions pures, calculées depuis
+  des colonnes déjà en base, aucune nouvelle capture requise.
+- `aggregate_by_dimension(db_path, "outcome"|"session"|"duree")` :
+  même source que l'agrégation existante (`trade_causal_decomposition`
+  join `trades`, `invalide=0` exclu), regroupée par (source, dimension)
+  plutôt que (source, actif, mois) — coupe complémentaire, pas un
+  remplacement.
+- `classify_cost_vs_strategy` : applique littéralement la règle
+  demandée (fuite d'exécution = ingénierie, edge théorique négatif =
+  question de lot/gate de puissance) sans jamais trancher un verdict de
+  stratégie elle-même. `donnees_de_cout_incompletes` explicite si un
+  coût moyen est `None` — jamais traité comme 0.
+
+**Bug réel trouvé en générant le premier rapport contre la base de
+production** : `holding_duration_hours` utilisait `strptime` sur un
+format figé (`%Y-%m-%dT%H:%M:%SZ`) — une partie des horodatages
+`trades.ouvert_at`/`ferme_at` est dans CET AUTRE format
+(`executor.py` écrit via `datetime.now(timezone.utc).isoformat()`,
+donnant par exemple `2026-08-16T19:03:27.857413+00:00`, microsecondes +
+décalage explicite). Corrigé avec `datetime.fromisoformat` (accepte
+nativement les deux formats, Python 3.11+), 2 tests de régression
+ajoutés avec la valeur réelle corrompue.
+
+**Premier rapport réel (VPS, lecture seule + rattrapage écriture dans
+`trade_causal_decomposition` uniquement, confirmé par Ismaël avant
+exécution)** :
+- Rattrapage : 54 trades décomposés sur 10 448 trades fermés au total
+  (**0,5%**) — `compute_trade_causal_decomposition` retourne `None`
+  pour tous les autres, faute de `prix_sortie_reel` exploitable
+  (capture ajoutée seulement le 27/08/2026, la quasi-totalité de
+  l'historique lui est antérieure). 1 ligne marquée `invalide` (garde-
+  fou de plausibilité, comportement attendu).
+- **`cout_entree_moyen` disponible pour la quasi-totalité des groupes**
+  (capturé depuis le palier P2, historique bien plus long) :
+  systématiquement petit et NÉGATIF (entre -0.0001R et -0.0165R selon
+  le groupe) — c'est-à-dire légèrement FAVORABLE, jamais une fuite.
+  **Aucun signal d'ingénierie côté entrée sur l'historique disponible.**
+- **`cout_sortie_moyen` = `None` sur TOUS les groupes du rapport** —
+  pas un bug, une conséquence directe et honnête du seuil de
+  couverture de 0,5% : dans presque tous les groupes, au moins un trade
+  n'a pas de sortie réelle capturée, et la règle d'agrégation
+  (`aggregate_by_hypothesis_asset_month`/`aggregate_by_dimension`)
+  refuse une moyenne partielle silencieuse. La classification affiche
+  donc `donnees_de_cout_incompletes` partout — **résultat correct, pas
+  une régression du module**.
+- **Aucun verdict de stratégie tiré** — les `r_theorique_moyen` par
+  groupe (souvent n=1 à 14) ne sont PAS un résultat statistique, cette
+  table ne remplace ni ne préjuge en rien le gate de puissance du
+  point 17.
+
+**Conclusion honnête** : l'infrastructure d'attribution est
+opérationnelle et produit sa première table réelle (point 19c
+satisfait), mais la couverture de coût de sortie réelle est aujourd'hui
+insuffisante pour tirer une seule conclusion actionnable côté
+ingénierie sur l'historique passé. Ce seuil montera mécaniquement à
+mesure que les trades v2 post-déploiement se ferment (capture déjà
+câblée, rien à construire de plus) — le rapport est prêt à être
+relancé tel quel, sans modification, quand la fenêtre forward aura
+accumulé plus de clôtures réelles.
+
+---
+
 ## 2026-08-29 (suite 13) — Point 1 : `docs/DEPLOIEMENT_V2.md` écrit, VPS vérifié en lecture seule avant rédaction
 
 Rédigé APRÈS inspection en lecture seule du VPS (aucune écriture,
