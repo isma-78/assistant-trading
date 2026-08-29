@@ -71,7 +71,11 @@ SAFETY_MAX_DAYS_BACK = 800   # garde-fou, au-delà de la profondeur mesurée (~7
 # "MINUTE_240", "HOUR_4" accepté), jamais dans ALL_RESOLUTIONS par
 # défaut (téléchargée explicitement via --resolutions HOUR_4 seulement
 # quand nécessaire, pas à chaque exécution du script).
-_RESOLUTION_MINUTES = {"HOUR": 60, "MINUTE_15": 15, "HOUR_4": 240}
+# "DAY" ajouté le 29/08/2026 (point 17, confluence HOUR/HOUR_4/DAY d'H2)
+# — résolution déjà vérifiée valide en direct (voir docs/HYPOTHESES.md,
+# amendement du 29/08/2026), jamais dans ALL_RESOLUTIONS par défaut,
+# même convention que HOUR_4.
+_RESOLUTION_MINUTES = {"HOUR": 60, "MINUTE_15": 15, "HOUR_4": 240, "DAY": 1440}
 
 
 def _page_window(to_time: datetime, resolution: str) -> tuple:
