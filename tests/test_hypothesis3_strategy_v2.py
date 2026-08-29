@@ -188,3 +188,10 @@ def test_module_constants_within_preregistered_grid():
     assert RETRACEMENT_RATIO in (0.382, 0.5, 0.618)
     assert CONFIRMATION_BARS in (1, 2, 3)
     assert STOP_BUFFER_ATR in (0.5, 1.0)
+
+
+def test_min_lookback_for_grid_covers_widest_grid_value():
+    from src.hypothesis3_strategy_v2 import MIN_LOOKBACK_FOR_GRID
+    ict_regime_window = 25  # ict_strategy: RECENT_WINDOW(20) + 2*FRACTAL_K(2) + 1
+    widest_confirmation_bars = 3
+    assert MIN_LOOKBACK_FOR_GRID >= max(ict_regime_window, widest_confirmation_bars)

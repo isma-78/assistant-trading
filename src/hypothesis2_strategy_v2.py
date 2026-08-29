@@ -57,6 +57,17 @@ SCORE_THRESHOLD = 2 / 3  # corrigé le 29/08/2026 avant tout calcul (voir docs/H
 
 OVERRIDABLE = ["EMA_PERIOD", "RSI_THRESHOLD", "N_TF", "SCORE_THRESHOLD"]
 
+# `MIN_LOOKBACK_FOR_GRID` (29/08/2026, voir docs/DECISIONS.md, point 16 —
+# bug de grille H1 trouvé avant calibration H2-H5, backtest_engine.
+# DEFAULT_LOOKBACK=220 n'était PAS garanti suffisant pour toute la
+# grille pré-enregistrée). Max des besoins par bougie, PAR RÉSOLUTION
+# (chaque TF a sa propre fenêtre indépendante, jamais une seule fenêtre
+# partagée sur un historique ré-échantillonné) : EMA_PERIOD (grille
+# max 100), Ichimoku (décalage 26 + senkou B 52 = 78), RSI(14)+1,
+# STRUCTURE_LOOKBACK(20)+1, ATR(14)+1 -> max=100, marge de 20 (même
+# convention que backtest_engine.DEFAULT_LOOKBACK = 200+20).
+MIN_LOOKBACK_FOR_GRID = 120
+
 
 def compute_ema(candles: List[Candle], period: int = EMA_PERIOD) -> Optional[float]:
     """EMA standard (amorcée par la SMA des `period` premières bougies,

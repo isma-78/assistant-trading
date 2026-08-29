@@ -301,3 +301,9 @@ def test_module_constants_within_preregistered_grid():
     assert PIVOT_FRACTAL_N in (2, 3, 4)
     assert MAX_PIVOT_DISTANCE_BARS in (20, 40, 60)
     assert STOP_ATR_MULT in (1.0, 1.5, 2.0)
+
+
+def test_min_lookback_for_grid_covers_widest_grid_value():
+    from src.hypothesis4_strategy_v2 import MIN_LOOKBACK_FOR_GRID
+    widest_max_pivot_distance = 60
+    assert MIN_LOOKBACK_FOR_GRID >= widest_max_pivot_distance + 15  # + RSI_PERIOD+1

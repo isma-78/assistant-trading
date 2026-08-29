@@ -44,6 +44,15 @@ STOP_BUFFER_PCT = 0.25
 
 OVERRIDABLE = ["COMPRESSION_PERCENTILE", "COMPRESSION_DURATION", "STOP_BUFFER_PCT"]
 
+# `MIN_LOOKBACK_FOR_GRID` (29/08/2026, voir docs/DECISIONS.md, point 16) :
+# c'est exactement `min_required` calculé en interne par `_evaluate_
+# entry` (BOLLINGER_PERIOD=20 + COMPRESSION_DURATION grille max 15 +
+# PERCENTILE_LOOKBACK=100 = 135), avec la même marge de 20 que les
+# autres hypothèses — la plus exigeante des 4, cohérent avec le
+# pré-enregistrement (compression sur une distribution de référence
+# longue).
+MIN_LOOKBACK_FOR_GRID = 155
+
 
 def compute_bollinger_band_at(
     candles: List[Candle], index: int, period: int = BOLLINGER_PERIOD, std_multiplier: float = BOLLINGER_STD_MULTIPLIER,

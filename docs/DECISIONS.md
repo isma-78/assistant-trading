@@ -12,6 +12,71 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 11) — Points 14-15 : H1/L1 CLOSE côté recherche — négatif bien puissant, process de CV imbriquée tué. Point 16 : bug de grille (DEFAULT_LOOKBACK=220) identifié avant H2-H5
+
+### Point 14 — Process de CV imbriquée tué, règle générale pré-enregistrée pour H2-H5
+
+Grille des 48 combinaisons terminée avant l'arrêt : **36/48 survivantes
+(n≥200), AUCUNE avec une moyenne d'entraînement brute positive**
+(-0,1081R à -0,2594R). Conformément à l'instruction reçue, le calcul de
+validation croisée imbriquée a été **interrompu** (`pkill`, VPS,
+confirmé arrêté) — il ne peut que réduire davantage une estimation déjà
+négative sur 100% des survivants, aucune valeur informative à en tirer.
+Cœurs VPS libérés.
+
+**Règle générale, pré-enregistrée ici pour H2-H5 avant tout calcul les
+concernant** : si aucune combinaison d'une grille n'a de moyenne
+d'entraînement brute strictement positive, la CV imbriquée est SAUTÉE
+et l'hypothèse est close côté recherche directement à cette étape —
+jamais de calcul de débiaisement sur un ensemble unanimement négatif.
+
+### Point 15 — H1/L1 close côté recherche : négatif bien puissant, cohérent avec le test d'information préalable
+
+Sur les 36 survivants, effet net dans **[-0,2594R ; -0,1081R]**, sans
+exception. Pour le survivant le moins négatif (n≈3300, sigma≈1,05,
+SE=1,05/√3300≈0,0183R, cohérent avec la fourchette 0,018-0,021R sur
+n=2400-3300) :
+- **effet / SE = -0,11 / 0,0183 ≈ -6,0 erreurs-types de zéro.**
+- **Borne haute à 95% (unilatérale, z=1,645) = -0,11 + 1,645×0,0183 ≈
+  -0,0799R — reste strictement négative.**
+- MDE dans la fourchette 0,045-0,053R sur cette plage de n : l'effet
+  observé vaut **2 à 6 fois le MDE, du mauvais côté.**
+
+**C'est le premier résultat négatif du projet appuyé sur une puissance
+statistique réelle** (contre des échantillons de dizaines à basse
+puissance pour la plupart des clôtures précédentes) — cohérent avec le
+test d'information du point D (ADX non discernable du R réalisé,
+r=0,0337 contre un seuil de 0,0356). **H1/L1 est CLOSE côté recherche.**
+Aucun rejeu sur une autre résolution, conformément à l'instruction.
+
+**H1/L1 n'est PAS retirée de la démo** — elle continue de trader sur
+les 9 actifs dès le déploiement (voir livrable de déploiement,
+point 1), pour la seule valeur de la donnée forward accumulée
+(attribution, fidélité du simulateur — parties II et III).
+
+### Point 16 — Bug de grille trouvé avant de calibrer H2-H5 : `DEFAULT_LOOKBACK=220` insuffisant pour plusieurs combinaisons
+
+12/48 combinaisons de la grille H1 (`ma_period=250`, les 4 valeurs
+d'`adx_threshold` × les 3 restantes de `k_atr`) ont produit **n=0**,
+pas parce que le marché ne l'a jamais confirmé, mais parce que
+`backtest_engine.replay_hypothesis` fournit une fenêtre glissante de
+taille FIXE `DEFAULT_LOOKBACK=220` à `entry_fn` — `ma_period=250 +
+SLOPE_LOOKBACK=5 = 255` bougies nécessaires, jamais atteintes. **La
+grille H1 effective valait donc 36 combinaisons candidates, pas 48** —
+consigné ici pour que toute future citation du "vainqueur" de cette
+grille utilise le bon dénominateur (sans conséquence sur la clôture du
+point 15 : les 36 combinaisons RÉELLEMENT évaluées sont déjà toutes
+négatives, ce bug n'a fait qu'empêcher 12 combinaisons d'être évaluées
+du tout, jamais faussé celles qui l'ont été).
+
+**Correctif nécessaire avant H2-H5, particulièrement critique pour
+H2** : Ichimoku (senkou B, 52 périodes, décalées de 26) exige à lui
+seul 78 barres minimum SUR LA RÉSOLUTION LA PLUS LENTE DE SES 3 TF
+fixes (HOUR/HOUR_4/DAY) — ramené à la résolution native HOUR via le
+facteur ×4/×4 déjà établi, le lookback natif requis dépasse largement
+220. Correctif implémenté dans l'entrée suivante (lookback adaptatif
+par hypothèse, ou grille pré-filtrée des combinaisons irréalisables).
+
 ## 2026-08-29 (suite 10) — Câblage de l'amendement H2-H5→HOUR, correctif de robustesse du téléchargement (écriture atomique), et journalisation de la valeur de stop demandée — points 2, 4 et 5 de la réponse d'Ismaël
 
 **Câblage résolution** : `hypothesis3_executor.py`/`hypothesis4_

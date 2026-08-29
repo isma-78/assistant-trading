@@ -168,3 +168,9 @@ def test_module_constants_within_preregistered_grid():
     assert COMPRESSION_DURATION in (5, 10, 15)
     assert STOP_BUFFER_PCT in (0.0, 0.25, 0.5)
     assert BOLLINGER_PERIOD == 20
+
+
+def test_min_lookback_for_grid_covers_widest_grid_value():
+    from src.hypothesis5_strategy_v2 import MIN_LOOKBACK_FOR_GRID, PERCENTILE_LOOKBACK
+    widest_compression_duration = 15
+    assert MIN_LOOKBACK_FOR_GRID >= BOLLINGER_PERIOD + widest_compression_duration + PERCENTILE_LOOKBACK

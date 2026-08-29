@@ -41,6 +41,13 @@ STOP_BUFFER_ATR = 0.5
 
 OVERRIDABLE = ["RETRACEMENT_RATIO", "CONFIRMATION_BARS", "STOP_BUFFER_ATR"]
 
+# `MIN_LOOKBACK_FOR_GRID` (29/08/2026, voir docs/DECISIONS.md, point 16) :
+# max des besoins — fenêtre régime/jambe d'ict_strategy._find_regime_
+# and_leg (RECENT_WINDOW=20 + 2×FRACTAL_K=2 + 1 = 25), CONFIRMATION_BARS
+# (grille max 3), ATR(14)+1 -> max=25, marge large (le plus petit besoin
+# des 4 hypothèses H2-H5, marge proportionnellement plus généreuse).
+MIN_LOOKBACK_FOR_GRID = 50
+
 
 def _retracement_level(direction: str, swing_low: float, swing_high: float, ratio: float) -> float:
     span = swing_high - swing_low

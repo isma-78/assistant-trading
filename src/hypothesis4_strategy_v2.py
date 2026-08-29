@@ -52,6 +52,13 @@ STOP_ATR_MULT = 1.5
 
 OVERRIDABLE = ["PIVOT_FRACTAL_N", "MAX_PIVOT_DISTANCE_BARS", "STOP_ATR_MULT"]
 
+# `MIN_LOOKBACK_FOR_GRID` (29/08/2026, voir docs/DECISIONS.md, point 16) :
+# le premier pivot peut se situer jusqu'à MAX_PIVOT_DISTANCE_BARS
+# (grille max 60) avant le second, et exige lui-même RSI(14)+1 bougies
+# d'historique PRÉCÉDENTES pour être exploitable -> 60+15=75, marge
+# pour PIVOT_FRACTAL_N (max 4) des deux côtés du second pivot.
+MIN_LOOKBACK_FOR_GRID = 100
+
 
 def find_confirmed_pivots(candles: List[Candle], fractal_n: int) -> List[Tuple[int, str, float]]:
     """Pivots fractals CONFIRMÉS uniquement : un haut/bas à l'index i

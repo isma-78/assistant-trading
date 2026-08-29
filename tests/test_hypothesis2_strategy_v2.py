@@ -268,4 +268,10 @@ def test_module_constants_within_preregistered_grid():
     assert N_TF in (2, 3)
     assert SCORE_THRESHOLD in (2 / 3, 1.0)
     assert RSI_PERIOD == 14
+
+
+def test_min_lookback_for_grid_covers_widest_grid_value():
+    from src.hypothesis2_strategy_v2 import ICHIMOKU_SENKOU_B_PERIOD, ICHIMOKU_SHIFT, MIN_LOOKBACK_FOR_GRID
+    widest_ema_period = 100  # borne haute de la grille pré-enregistrée {20,50,100}
+    assert MIN_LOOKBACK_FOR_GRID >= max(widest_ema_period, ICHIMOKU_SHIFT + ICHIMOKU_SENKOU_B_PERIOD)
     assert (ICHIMOKU_TENKAN_PERIOD, ICHIMOKU_KIJUN_PERIOD, ICHIMOKU_SENKOU_B_PERIOD) == (9, 26, 52)

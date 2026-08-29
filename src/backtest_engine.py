@@ -299,6 +299,7 @@ def replay_hypothesis(
     is_donchian_trailing: bool = False,
     lookback: int = DEFAULT_LOOKBACK,
     slippage_multiplier: float = SLIPPAGE_SPREAD_MULTIPLIER,
+    extra_resolution_bars: Optional[Dict[str, List[HistoricalBar]]] = None,
 ) -> BacktestResult:
     """Rejoue `entry_fn` sur `own_bars` (ordre chronologique), fenêtre
     glissante stricte de `lookback` bougies (jamais de bougie future),
@@ -319,11 +320,29 @@ def replay_hypothesis(
     `slippage_multiplier` (défaut = `SLIPPAGE_SPREAD_MULTIPLIER`,
     24/08/2026, voir docs/DECISIONS.md) : permet de rejouer la même
     hypothèse avec un coût de slippage différent (ex. comparaison 100%
-    vs 50% du spread), sans changer la constante par défaut."""
+    vs 50% du spread), sans changer la constante par défaut.
+
+    `extra_resolution_bars` (29/08/2026, voir docs/DECISIONS.md, point
+    16 — H2/L2 uniquement) : résolutions supplémentaires du MÊME actif
+    (clés = libellés arbitraires, ex. `{"HOUR_4": bars, "DAY": bars}`),
+    alignées par horodatage (même mécanisme que `confirming_bars`,
+    jamais par position). Quand fourni, `entry_fn` est appelé avec ces
+    fenêtres en arguments positionnels supplémentaires
+    (`entry_fn(asset, window, *extra_windows)`, dans l'ORDRE
+    d'insertion du dict — nécessaire pour `hypothesis2_strategy_v2.
+    evaluate_entry(asset, candles_m15, candles_h1, candles_h4)`, dont
+    le contrat à 3 résolutions dépasse le contrat générique à une seule
+    résolution). `None` par défaut : H1/H3/H4/H5 strictement
+    inchangées (un seul argument à `entry_fn`, comme avant)."""
     own_candles = [b.to_candle() for b in own_bars]
     confirming_candles: Dict[str, List[Candle]] = {}
     if require_regime_confirmation and confirming_bars:
         confirming_candles = {k: [b.to_candle() for b in v] for k, v in confirming_bars.items()}
+    extra_candles: Dict[str, List[Candle]] = {}
+    extra_pointers: Dict[str, int] = {}
+    if extra_resolution_bars:
+        extra_candles = {k: [b.to_candle() for b in v] for k, v in extra_resolution_bars.items()}
+        extra_pointers = {k: 0 for k in extra_candles}
     # Pointeurs monotones PAR HORODATAGE, jamais par position dans la
     # liste (correctif 25/08/2026, voir docs/DECISIONS.md) : own_bars et
     # confirming_bars n'ont PAS le même nombre de bougies en pratique
@@ -370,7 +389,14 @@ def replay_hypothesis(
                 confirmed_regime = _historical_regime(us30_window, us100_window, asset)
                 last_regime_refresh_hour = hour
 
-        signal = entry_fn(asset, window)
+        if extra_candles:
+            extra_windows = []
+            for key, series in extra_candles.items():
+                extra_pointers[key] = _advance_confirming_pointer(series, extra_pointers[key], bar.time_utc)
+                extra_windows.append(_trailing_window(series, extra_pointers[key], lookback))
+            signal = entry_fn(asset, window, *extra_windows)
+        else:
+            signal = entry_fn(asset, window)
         if signal is None:
             continue
         if require_regime_confirmation and signal.direction != confirmed_regime:

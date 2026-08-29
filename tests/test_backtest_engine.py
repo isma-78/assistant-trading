@@ -591,6 +591,74 @@ def test_replay_regime_confirmation_without_confirming_bars_blocks_everything():
     assert result.trades == []
 
 
+def test_replay_extra_resolution_bars_passed_as_positional_args():
+    # H2/L2 uniquement (29/08/2026, voir docs/DECISIONS.md, point 16) :
+    # entry_fn recoit les fenetres des resolutions supplementaires en
+    # arguments positionnels, dans l'ordre du dict.
+    own_bars = _flat_bars(30, level=50.0)
+    extra_a = _flat_bars(30, level=1.0)
+    extra_b = _flat_bars(30, level=2.0)
+    captured = []
+
+    def entry_fn(asset, window, extra_window_a, extra_window_b):
+        captured.append((len(window), len(extra_window_a), len(extra_window_b)))
+        return None
+
+    risk_engine, whitelist = _make_risk_engine()
+    replay_hypothesis(
+        "TEST", own_bars, entry_fn=entry_fn, risk_engine=risk_engine, whitelist=whitelist,
+        envelope_initial=1000.0, confidence_threshold=0.0, lookback=10,
+        extra_resolution_bars={"A": extra_a, "B": extra_b},
+    )
+    assert len(captured) == len(own_bars)
+    assert all(c[1] <= 10 and c[2] <= 10 for c in captured)  # jamais plus que `lookback`
+
+
+def test_replay_extra_resolution_bars_aligned_by_timestamp_not_position():
+    # Serie supplementaire avec un pas different (2x plus de bougies) —
+    # meme mecanisme d'alignement par horodatage que confirming_bars,
+    # jamais par position dans la liste.
+    own_bars = _flat_bars(20, level=50.0)
+    fine_extra = []
+    for i in range(40):
+        day = min(1 + i // 2, 28)
+        hour = 0 if i % 2 == 0 else 12
+        fine_extra.append(_bar(f"2026-01-{day:02d}T{hour:02d}:00:00", 1.0, 1.0, 1.0, 1.0))
+
+    windows_seen = []
+
+    def entry_fn(asset, window, extra_window):
+        windows_seen.append(len(extra_window))
+        return None
+
+    risk_engine, whitelist = _make_risk_engine()
+    replay_hypothesis(
+        "TEST", own_bars, entry_fn=entry_fn, risk_engine=risk_engine, whitelist=whitelist,
+        envelope_initial=1000.0, confidence_threshold=0.0, lookback=100,
+        extra_resolution_bars={"FINE": fine_extra},
+    )
+    # Le pointeur avance strictement avec le temps (jamais par position) :
+    # la fenetre "FINE" visible croit au fil des bougies own_bars, jamais
+    # bornee par leur nombre (deux fois moins nombreuses que "FINE" ici).
+    assert windows_seen[-1] > windows_seen[0] >= 0
+
+
+def test_replay_without_extra_resolution_bars_calls_entry_fn_with_single_arg():
+    own_bars = _flat_bars(5, level=50.0)
+    calls = []
+
+    def entry_fn(asset, window):
+        calls.append(1)
+        return None
+
+    risk_engine, whitelist = _make_risk_engine()
+    replay_hypothesis(
+        "TEST", own_bars, entry_fn=entry_fn, risk_engine=risk_engine, whitelist=whitelist,
+        envelope_initial=1000.0, confidence_threshold=0.0, lookback=5,
+    )
+    assert len(calls) == 5  # jamais d'exception malgre la signature a un seul argument
+
+
 def test_replay_trailing_stop_update_after_tp1_tp2():
     # Assez de bougies avant le declenchement pour que l'ATR(14) soit
     # calculable au moment de la gestion post-TP2 (fenetre glissante).
