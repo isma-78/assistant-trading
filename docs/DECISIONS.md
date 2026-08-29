@@ -12,6 +12,42 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 3) — Point C, Hypothèse #4 : L4 (divergence prix/RSI+OBV) implémentée, testée (100%), déployée dans le code (pas sur le VPS) — `mean_reversion_strategy.py` archivé
+
+Prérequis codé d'abord (`Candle`/`HistoricalBar` gagnent un champ
+`volume` optionnel = `lastTradedVolume`, déjà identifié comme volume
+tick, jamais réel — 100% couverture maintenue sur `market_data.py`/
+`backtest_engine.py`).
+
+`src/hypothesis4_strategy_v2.py` (nouveau, 100% couvert, 24 tests
+écrits AVANT l'implémentation comme demandé) :
+`find_confirmed_pivots(candles, fractal_n)` — anti-lookahead garanti
+**par construction** (borne de boucle `range(fractal_n, len(candles) -
+fractal_n)`, structurellement incapable de rapporter un pivot dont la
+fenêtre de confirmation déborderait la liste) — puis divergence
+prix/RSI(14)/OBV entre les deux pivots confirmés les plus récents,
+signal émis EXACTEMENT à la bougie qui vient de confirmer le second
+pivot (événement ponctuel, ne refire jamais). `require_obv_
+confirmation` : paramètre diagnostique (jamais une variable de grille)
+pour le test avec/sans OBV exigé au point 7.
+
+`src/hypothesis4_executor.py` rewire : `mean_reversion_strategy.py`
+**archivé** (`archive/`, jamais supprimé, note en tête renvoyant ici ;
+aucune position H4 v1 ouverte au moment du changement, vérifié en
+base). Source `hypothesis4` → `hypothesis4_v2`. **Structure de sortie
+changée** : ancien TP fixe unique/aucun trailing (`CLOSE_FULL_TP`)
+remplacé par la structure standard §2.10 (TP1 50%/TP2 30%/trailing),
+comme H1-H3 (décision du pré-enregistrement). `require_regime_
+confirmation=False` (L4 n'a aucun filtre de régime pré-enregistré).
+Clé `hypothesis_params` : `"H4_v2"`, jamais `"H4"` (n'hérite d'aucun
+paramètre déjà tuné sur l'ancienne logique).
+
+979 tests dans la suite principale, tous verts, 100% de couverture
+maintenue. **Committé et poussé sur GitHub, PAS déployé sur le VPS**
+(point A). Fichiers archivés vérifiés internes-cohérents (imports/
+patches corrigés, 31 tests passent en exécution standalone
+`pytest archive/`, hors suite principale).
+
 ## 2026-08-29 (suite 2) — Point B : audit du filtrage par `source` (aucun LIKE/préfixe trouvé, un vrai gap trouvé et corrigé) + infrastructure de versionnement `_v2` posée
 
 ### Audit demandé, lignes vérifiées
