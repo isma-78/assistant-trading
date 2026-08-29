@@ -404,7 +404,16 @@ class CapitalClient:
         (invariant #5, jamais contourné même par ce garde-fou) ; si
         absents (rétro-compatibilité, comportement inchangé pour tout
         appelant existant), le réessai utilise la valeur divulguée sans
-        cette vérification supplémentaire."""
+        cette vérification supplémentaire.
+
+        **Valeur demandée journalisée à CHAQUE tentative (29/08/2026,
+        ajout demandé — voir docs/DECISIONS.md)** : le taux d'échec par
+        distance de stop demandée n'était pas mesurable rétroactivement
+        (aucune trace de `new_stop_level` avant l'appel réseau qui
+        échoue) — comblé ici par un `logger.info` systématique, avant
+        même de savoir si la tentative réussira, pour que cette lacune
+        ne se reproduise jamais."""
+        logger.info("Mise à jour de stop demandée pour la position %s : %s", deal_id, new_stop_level)
         try:
             return self._put_stop(deal_id, new_stop_level, guaranteed_stop)
         except CapitalApiError as exc:
@@ -418,8 +427,8 @@ class CapitalClient:
                 if direction == "short" and boundary > current_stop_level:
                     raise
             logger.warning(
-                "Stop rejeté par le broker pour la position %s (%s) — réessai adapté avec la valeur divulguée %s",
-                deal_id, match.group(0), boundary,
+                "Stop rejeté par le broker pour la position %s : demandé=%s, %s — réessai adapté avec la valeur divulguée %s",
+                deal_id, new_stop_level, match.group(0), boundary,
             )
             return self._put_stop(deal_id, boundary, guaranteed_stop)
 
