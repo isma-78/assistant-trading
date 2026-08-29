@@ -12,6 +12,39 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 13) — Point 1 : `docs/DEPLOIEMENT_V2.md` écrit, VPS vérifié en lecture seule avant rédaction
+
+Rédigé APRÈS inspection en lecture seule du VPS (aucune écriture,
+aucun process touché) pour que chaque commande soit exacte, pas
+générique :
+
+- **État réel confirmé** : les 6 process de production tournent sur le
+  commit `12dc2b2` (34 commits derrière le HEAD local de ce chantier,
+  `e636120`) — aucune divergence suspecte, seulement le VPS pas encore
+  mis à jour, conforme à la règle "jamais de déploiement sans accord
+  explicite". `git status` sur le VPS montre uniquement des éléments
+  déjà connus (scripts ponctuels non trackés, `chmod +x` non commité sur
+  `backup_and_sync.sh`) — vérifié qu'aucun commit entrant ne touche ces
+  chemins, le `git pull` sera un fast-forward propre.
+- **Aucune migration de schéma nécessaire pour ce lot** : `git log
+  12dc2b2..HEAD -- src/db.py` est vide — les seules colonnes ajoutées
+  récemment (`trade_partials`, commit `12dc2b2` lui-même) sont déjà en
+  place sur le VPS.
+- **Convention de (re)démarrage confirmée par inspection directe**
+  (`tmux list-panes`, `ps aux`) plutôt que supposée : chaque process est
+  un `python -m src.<module>` lancé en session tmux one-shot (`tmux
+  new-session -d -s NOM 'commande'`, sans `remain-on-exit` — cohérent
+  avec l'entrée du 19/08/2026 sur la désynchronisation tmux/process).
+  `telegram_listener`/`control_bot` confirmés hors périmètre (aucun de
+  leurs fichiers n'a changé dans ce chantier).
+- Document écrit avec résultat attendu après CHAQUE commande (pas
+  seulement la liste de commandes) et une section rollback testée
+  intellectuellement contre l'historique git réel (`git checkout
+  12dc2b2 -- .` plutôt que `reset --hard`, pour rester réversible).
+- **Non exécuté** — ce fichier attend qu'Ismaël l'exécute lui-même.
+
+---
+
 ## 2026-08-29 (suite 12) — Point 3 : vérification complète du câblage CHFJPY sur les 5 modules _v2
 
 Checklist demandée par Ismaël avant déploiement ("jamais silencieusement
