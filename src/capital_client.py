@@ -15,6 +15,7 @@ toute logique de décision.
 """
 
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -368,7 +369,12 @@ class CapitalClient:
         except ValueError:
             return False
 
-    def update_position_stop(self, deal_id: str, new_stop_level: float, guaranteed_stop: bool = False) -> dict:
+    _STOPLOSS_BOUNDARY_RE = re.compile(r"error\.invalid\.stoploss\.(minvalue|maxvalue):\s*([0-9.]+)")
+
+    def update_position_stop(
+        self, deal_id: str, new_stop_level: float, guaranteed_stop: bool = False,
+        direction: Optional[str] = None, current_stop_level: Optional[float] = None,
+    ) -> dict:
         """Déplace le stop d'une position déjà ouverte (resserrement
         uniquement — la garde contre l'élargissement est appliquée par
         l'appelant via risk_engine.evaluate_stop_update, jamais ici).
@@ -381,8 +387,44 @@ class CapitalClient:
         Flux B alors ouvertes, EURUSD/GBPUSD/US30 — voir docs/DECISIONS.md).
         Vérifié empiriquement sur le compte démo : `stopLevel` +
         `guaranteedStop: true` suffit, pas besoin de `stopDistance` pour
-        une mise à jour (contrairement à l'ouverture)."""
-        body = {"stopLevel": new_stop_level}
+        une mise à jour (contrairement à l'ouverture).
+
+        **Retry adaptatif (29/08/2026, voir docs/DECISIONS.md, refonte
+        H1-H5 point E)** : 5563 échecs `error.invalid.stoploss.
+        (minvalue|maxvalue)` mesurés en production sur cette opération
+        précise — le seuil broker est une BANDE DYNAMIQUE (ni
+        `minStepDistance` ni `%StopOrProfitDistance` ne l'expliquent,
+        voir docs/DECISIONS.md 28/08/2026), jamais une constante
+        pré-validable. Le message d'erreur du broker DIVULGUE la valeur
+        limite exacte au moment du rejet — un seul réessai (jamais une
+        boucle) avec CETTE valeur exacte, jamais une valeur devinée ou
+        une formule locale. `direction`/`current_stop_level` optionnels :
+        si fournis, le réessai est refusé (exception propagée telle
+        quelle, aucun réessai tenté) s'il élargirait le stop actuel
+        (invariant #5, jamais contourné même par ce garde-fou) ; si
+        absents (rétro-compatibilité, comportement inchangé pour tout
+        appelant existant), le réessai utilise la valeur divulguée sans
+        cette vérification supplémentaire."""
+        try:
+            return self._put_stop(deal_id, new_stop_level, guaranteed_stop)
+        except CapitalApiError as exc:
+            match = self._STOPLOSS_BOUNDARY_RE.search(str(exc))
+            if match is None:
+                raise
+            boundary = float(match.group(2))
+            if current_stop_level is not None and direction is not None:
+                if direction == "long" and boundary < current_stop_level:
+                    raise
+                if direction == "short" and boundary > current_stop_level:
+                    raise
+            logger.warning(
+                "Stop rejeté par le broker pour la position %s (%s) — réessai adapté avec la valeur divulguée %s",
+                deal_id, match.group(0), boundary,
+            )
+            return self._put_stop(deal_id, boundary, guaranteed_stop)
+
+    def _put_stop(self, deal_id: str, level: float, guaranteed_stop: bool) -> dict:
+        body = {"stopLevel": level}
         if guaranteed_stop:
             body["guaranteedStop"] = True
         return self.put(f"/positions/{deal_id}", body)

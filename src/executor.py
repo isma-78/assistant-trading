@@ -1421,7 +1421,10 @@ def _apply_management_action(
                     state.trade_id, state.stop_price, adjustment.stop_price, new_stop_price,
                 )
                 new_stop_price = adjustment.stop_price
-        client.update_position_stop(state.deal_id, new_stop_price, guaranteed_stop=state.guaranteed_stop)
+        client.update_position_stop(
+            state.deal_id, new_stop_price, guaranteed_stop=state.guaranteed_stop,
+            direction=state.direction, current_stop_level=state.stop_price,
+        )
         with connection_scope(db_path) as conn:
             conn.execute("UPDATE trades SET stop_loss_courant = ? WHERE id = ?", (new_stop_price, state.trade_id))
         return

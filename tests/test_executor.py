@@ -1819,7 +1819,9 @@ def test_manage_open_trades_flux_b_trailing_forwards_guaranteed_stop(tmp_path):
         envelope_managers={("GBPUSD", "hypothesis"): envelope_manager}, envelope_ids={("GBPUSD", "hypothesis"): envelope_id},
     )
 
-    client.update_position_stop.assert_called_once_with("deal-gbp", 102.0, guaranteed_stop=True)
+    client.update_position_stop.assert_called_once_with(
+        "deal-gbp", 102.0, guaranteed_stop=True, direction="short", current_stop_level=105.0,
+    )
     conn = get_connection(db_path)
     try:
         trade = conn.execute("SELECT stop_loss_courant FROM trades WHERE id = ?", (trade_id,)).fetchone()

@@ -387,6 +387,100 @@ def test_update_position_stop_includes_guaranteed_stop_flag_when_true():
     assert session.put.call_args.kwargs["json"] == {"stopLevel": 92000.0, "guaranteedStop": True}
 
 
+def _stoploss_error_response(error_code_body: str):
+    resp = MagicMock()
+    resp.raise_for_status.side_effect = requests.HTTPError("400 Client Error")
+    resp.text = f'{{"errorCode":"{error_code_body}"}}'
+    return resp
+
+
+def test_update_position_stop_retries_once_with_broker_disclosed_boundary():
+    # 5563 echecs mesures en production (voir docs/DECISIONS.md, refonte
+    # H1-H5 point E) — le broker divulgue la valeur limite exacte dans le
+    # message d'erreur ; un seul reessai avec CETTE valeur, jamais une
+    # formule locale.
+    client, session = _logged_in_client()
+    session.put.side_effect = [
+        _stoploss_error_response("error.invalid.stoploss.minvalue: 158.894"),
+        _fake_response(json_body={"status": "updated"}),
+    ]
+
+    result = client.update_position_stop("pos-1", 159.0)
+
+    assert result == {"status": "updated"}
+    assert session.put.call_count == 2
+    assert session.put.call_args_list[1].kwargs["json"] == {"stopLevel": 158.894}
+
+
+def test_update_position_stop_retry_preserves_guaranteed_stop_flag():
+    client, session = _logged_in_client()
+    session.put.side_effect = [
+        _stoploss_error_response("error.invalid.stoploss.maxvalue: 4503.06"),
+        _fake_response(json_body={"status": "updated"}),
+    ]
+
+    client.update_position_stop("pos-1", 4520.0, guaranteed_stop=True)
+
+    assert session.put.call_args_list[1].kwargs["json"] == {"stopLevel": 4503.06, "guaranteedStop": True}
+
+
+def test_update_position_stop_no_retry_when_error_unrelated_to_stoploss_bounds():
+    client, session = _logged_in_client()
+    session.put.return_value = _stoploss_error_response("error.vallidation.guaranteed-stop-loss.required")
+
+    with pytest.raises(CapitalApiError):
+        client.update_position_stop("pos-1", 159.0)
+    assert session.put.call_count == 1  # jamais de reessai sur une erreur non reconnue
+
+
+def test_update_position_stop_retry_gives_up_after_one_attempt():
+    # Reessai borne (jamais une boucle) : si le second essai echoue aussi
+    # (bande encore deplacee entre-temps), l'exception est propagee.
+    client, session = _logged_in_client()
+    session.put.side_effect = [
+        _stoploss_error_response("error.invalid.stoploss.minvalue: 158.894"),
+        _stoploss_error_response("error.invalid.stoploss.minvalue: 159.1"),
+    ]
+
+    with pytest.raises(CapitalApiError):
+        client.update_position_stop("pos-1", 159.0)
+    assert session.put.call_count == 2
+
+
+def test_update_position_stop_retry_refused_when_it_would_widen_stop_long():
+    # Invariant #5 : jamais elargi, meme via ce garde-fou — position
+    # longue, stop actuel a 100.0, la valeur divulguee (95.0) serait un
+    # elargissement (plus loin du prix) -> exception propagee, pas de
+    # reessai tente.
+    client, session = _logged_in_client()
+    session.put.return_value = _stoploss_error_response("error.invalid.stoploss.minvalue: 95.0")
+
+    with pytest.raises(CapitalApiError):
+        client.update_position_stop("pos-1", 99.0, direction="long", current_stop_level=100.0)
+    assert session.put.call_count == 1
+
+
+def test_update_position_stop_retry_refused_when_it_would_widen_stop_short():
+    client, session = _logged_in_client()
+    session.put.return_value = _stoploss_error_response("error.invalid.stoploss.maxvalue: 110.0")
+
+    with pytest.raises(CapitalApiError):
+        client.update_position_stop("pos-1", 105.0, direction="short", current_stop_level=100.0)
+    assert session.put.call_count == 1
+
+
+def test_update_position_stop_retry_allowed_when_it_tightens_stop():
+    client, session = _logged_in_client()
+    session.put.side_effect = [
+        _stoploss_error_response("error.invalid.stoploss.minvalue: 101.0"),
+        _fake_response(json_body={"status": "updated"}),
+    ]
+
+    result = client.update_position_stop("pos-1", 99.0, direction="long", current_stop_level=100.0)
+    assert result == {"status": "updated"}
+    assert session.put.call_args_list[1].kwargs["json"] == {"stopLevel": 101.0}
+
+
 _NOT_YET_ACTIVE_ACCOUNTS = _fake_response(json_body={
     "accounts": [
         {"accountId": "some-other-account", "preferred": True},
