@@ -293,6 +293,27 @@ crontab -l
 existante (backup 03h00, watchdog `*/5 * * * *`) n'est perdue — d'où la
 sauvegarde préalable dans `/tmp`.
 
+## Étape 8 (une fois, après le premier déploiement réussi) — cycle d'ajustement continu (point 8)
+
+`scripts/run_continuous_adjustment_cycle.py` est un NO-OP documenté tant
+que son registre `HYPOTHESES` reste vide (attend le premier calage
+validé du point 17) — sûr à installer en cron dès maintenant.
+
+```bash
+(crontab -l; echo "0 5 * * * cd /home/assistant/assistant-trading && nice -n 19 venv/bin/python scripts/run_continuous_adjustment_cycle.py >> logs/evolution_cycle_cron.log 2>&1") | crontab -
+crontab -l
+```
+**Attendu** : la ligne apparaît (`nice -n 19` inclus dans la commande
+elle-même, pas dans le crontab autrement). Premiers runs : le log
+affichera "Registre HYPOTHESES vide... en attente du premier calage
+valide" jusqu'à ce que le point 17 remplisse ce registre.
+
+L'interrupteur DB par hypothèse (`evolution_cycle_state`) n'a besoin
+d'aucune initialisation manuelle : son absence de ligne vaut déjà
+"activé" par construction (fail-safe explicite, voir
+`src/evolution_cycle_controller.py`) — les 5 hypothèses sont donc ON
+par défaut sans action supplémentaire.
+
 ## En cas d'écart
 
 Toute divergence avec un "Attendu" ci-dessus = **arrêt, pas

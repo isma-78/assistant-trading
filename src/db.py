@@ -228,6 +228,24 @@ CREATE TABLE IF NOT EXISTS financing_transactions (
     captured_at TEXT NOT NULL
 );
 
+-- Point 8 (29/08/2026, voir docs/DECISIONS.md) : cycle d'ajustement
+-- continu. `evolution_cycle_state` absente pour une hypothèse = ACTIVÉE
+-- par défaut (fail-safe explicite, pas une valeur par défaut choisie au
+-- niveau applicatif) ; `evolution_validations` trace CHAQUE validation
+-- réellement consommée (passée ou échouée), utilisé pour le plafond
+-- glissant de 30 jours ET pour intégrer le compteur cumulé à la
+-- correction z (jamais remis à zéro entre deux cycles).
+CREATE TABLE IF NOT EXISTS evolution_cycle_state (
+    hypothesis TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS evolution_validations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    hypothesis TEXT NOT NULL,
+    validated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS trade_features (
     trade_id INTEGER PRIMARY KEY REFERENCES trades(id),
     align_matinale INTEGER,

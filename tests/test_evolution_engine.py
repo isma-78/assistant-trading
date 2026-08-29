@@ -175,23 +175,41 @@ def test_select_best_candidate_z_reflects_number_of_candidates():
 # ---------------------------------------------------------------------------
 
 def test_validation_fails_on_insufficient_trades():
-    v = evaluate_validation(n_trades=10, mean_r=0.5, min_trades=60)
+    v = evaluate_validation(n_trades=10, r_values=[0.5] * 10, min_trades=60, z=1.6449)
     assert v.passed is False
 
 
-def test_validation_fails_on_none_expectancy():
-    v = evaluate_validation(n_trades=100, mean_r=None, min_trades=60)
+def test_validation_fails_when_lower_bound_undefined_less_than_two_values():
+    v = evaluate_validation(n_trades=100, r_values=[0.1], min_trades=60, z=1.6449)
+    assert v.passed is False
+    assert "N/A" in v.reason
+
+
+def test_validation_fails_on_non_positive_lower_bound():
+    v = evaluate_validation(n_trades=100, r_values=[0.0] * 100, min_trades=60, z=1.6449)
     assert v.passed is False
 
 
-def test_validation_fails_on_non_positive_expectancy():
-    v = evaluate_validation(n_trades=100, mean_r=0.0, min_trades=60)
+def test_validation_fails_on_positive_mean_but_negative_lower_bound():
+    # Point 8 (29/08/2026) : le gate de puissance rejette desormais une
+    # moyenne positive si la variance est trop grande pour la borne basse
+    # (comportement impossible avec l'ancien critere "moyenne > 0" seul).
+    r_values = [0.5, -0.4] * 50  # moyenne=0.05, ecart-type eleve
+    v = evaluate_validation(n_trades=100, r_values=r_values, min_trades=60, z=1.6449)
     assert v.passed is False
 
 
-def test_validation_passes():
-    v = evaluate_validation(n_trades=100, mean_r=0.1, min_trades=60)
+def test_validation_passes_when_lower_bound_positive():
+    v = evaluate_validation(n_trades=100, r_values=[0.1] * 100, min_trades=60, z=1.6449)
     assert v.passed is True
+
+
+def test_validation_higher_z_can_flip_a_passing_case_to_failing():
+    # Le meme echantillon passe avec z=1.6449 (m=1) mais peut echouer
+    # avec un z plus eleve (cumul de validations passees, point 8).
+    r_values = [0.5, -0.3] * 50  # moyenne=0.10, ecart-type eleve
+    assert evaluate_validation(n_trades=100, r_values=r_values, min_trades=60, z=1.6449).passed is True
+    assert evaluate_validation(n_trades=100, r_values=r_values, min_trades=60, z=6.0).passed is False
 
 
 # ---------------------------------------------------------------------------

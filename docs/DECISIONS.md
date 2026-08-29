@@ -12,6 +12,65 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 18) — Point 8 : mécanisme du cycle d'ajustement continu construit (interrupteur, plafond 30j, budget de temps, fail-safe), activation réelle laissée au point 17
+
+**Renforcement méthodologique appliqué à `evolution_engine.py` d'abord**
+(prérequis du "gate de puissance à CHAQUE validation") :
+`evaluate_validation` n'utilise plus "espérance > 0" mais une vraie
+borne basse (`moyenne - z×erreur-type > 0`, `compute_lower_bound` déjà
+existant) — un candidat à moyenne positive mais variance trop grande
+peut désormais échouer la validation (impossible avec l'ancien
+critère, testé explicitement). `run_evolution_cycle` accepte
+`validation_z` (défaut 1.6449 = m=1, pour un appel isolé) au lieu de le
+calculer lui-même — ce module reste un pur moteur statistique sans
+accès au calendrier.
+
+**Construit** (`src/evolution_cycle_controller.py`, nouveau, 100%
+couvert, 20 tests) :
+- **Interrupteur DB par hypothèse** (`evolution_cycle_state`) : absence
+  de ligne = ACTIVÉ par défaut (fail-safe explicite, pas une valeur
+  choisie au niveau applicatif) — les 5 hypothèses sont donc ON dès le
+  déploiement sans la moindre initialisation manuelle.
+- **Plafond d'1 validation confirmatoire par hypothèse par 30 jours
+  glissants** (`evolution_validations`) : vérifié AVANT tout
+  entraînement (pas seulement avant la validation elle-même) — un
+  plafond déjà atteint bloque le cycle entier avant de consommer du
+  calcul pour rien.
+- **Compteur cumulé intégré à la correction z** : `z =
+  bonferroni_one_sided_z(cumulatif + 1)` — une hypothèse qui a déjà
+  consommé 2 validations par le passé voit son 3e essai jugé avec
+  `m=3`, pas `m=1` — corrige la comparaison multiple SÉQUENTIELLE dans
+  le temps, pas seulement celle des candidats d'un même cycle (déjà
+  gérée par `select_best_candidate`).
+- **Budget de temps mur** (`max_wall_seconds`) : vérifié avant le
+  démarrage ET avant chaque candidat d'entraînement — interruption
+  propre (résultat partiel explicite, jamais une exception qui
+  remonterait au cron) plutôt qu'un process qui tourne indéfiniment sur
+  un VPS à 2 cœurs partagés avec les 6 process de trading. `nice -n 19`
+  reste la responsabilité du cron (documenté dans
+  `docs/DEPLOIEMENT_V2.md`, étape 8), jamais de ce module.
+- **Fail-safe PAR HYPOTHÈSE** (`run_all_enabled_cycles`) : une
+  exception sur une hypothèse est capturée et journalisée, les 4
+  autres tournent quand même (testé explicitement, une hypothèse en
+  panne n'empêche jamais les autres).
+- **Démo uniquement par construction** : aucun accès broker/capital/
+  risque (invariant #1), `train_fn`/`validation_fn` injectées comme
+  dans `evolution_engine.py` — jamais un ordre.
+
+**`scripts/run_continuous_adjustment_cycle.py`** (nouveau, cron-ready) :
+son registre `HYPOTHESES` est VOLONTAIREMENT VIDE — câbler un candidat
+par hypothèse maintenant, avant que le point 17 ait produit son premier
+calage validé (n>=200, raccourci point 14, gate de puissance), serait
+inventer une grille sans l'avoir validée sur l'entraînement (invariant
+#10). Tant qu'il reste vide, ce script est un NO-OP documenté et sûr à
+installer en cron dès aujourd'hui (`docs/DEPLOIEMENT_V2.md`, étape 8) —
+le mécanisme sera rempli hypothèse par hypothèse au fur et à mesure que
+le point 17 qualifie un candidat.
+
+1132 tests passent au total, 100% de couverture maintenue.
+
+---
+
 ## 2026-08-29 (suite 17) — Point 7 : capture du financement réel construite, premières données réelles persistées, constante pas encore remplacée
 
 Aucune capture n'existait (vérifié par recherche dans tout `src/` avant

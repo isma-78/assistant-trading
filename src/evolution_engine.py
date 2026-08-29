@@ -222,16 +222,28 @@ class ValidationVerdict:
     reason: str
 
 
-def evaluate_validation(n_trades: int, mean_r: Optional[float], min_trades: int) -> ValidationVerdict:
-    """Un seul essai, jamais recorrigé pour comparaisons multiples (un
-    seul candidat testé ici) — n >= min_trades ET espérance nette > 0,
-    protocole identique à scripts/evaluate_hypothesis_candidates.py."""
+def evaluate_validation(n_trades: int, r_values: List[float], min_trades: int, z: float) -> ValidationVerdict:
+    """Gate de puissance appliqué À CHAQUE validation (point 8,
+    29/08/2026, voir docs/DECISIONS.md — renforcement méthodologique
+    explicite, remplace l'ancien critère "espérance > 0" qui ne
+    corrigeait jamais rien). Un seul essai (un seul candidat testé ici),
+    mais désormais n >= min_trades ET BORNE BASSE (moyenne - z×erreur-
+    type) > 0 — pas la moyenne brute.
+
+    `z` doit intégrer le compteur cumulé de validations déjà consommées
+    pour cette hypothèse (voir `evolution_cycle_controller.py`) : plus
+    une hypothèse a déjà été validée par le passé, plus `z` doit être
+    grand (Bonferroni sur le nombre cumulé de "regards" pris dans le
+    temps, pas seulement sur les candidats d'un seul cycle) — ce module
+    ne calcule PAS `z` lui-même (aucun accès DB ici), il l'applique tel
+    que fourni."""
     if n_trades < min_trades:
         return ValidationVerdict(False, f"{n_trades} trades < seuil validation {min_trades}")
-    if mean_r is None or mean_r <= 0:
-        mean_str = f"{mean_r:.4f}R" if mean_r is not None else "N/A"
-        return ValidationVerdict(False, f"espérance {mean_str} <= 0")
-    return ValidationVerdict(True, f"{n_trades} trades >= {min_trades}, espérance {mean_r:.4f}R > 0")
+    lower_bound = compute_lower_bound(r_values, z)
+    if lower_bound is None or lower_bound <= 0:
+        lb_str = f"{lower_bound:.4f}R" if lower_bound is not None else "N/A"
+        return ValidationVerdict(False, f"borne basse (z={z:.4f}) {lb_str} <= 0")
+    return ValidationVerdict(True, f"{n_trades} trades >= {min_trades}, borne basse (z={z:.4f}) {lower_bound:.4f}R > 0")
 
 
 def build_rule_change_rows(
@@ -318,15 +330,23 @@ def run_evolution_cycle(
     now_iso: Optional[str] = None,
     persist: bool = True,
     notify_fn: Optional[Callable[[dict], None]] = None,
+    validation_z: float = 1.6449,
 ) -> EvolutionCycleReport:
     """Orchestrateur mécanique complet : entraînement (tous les
     candidats) -> sélection (entraînement seul) -> validation (une seule
     fois, seulement si un candidat autre que la référence a été
-    sélectionné) -> écriture rule_changes, TOUJOURS `statut='propose'`
-    (point 5, 29/08/2026 — plus d'application automatique, voir
-    docstring du module), avec notification optionnelle par ligne
-    écrite. Ne fait jamais rien de plus qu'un seul essai de validation
-    par appel."""
+    sélectionné, gate de puissance appliqué avec `validation_z`) ->
+    écriture rule_changes, TOUJOURS `statut='propose'` (point 5,
+    29/08/2026 — plus d'application automatique, voir docstring du
+    module), avec notification optionnelle par ligne écrite. Ne fait
+    jamais rien de plus qu'un seul essai de validation par appel.
+
+    `validation_z` (point 8, 29/08/2026) : défaut = Bonferroni m=1 (pas
+    de correction), pour un appel isolé/test. En production, TOUJOURS
+    fourni par `evolution_cycle_controller.py`, calculé sur le nombre
+    CUMULÉ de validations déjà consommées pour cette hypothèse — ce
+    module reste sans accès à cet historique par construction (aucun
+    accès DB au-delà de `rule_changes`)."""
     now_iso = now_iso or datetime.now(timezone.utc).isoformat()
     training_results = [train_fn(c) for c in candidates]
     selection = select_best_candidate(training_results, min_trades_train)
@@ -341,7 +361,7 @@ def run_evolution_cycle(
         return EvolutionCycleReport(hypothesis, training_results, selection, None, [])
 
     val_result = validation_fn(selected_candidate)
-    validation = evaluate_validation(val_result.n_trades, val_result.mean_r, min_trades_validation)
+    validation = evaluate_validation(val_result.n_trades, list(val_result.r_values), min_trades_validation, validation_z)
 
     if not validation.passed:
         return EvolutionCycleReport(hypothesis, training_results, selection, validation, [])
