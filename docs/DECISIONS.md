@@ -12,6 +12,61 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 23) — Point 19 : checklist de "definition of done", question ouverte sur l'application du combo H2 confirmé
+
+╔═══════════════════════════════════════════════════════════════╗
+║ RIEN N'AVANCE TANT QUE docs/DEPLOIEMENT_V2.md N'EST PAS EXÉCUTÉ ║
+╚═══════════════════════════════════════════════════════════════╝
+
+(a) 5 hypothèses tradent en démo sur 9 actifs incl. CHFJPY : **NON** —
+    code prêt, attend l'exécution du déploiement.
+(b) Cycle d'ajustement continu actif, interrupteur DB, budget plafonné :
+    mécanisme construit et testé (point 8) ; **NON actif** (dépend du
+    déploiement) ; registre `HYPOTHESES` du cron reste à remplir
+    maintenant qu'H2 a un candidat confirmé (voir question ci-dessous).
+(c) Attribution par trade produit sa première table : **OUI** (point 4,
+    54/10448 décomposés, 53 valides — sous le seuil de lisibilité n≥30
+    fixé aujourd'hui, point 5).
+(d) Spread horaire mesuré et rapporté : **OUI** (point 6, et exploité
+    aujourd'hui en une règle de blocage codée, point 1).
+(e) Les 4 calibrations H2-H5 ont rendu leur verdict, gate inclus :
+    **OUI** — H2/L2 **CONFIRMÉ POSITIF** (premier edge du projet, voir
+    entrée "suite 21"), H1/L1 clos négatif bien puissant (point 15),
+    H3/L3 et H4/L4 clos au raccourci point 14, H5/L5 clos au test
+    d'information pré-enregistré.
+(f) Test de fidélité ≥30 paires : **NON**, 0/30, bloqué sur le
+    déploiement + rafraîchissement de `data/historical/`.
+(g) Mesures A/B, Étape 3, taux d'échec de resserrement : **livrées ou
+    documentées avec compteur** — Mesure A (causes séparées en code,
+    0 mesuré), Mesure B (règle d'épisodes codée, comparaison encore
+    invalide faute de volume), Étape 3 (0/30, revérifié), stop-
+    tightening (infrastructure prête, 0 mesure).
+(h) Règle d'arrêt du point 18 écrite : **OUI**, et sa conséquence est
+    déjà tranchée — H2 la neutralise (au moins une hypothèse confirme),
+    le programme continue normalement sur H2, H1/H3/H4/H5 restent
+    closes côté recherche mais jamais retirées du démo.
+
+### Question ouverte, pas tranchée en autonomie : application du combo H2 confirmé
+
+`hypothesis2_strategy_v2.py` porte encore ses valeurs "point médian de
+grille" par défaut (`EMA_PERIOD=50, RSI_THRESHOLD=50.0, N_TF=2,
+SCORE_THRESHOLD=2/3`), PAS le combo confirmé
+(`EMA_PERIOD=20, RSI_THRESHOLD=55, N_TF=3, SCORE_THRESHOLD=1.0`). Le
+mécanisme prévu pour ce cas existe déjà et est déjà câblé
+(`hypothesis2_executor.py` appelle `apply_overrides(_h2_mod, "H2_v2",
+db_path, [...])` à chaque démarrage, lit `rule_changes` où
+`statut='applique'`) — mais je n'ai PAS écrit ces 4 lignes moi-même :
+c'est une décision de configuration réelle de ce qui tradera après
+déploiement, jamais tranchée explicitement dans le prompt reçu
+aujourd'hui (qui couvrait la PROCÉDURE de calibration, pas cette étape
+d'application). Je pose la question à Ismaël plutôt que de trancher
+seul. Si la réponse est oui, j'écris les 4 lignes `rule_changes`
+(`statut='applique'`, `constat_stat` citant les chiffres de
+confirmation ci-dessus) avant que docs/DEPLOIEMENT_V2.md soit exécuté,
+pour qu'H2 démarre directement sur le combo confirmé.
+
+---
+
 ## 2026-08-29 (suite 22) — Suite post-point 17 : exploitation du pic de spread (règle de blocage horaire codée), financement asymétrique confirmé sur 2 nuits, seuil de lisibilité de l'attribution fixé
 
 ╔═══════════════════════════════════════════════════════════════╗
