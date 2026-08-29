@@ -12,6 +12,68 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 2) — Point B : audit du filtrage par `source` (aucun LIKE/préfixe trouvé, un vrai gap trouvé et corrigé) + infrastructure de versionnement `_v2` posée
+
+### Audit demandé, lignes vérifiées
+
+Recherche exhaustive (`grep` sur tout `src/*.py` et `scripts/*.py`) de tout
+filtrage par préfixe/LIKE/sous-chaîne sur `source` :
+
+- Les **4 copies** de `_normalize_source`/`_envelope_source_key`
+  (`src/executor.py:135`, `src/metrics.py`, `src/circuit_breaker_store.py`,
+  `src/confidence_scorer.py`) utilisent une correspondance EXACTE par
+  appartenance à un ensemble (`source in _KNOWN_HYPOTHESIS_SOURCES`),
+  jamais un préfixe — **aucun risque de ré-agrégation par ce chemin**,
+  déjà protégé par `tests/test_source_normalization_consistency.py`.
+- `scripts/_gate_40_couples_bootstrap_report.py:30` et
+  `scripts/run_retrospective_backtest.py:21` utilisent
+  `source LIKE '%_backtest'` — un VRAI préfixe/suffixe, mais vérifié
+  **sans risque** : les deux groupent ensuite par `(source, actif)`
+  EXACT (`_gate_40_couples_bootstrap_report.py:36`), jamais fusionné —
+  une source `hypothesis3_v2_backtest` créerait sa propre clé distincte
+  de `hypothesis3_backtest`, jamais mélangée.
+- `src/causal_decomposition.py:348-358` (`aggregate_by_hypothesis_asset_
+  month`) groupe par `(source, actif, mois)` EXACT — sûr.
+- `src/dashboard.py:113` filtre par `source = ?` (paramétré, exact) —
+  sûr, mais n'affichera pas les futures sources `_v2` tant qu'il n'est
+  pas mis à jour (gap d'affichage, pas de corruption statistique, hors
+  périmètre de cette vérification).
+- `src/hypothesis_params.py:38` (`rule_changes.variable = ?`, paramétré,
+  exact) — sûr, chaque hypothèse garde son propre espace de clés.
+
+**Un vrai gap trouvé et corrigé** (`src/executor.py`,
+`_BACKTEST_SOURCE_BY_LIVE_SOURCE`, ligne ~162) : ce dictionnaire fait le
+lien source-live → source-backtest pour le garde-fou Option B de
+promotion vers le réel. Il ne contenait QUE les 5 sources v1 — sans
+correction, toute source `_v2` un jour promue au réel aurait été
+**silencieusement jamais gatée** (`.get(source)` → `None`, traité comme
+Station X, qui n'a structurellement pas de backtest). Pas encore un
+incident (rien n'est en réel aujourd'hui) — corrigé avant de le devenir,
+5 nouvelles entrées ajoutées.
+
+### Infrastructure de versionnement posée (pas encore utilisée)
+
+10 nouvelles constantes de source ajoutées, dans les mêmes 4 fichiers
+dupliqués par convention (`HYPOTHESIS_V2_SOURCE="hypothesis_v2"` …
+`HYPOTHESIS5_V2_BACKTEST_SOURCE="hypothesis5_v2_backtest"`), intégrées à
+`_KNOWN_HYPOTHESIS_SOURCES` dans les 4 copies. Nouveau test
+`test_known_v2_sources_map_to_themselves_and_never_to_v1` (vérifie
+explicitement qu'aucune des 4 copies ne confond une source v2 avec son
+équivalent v1). 983 tests passent, 100% de couverture maintenue.
+
+**Écart d'ordonnancement assumé par rapport à l'ordre littéral du
+prompt reçu** : l'archivage physique des fichiers de stratégie (point
+11) n'est PAS fait dans cette entrée, contrairement à l'ordre B→C
+littéral — il sera fait hypothèse par hypothèse, AU MOMENT où chaque
+nouveau module L1-L5 remplace effectivement l'ancien dans son
+executor (point C), jamais avant. Motif : archiver un fichier de
+stratégie avant d'avoir écrit son remplaçant casserait l'import de
+l'executor correspondant et laisserait le dépôt local dans un état
+committé non fonctionnel entre deux messages — contraire à la
+discipline du projet (jamais d'implémentation à moitié faite). Les
+labels `_v2` et le garde-fou de cohérence sont prêts dès maintenant ;
+leur premier usage réel aura lieu au fil du point C.
+
 ## 2026-08-29 (suite) — Point 11 exécuté : garde-fou de taille (`size_step`) et plafond par cluster (50€, toutes sources) codés, testés (100%), COMMITTÉS — pas encore déployés sur le VPS à ce stade de cette entrée
 
 Les deux seules exceptions autorisées à l'infrastructure gelée pendant

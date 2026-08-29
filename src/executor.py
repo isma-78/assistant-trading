@@ -132,10 +132,28 @@ HYPOTHESIS2_BACKTEST_SOURCE = "hypothesis2_backtest"
 HYPOTHESIS3_BACKTEST_SOURCE = "hypothesis3_backtest"
 HYPOTHESIS4_BACKTEST_SOURCE = "hypothesis4_backtest"
 HYPOTHESIS5_BACKTEST_SOURCE = "hypothesis5_backtest"
+# Refonte L1-L5 (29/08/2026, voir docs/DECISIONS.md/HYPOTHESES.md) :
+# nouveaux déclencheurs d'entrée, jamais mélangés aux trades des
+# anciennes logiques ci-dessus dans confidence_scorer/le garde-fou
+# Option B/aucune statistique — sources `_v2` distinctes, jamais
+# réutilisées pour l'ancien code (archivé, voir archive/).
+HYPOTHESIS_V2_SOURCE = "hypothesis_v2"
+HYPOTHESIS2_V2_SOURCE = "hypothesis2_v2"
+HYPOTHESIS3_V2_SOURCE = "hypothesis3_v2"
+HYPOTHESIS4_V2_SOURCE = "hypothesis4_v2"
+HYPOTHESIS5_V2_SOURCE = "hypothesis5_v2"
+HYPOTHESIS_V2_BACKTEST_SOURCE = "hypothesis_v2_backtest"
+HYPOTHESIS2_V2_BACKTEST_SOURCE = "hypothesis2_v2_backtest"
+HYPOTHESIS3_V2_BACKTEST_SOURCE = "hypothesis3_v2_backtest"
+HYPOTHESIS4_V2_BACKTEST_SOURCE = "hypothesis4_v2_backtest"
+HYPOTHESIS5_V2_BACKTEST_SOURCE = "hypothesis5_v2_backtest"
 _KNOWN_HYPOTHESIS_SOURCES = {
     HYPOTHESIS_SOURCE, HYPOTHESIS3_SOURCE, HYPOTHESIS2_SOURCE, HYPOTHESIS4_SOURCE, HYPOTHESIS5_SOURCE,
     HYPOTHESIS_BACKTEST_SOURCE, HYPOTHESIS2_BACKTEST_SOURCE, HYPOTHESIS3_BACKTEST_SOURCE,
     HYPOTHESIS4_BACKTEST_SOURCE, HYPOTHESIS5_BACKTEST_SOURCE,
+    HYPOTHESIS_V2_SOURCE, HYPOTHESIS2_V2_SOURCE, HYPOTHESIS3_V2_SOURCE, HYPOTHESIS4_V2_SOURCE, HYPOTHESIS5_V2_SOURCE,
+    HYPOTHESIS_V2_BACKTEST_SOURCE, HYPOTHESIS2_V2_BACKTEST_SOURCE, HYPOTHESIS3_V2_BACKTEST_SOURCE,
+    HYPOTHESIS4_V2_BACKTEST_SOURCE, HYPOTHESIS5_V2_BACKTEST_SOURCE,
 }
 
 # Correspondance source live -> source backtest, pour le garde-fou Option
@@ -147,6 +165,17 @@ _BACKTEST_SOURCE_BY_LIVE_SOURCE = {
     HYPOTHESIS3_SOURCE: HYPOTHESIS3_BACKTEST_SOURCE,
     HYPOTHESIS4_SOURCE: HYPOTHESIS4_BACKTEST_SOURCE,
     HYPOTHESIS5_SOURCE: HYPOTHESIS5_BACKTEST_SOURCE,
+    # Refonte L1-L5 (29/08/2026) : sans ces 5 lignes, le garde-fou Option B
+    # (promotion vers le réel) serait silencieusement inactif pour toute
+    # source `_v2` — `.get(source)` retournerait None, jamais gaté, comme
+    # Station X à tort. Trouvé en auditant le versionnement des sources
+    # (docs/DECISIONS.md, point B), pas encore un incident (rien n'est
+    # encore en réel), corrigé avant qu'il ne le devienne.
+    HYPOTHESIS_V2_SOURCE: HYPOTHESIS_V2_BACKTEST_SOURCE,
+    HYPOTHESIS2_V2_SOURCE: HYPOTHESIS2_V2_BACKTEST_SOURCE,
+    HYPOTHESIS3_V2_SOURCE: HYPOTHESIS3_V2_BACKTEST_SOURCE,
+    HYPOTHESIS4_V2_SOURCE: HYPOTHESIS4_V2_BACKTEST_SOURCE,
+    HYPOTHESIS5_V2_SOURCE: HYPOTHESIS5_V2_BACKTEST_SOURCE,
 }
 
 # Résolution de bougie utilisée pour recalculer le canal de Donchian du
