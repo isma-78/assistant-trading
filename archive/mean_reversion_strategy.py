@@ -1,4 +1,12 @@
 """
+ARCHIVÉ le 29/08/2026 — remplacé par src/hypothesis4_strategy_v2.py
+(divergence prix/RSI(14)+OBV, L4) dans le cadre de la refonte complète
+H1-H5 (voir docs/DECISIONS.md, entrée "Hypothèse #4 — refonte L4" du
+29/08/2026, et docs/HYPOTHESES.md, pré-enregistrement du 29/08/2026).
+Conservé tel quel pour l'audit — plus jamais importé par aucun
+executor. Aucune position H4 v1 n'était ouverte au moment du
+remplacement (vérifié). Ne pas modifier ce fichier.
+
 mean_reversion_strategy.py — Stratégie technique complémentaire. MODULE
 CRITIQUE (§2.11, §4.4 du CDC : même exigence de couverture que
 trend_strategy.py/ict_strategy.py — demande explicite d'Ismaël pour ce

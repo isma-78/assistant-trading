@@ -1,62 +1,46 @@
 """
-hypothesis4_executor.py — Boucle autonome de l'Hypothèse #4 (retour à la
-moyenne, Bandes de Bollinger), VALIDÉE par Ismaël le 21/08/2026 en démo
-(voir docs/HYPOTHESES.md et docs/DECISIONS.md — le plafond §3.9 "3
-hypothèses par cycle" ne bloque pas l'exécution démo sans capital réel ;
-toute future évaluation/validation de H1/H2/H3/H4 appliquera néanmoins la
-correction pour comparaisons multiples calibrée sur 4 hypothèses, jamais 3).
+hypothesis4_executor.py — Boucle autonome de l'Hypothèse #4.
 
-Détection via mean_reversion_strategy.evaluate_entry (régime MA(200) +
-toucher de bande de Bollinger(20, 2σ) opposée au régime), déclencheur
-INCHANGÉ par tout ce qui suit.
+**REFONTE L4, 29/08/2026** (voir docs/HYPOTHESES.md, pré-enregistrement
+du 29/08/2026, et docs/DECISIONS.md) : le déclencheur retour-à-la-
+moyenne/Bollinger (`mean_reversion_strategy.py`, VALIDÉE en démo le
+21/08/2026) est REMPLACÉ par la divergence prix/RSI(14)+OBV entre deux
+pivots fractals causaux (`hypothesis4_strategy_v2.evaluate_entry`).
+L'ancien module est ARCHIVÉ (voir archive/mean_reversion_strategy.py),
+jamais supprimé. Source live et backtest changent de `hypothesis4` à
+`hypothesis4_v2` (jamais mélangées, voir docs/DECISIONS.md point B) —
+**aucune position H4 v1 ouverte au moment de ce changement** (vérifié,
+voir docs/DECISIONS.md).
 
-**Couche session/multi-timeframe, 23/08/2026, révisée en fin de
-journée** (décision explicite d'Ismaël, voir
-docs/DECISIONS.md/docs/HYPOTHESES.md) : résolution M15 (au lieu de
-HOUR) + confirmation de régime croisée (`regime_confirmation.
-compute_index_regimes`/`derive_confirmed_regime`, indices US30 ET US100
-combinés) : le toucher de bande Bollinger (déclencheur INCHANGÉ) ne se
-traduit en signal persisté que si le régime confirmé actuellement EN
-CACHE (rafraîchi aux 3 ouvertures de session UTC — 0h/8h/13h — plus une
-fois au démarrage du process, voir `technical_strategy_executor.py`)
-concorde avec la direction du trigger — H4 est "contre-tendance" par
-construction (fade d'une extension court terme À L'INTÉRIEUR d'un
-régime de fond confirmé, jamais contre lui, voir docs/HYPOTHESES.md).
-La génération de signaux elle-même tourne en CONTINU, à chaque cycle,
-tous les actifs — plus aucune fenêtre de session ne la bloque (le
-premier gate du 23/08/2026 après-midi est devenu obsolète et a été
-retiré le même jour, voir docs/DECISIONS.md).
+**Structure de sortie CHANGÉE** avec ce remplacement : l'ancien
+mécanisme dédié (TP fixe unique/stop fixe/aucun trailing,
+`ManagementActionType.CLOSE_FULL_TP`) est abandonné — L4 utilise
+désormais la structure STANDARD du projet (§2.10, TP1 50% à 1R/TP2 30%
+à 2R/reliquat 20% trailing 2×ATR), comme H1-H3, décision explicite du
+pré-enregistrement ("H1-H4 gardent la structure standard"). Le signal
+retourné est un `TrendSignal` (tp1/tp2 renseignés), plus un
+`MeanReversionSignal`/`signal.take_profit` — dispatché par `technical_
+strategy_executor._generate_and_queue_signal` exactement comme
+H1/H2/H3/H5.
 
-**3e mécanisme de sortie**, distinct de Station X (TP1/TP2/TP3 + trailing
-ATR) et du Flux B/H3/H2 (aucun TP, trailing Donchian perpétuel) : TP fixe
-unique (bande médiane figée à l'entrée), stop fixe, AUCUN trailing —
-géré par la nouvelle branche `ManagementActionType.CLOSE_FULL_TP` de
-`executor._evaluate_position_management` (voir docs/DECISIONS.md,
-21/08/2026). `technical_strategy_executor._generate_and_queue_signal`
-persiste `signal.take_profit` dans la colonne dédiée `signals.take_profit`,
-jamais dans tp1/tp2 (qui resteraient sinon interprétés à tort comme un
-signal Station X par ce dispatch).
+**Aucune confirmation de régime croisée** (`require_regime_
+confirmation=False`) : contrairement à l'ancien H4 (mean-reversion
+"contre-tendance" nécessitant un régime de fond confirmé), L4 est une
+logique de retournement pur sur divergence — le pré-enregistrement du
+29/08/2026 ne spécifie aucun filtre de régime, aucun n'est ajouté ici
+(invariant #10 : pas de variable hors pré-enregistrement).
 
 Process indépendant, compte Capital.com démo dédié ("hypothèse 4").
-**Identifiants Capital.com dédiés non fournis à ce jour** — Ismaël les
-donnera directement (jamais dans la conversation, même principe que
-H2/H3, voir CLAUDE.md sur la manipulation des secrets). `run_hypothesis4_
-loop` échoue net (ConfigError, fail-safe, invariant #7) tant que
-`CAPITAL_API_KEY_HYPOTHESIS4`/`CAPITAL_IDENTIFIER_HYPOTHESIS4`/
-`CAPITAL_API_PASSWORD_HYPOTHESIS4`/`CAPITAL_ACCOUNT_ID_HYPOTHESIS4` ne
-sont pas renseignés — jamais un repli silencieux vers un autre jeu
-d'identifiants. **Ce module n'est PAS démarré sur le VPS** (pas ajouté à
-scripts/process_watchdog.py — l'ajouter aurait déclenché une fausse
-alerte, même précédent que hypothesis2_executor avant ses identifiants).
+Identifiants et statut de déploiement VPS inchangés par ce chantier —
+voir point A (déploiement suspendu au déblocage du garde-fou de taille).
 
-8 actifs (les mêmes que les Hypothèses #1, #2 et #3) — voir
-docs/HYPOTHESES.md.
+9 actifs (8 existants + CHFJPY) — voir docs/HYPOTHESES.md.
 """
 
-import src.mean_reversion_strategy as _h4_mod
-from src.executor import HYPOTHESIS4_SOURCE
-from src.hypothesis_params import apply_bollinger_std_override, apply_overrides, get_resolution_override
-from src.mean_reversion_strategy import evaluate_entry
+import src.hypothesis4_strategy_v2 as _h4_mod
+from src.executor import HYPOTHESIS4_V2_SOURCE
+from src.hypothesis4_strategy_v2 import evaluate_entry
+from src.hypothesis_params import apply_overrides, get_resolution_override
 from src.technical_strategy_executor import run_technical_strategy_loop
 
 HYPOTHESIS4_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD", "CHFJPY"]
@@ -68,36 +52,30 @@ _HYPOTHESIS_LABEL = "Hypothèse #4"
 
 def _describe_signal(hypothesis_label: str, asset: str, signal) -> str:
     return (
-        f"{hypothesis_label} — {asset} : retour à la moyenne (Bandes de Bollinger 20, 2σ) "
-        f"en régime {signal.direction} (filtre MA200), entrée={signal.entry_price}, "
-        f"stop={signal.stop_price}, TP fixe={signal.take_profit} (docs/HYPOTHESES.md)"
+        f"{hypothesis_label} — {asset} : divergence prix/RSI(14)+OBV (L4) "
+        f"{signal.direction}, entrée={signal.entry_price}, stop={signal.stop_price}, "
+        f"TP1={signal.tp1}, TP2={signal.tp2} (docs/HYPOTHESES.md)"
     )
 
 
 def run_hypothesis4_loop(config, db_path: str, interval_seconds: int = 60, startup_offset_seconds: int = 40) -> None:
     """Délègue à technical_strategy_executor.run_technical_strategy_loop
     avec les paramètres propres à l'Hypothèse #4 : compte et identifiants
-    Capital.com dédiés (config.capital_*_hypothesis4 — voir docstring du
-    module pour l'état actuel de ce prérequis).
+    Capital.com dédiés (config.capital_*_hypothesis4).
 
     `startup_offset_seconds=40` (24/08/2026, voir docs/DECISIONS.md) :
-    échelonnement des 6 process de production sur la même IP, voir
-    docstring de `technical_strategy_executor.run_technical_strategy_loop`.
+    échelonnement des 6 process de production sur la même IP.
 
-    **Overrides du cycle d'évolution** (25/08/2026, voir
-    docs/HYPOTHESES.md "cycle 2") : mêmes principes que H3 (voir sa
-    docstring) — `STOP_WIDTH_MULTIPLIER` via `apply_overrides`,
-    `BOLLINGER_STD_MULTIPLIER` via son cas particulier dédié (paramètre
-    par défaut lié à la définition de `compute_bollinger_bands`, jamais
-    un simple setattr, voir docstring de
-    `hypothesis_params.apply_bollinger_std_override`)."""
-    apply_overrides(_h4_mod, "H4", db_path, ["STOP_WIDTH_MULTIPLIER"])
-    apply_bollinger_std_override("H4", db_path, _h4_mod)
-    resolution = get_resolution_override(db_path, "H4", "entree", "MINUTE_15")
-    confirming_resolution = get_resolution_override(db_path, "H4", "confirmation", resolution)
+    **Overrides du cycle d'évolution** : clé `"H4_v2"`, jamais `"H4"`
+    (n'hérite d'aucun paramètre déjà tuné pour l'ancienne logique v1,
+    voir docs/DECISIONS.md point B) — variables ajustées du
+    pré-enregistrement (`PIVOT_FRACTAL_N`, `MAX_PIVOT_DISTANCE_BARS`,
+    `STOP_ATR_MULT`)."""
+    apply_overrides(_h4_mod, "H4_v2", db_path, ["PIVOT_FRACTAL_N", "MAX_PIVOT_DISTANCE_BARS", "STOP_ATR_MULT"])
+    resolution = get_resolution_override(db_path, "H4_v2", "entree", "MINUTE_15")
     run_technical_strategy_loop(
         config, db_path,
-        source=HYPOTHESIS4_SOURCE,
+        source=HYPOTHESIS4_V2_SOURCE,
         assets=HYPOTHESIS4_ASSETS,
         resolution=resolution,
         entry_fn=evaluate_entry,
@@ -110,9 +88,8 @@ def run_hypothesis4_loop(config, db_path: str, interval_seconds: int = 60, start
         hypothesis_label=_HYPOTHESIS_LABEL,
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
-        require_regime_confirmation=True,
+        require_regime_confirmation=False,
         startup_offset_seconds=startup_offset_seconds,
-        confirming_resolution=confirming_resolution,
     )
 
 

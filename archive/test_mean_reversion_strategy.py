@@ -16,7 +16,7 @@ import statistics
 import pytest
 
 from src.market_data import Candle
-from src.mean_reversion_strategy import (
+from archive.mean_reversion_strategy import (
     BOLLINGER_PERIOD,
     BOLLINGER_STD_MULTIPLIER,
     MA_PERIOD,
@@ -137,7 +137,7 @@ def test_evaluate_entry_no_bands_returns_none():
     from unittest.mock import patch
 
     candles = _flat_candles([100.0] * (MA_PERIOD - 1) + [200.0])
-    with patch("src.mean_reversion_strategy.compute_bollinger_bands", return_value=None):
+    with patch("archive.mean_reversion_strategy.compute_bollinger_bands", return_value=None):
         assert evaluate_entry("EURUSD", candles) is None
 
 
@@ -282,7 +282,7 @@ def test_squeeze_breakout_insufficient_widths_returns_none():
     from unittest.mock import patch
 
     candles = _compressed_prewindow(150.0) + [_candle(200.0)]
-    with patch("src.mean_reversion_strategy._rolling_bollinger_bandwidths", return_value=[0.0] * (SQUEEZE_LOOKBACK_PERIODS - 1)):
+    with patch("archive.mean_reversion_strategy._rolling_bollinger_bandwidths", return_value=[0.0] * (SQUEEZE_LOOKBACK_PERIODS - 1)):
         assert evaluate_entry_squeeze_breakout("EURUSD", candles) is None
 
 
@@ -295,7 +295,7 @@ def test_squeeze_breakout_bands_none_returns_none():
     from unittest.mock import patch
 
     candles = _compressed_prewindow(150.0) + [_candle(200.0)]
-    with patch("src.mean_reversion_strategy.compute_bollinger_bands", return_value=None):
+    with patch("archive.mean_reversion_strategy.compute_bollinger_bands", return_value=None):
         assert evaluate_entry_squeeze_breakout("EURUSD", candles) is None
 
 
@@ -346,7 +346,7 @@ def test_squeeze_breakout_zero_risk_returns_none():
     from unittest.mock import patch
 
     candles = _compressed_prewindow(150.0) + [_candle(200.0)]
-    with patch("src.mean_reversion_strategy.compute_bollinger_bands", return_value=(100.0, 200.0, 50.0)):
+    with patch("archive.mean_reversion_strategy.compute_bollinger_bands", return_value=(100.0, 200.0, 50.0)):
         assert evaluate_entry_squeeze_breakout("EURUSD", candles) is None
 
 

@@ -13,7 +13,8 @@ class _FakeSignal:
     direction: str
     entry_price: float
     stop_price: float
-    take_profit: float
+    tp1: float
+    tp2: float
 
 
 def test_hypothesis4_assets_matches_hypothesis1_2_and_3():
@@ -23,11 +24,13 @@ def test_hypothesis4_assets_matches_hypothesis1_2_and_3():
     }
 
 
-def test_describe_signal_mentions_bollinger_and_take_profit():
-    text = _describe_signal("Hypothèse #4", "GOLD", _FakeSignal("long", 2400.0, 2380.0, 2410.0))
-    assert "Bollinger" in text
+def test_describe_signal_mentions_divergence_and_tp_levels():
+    # Refonte L4 (29/08/2026, voir docs/DECISIONS.md) : Bollinger/take_profit
+    # remplacés par la divergence RSI/OBV et la structure TP1/TP2 standard.
+    text = _describe_signal("Hypothèse #4", "GOLD", _FakeSignal("long", 2400.0, 2380.0, 2410.0, 2420.0))
+    assert "divergence" in text.lower()
     assert "GOLD" in text
-    assert "2410.0" in text  # take profit mentionné, pas seulement entrée/stop
+    assert "2410.0" in text and "2420.0" in text  # TP1/TP2 mentionnés
 
 
 def test_run_hypothesis4_loop_forwards_h4_credentials_and_resolution():
@@ -42,10 +45,10 @@ def test_run_hypothesis4_loop_forwards_h4_credentials_and_resolution():
 
     mock_loop.assert_called_once()
     _, kwargs = mock_loop.call_args
-    assert kwargs["source"] == "hypothesis4"
+    assert kwargs["source"] == "hypothesis4_v2"  # refonte L4, 29/08/2026 (voir docs/DECISIONS.md)
     assert kwargs["resolution"] == "MINUTE_15"
     assert "session_gated" not in kwargs  # paramètre retiré, voir docs/DECISIONS.md
-    assert kwargs["require_regime_confirmation"] is True
+    assert kwargs["require_regime_confirmation"] is False  # L4 n'a aucun filtre de régime (pré-enregistrement)
     assert kwargs["api_key"] == "key4"
     assert kwargs["identifier"] == "id4"
     assert kwargs["password"] == "pwd4"
