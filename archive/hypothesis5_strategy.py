@@ -1,4 +1,14 @@
 """
+ARCHIVÉ le 29/08/2026 — remplacé par src/hypothesis5_strategy_v2.py
+(compression -> expansion sur largeur de Bollinger, L5) dans le cadre
+de la refonte complète H1-H5 (voir docs/DECISIONS.md, entrée
+"Hypothèse #5 — refonte L5" du 29/08/2026, et docs/HYPOTHESES.md,
+pré-enregistrement du 29/08/2026). Conservé tel quel pour l'audit —
+plus jamais importé par aucun executor. Aucune position H5 v1 n'était
+ouverte au moment du remplacement (vérifié), malgré un process
+activement déployé sur le VPS depuis le 23/08/2026. Ne pas modifier ce
+fichier.
+
 hypothesis5_strategy.py — Hypothèse #5 (régime structurel + momentum
 RSI), V3 depuis le 24/08/2026 (voir docs/HYPOTHESES.md/docs/DECISIONS.md
 — REMPLACE la version "confluence ICT + RSI" validée le 23/08/2026,

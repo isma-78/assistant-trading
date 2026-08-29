@@ -24,19 +24,13 @@ def test_hypothesis5_assets_matches_other_hypotheses():
     }
 
 
-def test_describe_signal_mentions_structural_regime_rsi_and_tp_levels():
-    # V3 (24/08/2026) : plus de confluence ICT (Fibonacci/FVG) — voir
-    # docs/DECISIONS.md/docs/HYPOTHESES.md.
-    text = _describe_signal("Hypothèse #5", "GOLD", _FakeSignal("long", 2400.0, 2380.0, 2420.0, 2440.0))
-    assert "BOS/CHoCH" in text
-    assert "RSI(14)" in text
-    assert "Fibonacci" not in text
-    assert "FVG" not in text
+def test_describe_signal_mentions_compression_expansion():
+    # Refonte L5 (29/08/2026, voir docs/DECISIONS.md) : régime structurel
+    # + RSI(14)/50 remplacés par compression -> expansion (Bollinger).
+    text = _describe_signal("Hypothèse #5", "GOLD", _FakeSignal("long", 2400.0, 2380.0, None, None))
+    assert "compression" in text.lower()
     assert "GOLD" in text
-    assert "2420" in text
-    assert "2440" in text
-    assert "1R" in text
-    assert "2R" in text
+    assert "trailing" in text.lower()
 
 
 def test_run_hypothesis5_loop_forwards_h5_credentials_and_resolution():
@@ -51,7 +45,7 @@ def test_run_hypothesis5_loop_forwards_h5_credentials_and_resolution():
 
     mock_loop.assert_called_once()
     _, kwargs = mock_loop.call_args
-    assert kwargs["source"] == "hypothesis5"
+    assert kwargs["source"] == "hypothesis5_v2"  # refonte L5, 29/08/2026 (voir docs/DECISIONS.md)
     assert kwargs["resolution"] == "MINUTE_15"
     assert "session_gated" not in kwargs  # paramètre retiré, voir docs/DECISIONS.md
     assert kwargs.get("require_regime_confirmation", False) is False

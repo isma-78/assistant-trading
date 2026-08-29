@@ -1,52 +1,44 @@
 """
-hypothesis5_executor.py — Boucle autonome de l'Hypothèse #5 (régime
-structurel + momentum RSI, sortie progressive §2.10), V3 depuis le
-24/08/2026 (voir docs/HYPOTHESES.md/docs/DECISIONS.md — REMPLACE la
-version "confluence ICT + RSI" validée le 23/08/2026, retirée après 0
-signal en ~26h de production). Détection via hypothesis5_strategy.
-evaluate_entry (délègue le régime structurel ET LA JAMBE D'IMPULSION,
-SANS confluence Fibonacci/FVG, à ict_strategy.compute_structural_entry,
-exige EN PLUS un franchissement du RSI(14) à 50 dans le même sens sur la
-même bougie, ajoute TP1(1R)/TP2(2R)) — voir la docstring de
-hypothesis5_strategy.py pour le détail complet de cette révision.
+hypothesis5_executor.py — Boucle autonome de l'Hypothèse #5.
 
-**Couche session/multi-timeframe, 23/08/2026** : résolution M15 (au lieu
-de HOUR — le RSI(14)/MA200 internes à `hypothesis5_strategy`/
-`ict_strategy` couvrent donc désormais ~3-4h/~50h de bougies au lieu de
-~14h/~200h, conséquence mécanique du changement de résolution, pas un
-nouveau paramètre). La fenêtre de session ne gate PLUS la génération de
-signaux depuis la révision du 23/08/2026 fin de journée (voir
-docs/DECISIONS.md/docs/HYPOTHESES.md — l'ancien gate + l'exemption
-crypto associée sont devenus obsolètes et ont été retirés) : évaluation
-continue, tous les actifs, à chaque cycle. **Aucune confirmation de
-régime croisée** (option C — H5 déjà couverte par son propre régime
-structurel BOS/CHoCH, voir docs/HYPOTHESES.md).
+**REFONTE L5, 29/08/2026** (voir docs/HYPOTHESES.md, pré-enregistrement
+du 29/08/2026, et docs/DECISIONS.md) : le déclencheur V3 (régime
+structurel + RSI(14)/50, `hypothesis5_strategy.py`) est REMPLACÉ par
+compression → expansion sur largeur de Bollinger normalisée
+(`hypothesis5_strategy_v2.evaluate_entry`). L'ancien module est
+ARCHIVÉ (voir archive/hypothesis5_strategy.py). Source live et backtest
+changent de `hypothesis5` à `hypothesis5_v2` — **aucune position H5 v1
+ouverte au moment de ce changement** (vérifié, voir docs/DECISIONS.md),
+malgré un process activement déployé sur le VPS depuis le 23/08/2026.
 
-**Dépassement du budget §2.11 EXPLICITEMENT ASSUMÉ par Ismaël** : H5
-était déjà à 3/3 paramètres (config RSI, TP1 R, TP2 R) — le changement
-de résolution M15 porte le total à 4/3, au-delà du plafond 2-3.
-Maintenu en connaissance de cause après mise en garde (voir
-docs/DECISIONS.md, même précédent que le dépassement déjà accepté du
-plafond §3.9 pour H4/H5) — pas un oubli.
+**Sortie CHANGÉE en 100% trailing** (Donchian(20), FIGÉ) — décision
+explicite du pré-enregistrement ("si un edge existe, il vient de
+l'asymétrie du payoff, que le split détruirait") : l'ancien mécanisme
+TP1(1R)/TP2(2R)/reliquat trailing (§2.10) est abandonné pour L5
+spécifiquement (H1-H4 le gardent). `hypothesis5_strategy_v2.
+evaluate_entry` retourne un `TrendSignal` avec `tp1=tp2=None`.
+
+**Aucune confirmation de régime croisée** — L5 n'a pas de notion de
+régime externe à confirmer (compression est une propriété de l'actif
+lui-même).
+
+**Test d'information et taux d'échec de resserrement de stop
+(points D et E du prompt du 29/08/2026)** : voir docs/DECISIONS.md pour
+le résultat et le statut du garde-fou de retry — prérequis explicite
+avant tout déploiement futur de H5 (100% trailing = la plus exposée au
+bug de resserrement déjà mesuré, 5563 échecs).
 
 Process indépendant, compte Capital.com démo dédié ("hypothèse 5").
-Identifiants (`CAPITAL_API_KEY_HYPOTHESIS5`/`CAPITAL_IDENTIFIER_
-HYPOTHESIS5`/`CAPITAL_API_PASSWORD_HYPOTHESIS5`/`CAPITAL_ACCOUNT_ID_
-HYPOTHESIS5`) fournis par Ismaël le 23/08/2026 (directement dans le
-`.env`, jamais dans la conversation) — **déployé sur le VPS** (tmux
-`hypothesis5_executor`), ajouté à `scripts/process_watchdog.py`. Voir
-docs/DECISIONS.md pour la vérification en direct effectuée avant/après
-déploiement. `run_hypothesis5_loop` échoue toujours net (ConfigError,
-fail-safe, invariant #7) si ces identifiants venaient à manquer — jamais
-un repli silencieux vers un autre jeu d'identifiants.
+Identifiants et statut de déploiement VPS inchangés par ce chantier —
+voir point A (déploiement suspendu au déblocage du garde-fou de taille,
+ET aux points D/E ci-dessus spécifiquement pour H5).
 
-8 actifs (les mêmes que les Hypothèses #1, #2, #3 et #4) — voir
-docs/HYPOTHESES.md.
+9 actifs (8 existants + CHFJPY) — voir docs/HYPOTHESES.md.
 """
 
-import src.hypothesis5_strategy as _h5_mod
-from src.executor import HYPOTHESIS5_SOURCE
-from src.hypothesis5_strategy import evaluate_entry
+import src.hypothesis5_strategy_v2 as _h5_mod
+from src.executor import HYPOTHESIS5_V2_SOURCE
+from src.hypothesis5_strategy_v2 import evaluate_entry
 from src.hypothesis_params import apply_overrides, get_resolution_override
 from src.technical_strategy_executor import run_technical_strategy_loop
 
@@ -59,35 +51,29 @@ _HYPOTHESIS_LABEL = "Hypothèse #5"
 
 def _describe_signal(hypothesis_label: str, asset: str, signal) -> str:
     return (
-        f"{hypothesis_label} — {asset} : régime structurel (BOS/CHoCH) ET franchissement "
-        f"RSI(14)/50 dans le même sens (V3, 24/08/2026 — plus de confluence ICT, voir "
-        f"docs/HYPOTHESES.md), direction {signal.direction}, entrée={signal.entry_price}, "
-        f"stop={signal.stop_price}, TP1={signal.tp1} (1R), TP2={signal.tp2} (2R), "
-        f"reliquat 20% sous trailing ATR"
+        f"{hypothesis_label} — {asset} : compression -> expansion (L5) {signal.direction}, "
+        f"entrée={signal.entry_price}, stop={signal.stop_price}, sortie 100% trailing "
+        f"(docs/HYPOTHESES.md)"
     )
 
 
 def run_hypothesis5_loop(config, db_path: str, interval_seconds: int = 60, startup_offset_seconds: int = 50) -> None:
     """Délègue à technical_strategy_executor.run_technical_strategy_loop
     avec les paramètres propres à l'Hypothèse #5 : compte et identifiants
-    Capital.com dédiés (config.capital_*_hypothesis5 — voir docstring du
-    module pour l'état actuel de ce prérequis).
+    Capital.com dédiés (config.capital_*_hypothesis5).
 
     `startup_offset_seconds=50` (24/08/2026, voir docs/DECISIONS.md) :
-    échelonnement des 6 process de production sur la même IP, voir
-    docstring de `technical_strategy_executor.run_technical_strategy_loop`.
+    échelonnement des 6 process de production sur la même IP.
 
-    **Overrides du cycle d'évolution** (25/08/2026, voir
-    docs/HYPOTHESES.md "cycle 2") : mêmes principes que H3 (voir sa
-    docstring) — RSI_PERIOD/TP1/TP2 via `apply_overrides`, résolution via
-    `get_resolution_override`. H5 n'a pas de confirmation croisée
-    (option C du 23/08/2026), aucun paramètre `confirming_resolution`
-    ici."""
-    apply_overrides(_h5_mod, "H5", db_path, ["RSI_PERIOD", "TP1_R_MULTIPLE", "TP2_R_MULTIPLE"])
-    resolution = get_resolution_override(db_path, "H5", "entree", "MINUTE_15")
+    **Overrides du cycle d'évolution** : clé `"H5_v2"`, jamais `"H5"`
+    (n'hérite d'aucun paramètre déjà tuné pour l'ancienne logique v1) —
+    variables ajustées du pré-enregistrement (`COMPRESSION_PERCENTILE`,
+    `COMPRESSION_DURATION`, `STOP_BUFFER_PCT`)."""
+    apply_overrides(_h5_mod, "H5_v2", db_path, ["COMPRESSION_PERCENTILE", "COMPRESSION_DURATION", "STOP_BUFFER_PCT"])
+    resolution = get_resolution_override(db_path, "H5_v2", "entree", "MINUTE_15")
     run_technical_strategy_loop(
         config, db_path,
-        source=HYPOTHESIS5_SOURCE,
+        source=HYPOTHESIS5_V2_SOURCE,
         assets=HYPOTHESIS5_ASSETS,
         resolution=resolution,
         entry_fn=evaluate_entry,

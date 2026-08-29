@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.hypothesis5_strategy import (
+from archive.hypothesis5_strategy import (
     RSI_PERIOD,
     RSI_THRESHOLD,
     TP1_R_MULTIPLE,
@@ -149,7 +149,7 @@ def test_r_multiples_are_1_and_2():
 # `ict_strategy.compute_structural_entry`.
 
 def test_evaluate_entry_no_structural_signal_returns_none():
-    with patch("src.hypothesis5_strategy._compute_structural_entry", return_value=None):
+    with patch("archive.hypothesis5_strategy._compute_structural_entry", return_value=None):
         assert evaluate_entry("EURUSD", _closes(_RSI_CROSS_UP_CLOSES)) is None
 
 
@@ -183,7 +183,7 @@ def test_evaluate_entry_structural_signal_present_but_no_rsi_cross_returns_none(
 
 def test_evaluate_entry_both_conditions_met_long():
     structural_signal = TrendSignal(asset="EURUSD", direction="long", entry_price=105.0, stop_price=90.0, confidence=1.0)
-    with patch("src.hypothesis5_strategy._compute_structural_entry", return_value=structural_signal):
+    with patch("archive.hypothesis5_strategy._compute_structural_entry", return_value=structural_signal):
         signal = evaluate_entry("EURUSD", _closes(_RSI_CROSS_UP_CLOSES))
     assert signal is not None
     assert isinstance(signal, Hypothesis5Signal)
@@ -199,7 +199,7 @@ def test_evaluate_entry_both_conditions_met_long():
 
 def test_evaluate_entry_both_conditions_met_short():
     structural_signal = TrendSignal(asset="EURUSD", direction="short", entry_price=95.0, stop_price=110.0, confidence=1.0)
-    with patch("src.hypothesis5_strategy._compute_structural_entry", return_value=structural_signal):
+    with patch("archive.hypothesis5_strategy._compute_structural_entry", return_value=structural_signal):
         signal = evaluate_entry("EURUSD", _closes(_RSI_CROSS_DOWN_CLOSES))
     assert signal is not None
     assert signal.direction == "short"
@@ -214,7 +214,7 @@ def test_evaluate_entry_structural_signal_present_but_rsi_direction_mismatch_ret
     # RSI construite pour un franchissement long, jamais short) -> aucune
     # des deux conditions n'est réunie dans le même sens, pas de signal.
     structural_signal = TrendSignal(asset="EURUSD", direction="short", entry_price=95.0, stop_price=110.0, confidence=1.0)
-    with patch("src.hypothesis5_strategy._compute_structural_entry", return_value=structural_signal):
+    with patch("archive.hypothesis5_strategy._compute_structural_entry", return_value=structural_signal):
         signal = evaluate_entry("EURUSD", _closes(_RSI_CROSS_UP_CLOSES))
     assert signal is None
 
@@ -233,7 +233,7 @@ def test_evaluate_entry_internal_error_is_fail_safe():
         confidence: float = 1.0
 
     bad_signal = _BadDirectionSignal(asset="EURUSD", direction="sideways", entry_price=100.0, stop_price=90.0)
-    with patch("src.hypothesis5_strategy._compute_structural_entry", return_value=bad_signal):
+    with patch("archive.hypothesis5_strategy._compute_structural_entry", return_value=bad_signal):
         assert evaluate_entry("EURUSD", _closes(_RSI_CROSS_UP_CLOSES)) is None
 
 
@@ -249,7 +249,7 @@ def test_evaluate_entry_no_longer_requires_fibonacci_fvg_confluence():
     # returns_none), mais compute_structural_entry (donc H5 V3) ne la
     # vérifie jamais.
     structural_signal = TrendSignal(asset="EURUSD", direction="long", entry_price=145.0, stop_price=90.0, confidence=1.0)
-    with patch("src.hypothesis5_strategy._compute_structural_entry", return_value=structural_signal):
+    with patch("archive.hypothesis5_strategy._compute_structural_entry", return_value=structural_signal):
         signal = evaluate_entry("EURUSD", _closes(_RSI_CROSS_UP_CLOSES))
     assert signal is not None
     assert signal.direction == "long"
