@@ -12,6 +12,93 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 8) — Points D et E : test d'information H1 fait (r non discernable de zéro) ; test H5 BLOQUÉ — découverte qu'aucun des 8 actifs n'a de M15 avant 2024 ; retry adaptatif du point E déjà codé (voir commit précédent) — incident de manipulation de données signalé et corrigé
+
+### Point D — Test d'information H1 : fait, résultat négatif (informatif seulement)
+
+`scripts/_info_tests.py` (VPS, `~/costfix_staging`, lecture seule sur
+l'historique, aucune écriture DB) : corrélation entre l'ADX(14) au
+moment du signal L1 et le R-multiple réalisé, sur la fenêtre de
+découverte (2019-01-01→2022-12-31), 9 actifs (8 + CHFJPY, résolution
+HOUR — profondeur confirmée suffisante, voir entrée du 28/08/2026).
+
+**n = 3163, r = 0,0337, seuil de discernabilité (2×SE, Fisher-z) =
+0,0356 → |r| < seuil : NON discernable de zéro.** Conformément au
+pré-enregistrement, ce résultat est **informatif seulement** — il ne
+bloque ni ne conditionne la suite pour H1 (contrairement à H5,
+ci-dessous). Aucun degré de liberté consommé (aucun seuil, aucune
+règle de décision testée).
+
+### Point D — Test d'information H5 : IMPOSSIBLE à exécuter tel que pré-enregistré — découverte d'une contrainte de données majeure
+
+En tentant le même test pour H5 (corrélation sens de cassure/sens du
+mouvement final, horizon 20 bougies M15) sur la fenêtre de découverte
+2019-2022 : **0 signal sur les 8 actifs — historique M15 insuffisant
+partout.** Vérifié : le fichier `GOLD_MINUTE_15.json` (comme les 7
+autres) ne remontait qu'au **2024-06-14**, jamais 2019.
+
+**Vérification approfondie (re-téléchargement GOLD MINUTE_15 avec une
+profondeur maximale)** : la limite RÉELLE du compte démo pour GOLD/M15
+est le **2024-01-01** (`error.prices.not-found` atteint au
+2023-12-14) — un peu plus profond que ce qui était téléchargé, mais
+**toujours à des années du 2019-01-01 pré-enregistré**. Les 7 autres
+actifs n'ont pas été re-sondés à cette profondeur maximale (voir
+incident ci-dessous) mais partagent la même limite pratique (aucun
+n'a de M15 avant 2024-06-14 dans les fichiers actuels).
+
+**Conséquence, à trancher par Ismaël, pas décidée seule ici** : la
+fenêtre de découverte 2019-01-01→2022-12-31 du pré-enregistrement est
+**matériellement IMPOSSIBLE** pour les 4 hypothèses en MINUTE_15
+(H2, H3, H4, H5) — seule H1 (résolution HOUR, profondeur confirmée
+jusqu'à 2017) peut suivre le pré-enregistrement tel qu'écrit. Le test
+d'information H5 reste donc **non exécuté**, pas "négatif" — une
+distinction à ne pas confondre. Points F/G/H (calibration/gate/
+confirmation) sont dans la même situation pour H2-H5 : **suspendus**
+jusqu'à décision (fenêtre de découverte alternative alignée sur la
+donnée réellement disponible, ou attente d'accumulation de donnée
+forward suffisante — aucun choix fait unilatéralement ici, l'écart au
+pré-enregistrement est trop significatif pour une décision d'ingénieur
+seule).
+
+### Incident signalé : régression puis restauration d'un fichier de données de production pendant la vérification
+
+En sondant la profondeur réelle de `GOLD_MINUTE_15.json` (re-lancement
+de `download_historical_data.py` avec une fenêtre large), le
+téléchargement a **planté deux fois** sur un `ReadTimeout` réseau
+transitoire (le script ne reprend jamais de manière incrémentale — voir
+sa docstring — il retélécharge tout depuis le début à chaque
+lancement). Conséquence non anticipée : chaque plantage a laissé le
+fichier de production avec **MOINS d'historique qu'avant** (jusqu'à
+2026-04-16→2026-08-28 seulement au pire moment, contre 2024-06-14
+d'origine) — une dégradation réelle, quoique temporaire, d'un fichier
+de données déjà utilisé ailleurs. **Détecté et corrigé dans la foulée**
+(boucle de nouvelles tentatives jusqu'à succès complet) : le fichier
+final couvre désormais 2024-01-01→2026-08-28 (62 946 bougies),
+**strictement meilleur qu'avant l'incident**, confirmé en relisant le
+fichier après coup. Aucune autre donnée de production touchée. Signalé
+ici par transparence, conformément à la discipline du projet — pas
+seulement parce que le résultat final est bon.
+
+### Point E — Retry adaptatif codé (voir commit précédent), mesure du TAUX d'échec non reconstituible rétroactivement
+
+Le code du retry adaptatif (`capital_client.update_position_stop`,
+utilise la valeur limite divulguée par le broker, un seul réessai,
+jamais un élargissement — invariant #5) est déjà committé (voir entrée
+précédente). **Limite honnête sur la mesure demandée** : "le taux
+d'échec par actif ET par distance de stop demandée" ne peut pas être
+reconstitué rétroactivement — les logs de production capturent
+l'ÉCHEC (avec la valeur limite du broker) mais jamais la valeur de
+stop RÉELLEMENT demandée au moment de l'appel (aucune ligne de log
+n'existe entre le calcul du nouveau stop et l'appel réseau qui échoue).
+Seuls les **comptages bruts par actif et par hypothèse** (déjà établis
+le 28/08/2026 : H3/BTCUSD 3023, H3/ETHUSD 1855, H1/USDJPY 312, etc.)
+restent disponibles — pas un taux (le nombre total de tentatives
+RÉUSSIES n'est pas non plus journalisé distinctement). **Ce gap
+lui-même justifie le retry codé** : son `logger.warning` journalise
+désormais explicitement la valeur divulguée par le broker à chaque
+réessai — la prochaine mesure de ce type sera possible une fois
+déployé.
+
 ## 2026-08-29 (suite 7) — Point C TERMINÉ : Hypothèse #5, L5 (compression → expansion) implémentée, testée (100%) — les 5 nouvelles logiques (L1-L5) sont désormais toutes codées, testées et câblées
 
 `src/hypothesis5_strategy_v2.py` (nouveau, 100% couvert, 15 tests) :
