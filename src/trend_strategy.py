@@ -1,4 +1,13 @@
 """
+`evaluate_entry`/`compute_regime` DÉPRÉCIÉES pour le live depuis le
+29/08/2026 — remplacées par `hypothesis1_strategy_v2.evaluate_entry`
+(régime ADX, L1, voir docs/HYPOTHESES.md/docs/DECISIONS.md). Ce fichier
+N'EST PAS archivé : `TrendSignal`, `compute_tp_levels`,
+`compute_donchian_channel`, `compute_trailing_stop_channel` restent des
+utilitaires partagés activement par TOUTES les hypothèses (H1-H5).
+Seules `evaluate_entry`/`compute_regime` (le déclencheur MA200+Donchian
+d'origine) ne sont plus importées par aucun executor.
+
 trend_strategy.py — Stratégie technique complémentaire. MODULE CRITIQUE
 (§2.11, §4.4 du CDC : module `trend_strategy`, 0% LLM — même exigence de
 couverture que risk_engine.py, demande explicite d'Ismaël pour ce
