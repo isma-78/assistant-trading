@@ -1,4 +1,16 @@
 """
+ARCHIVÉ le 29/08/2026 — remplacé par src/hypothesis3_strategy_v2.py
+(pullback en tendance sur régime structurel réutilisé, L3) dans le
+cadre de la refonte complète H1-H5 (voir docs/DECISIONS.md, entrée
+"Hypothèse #3 — refonte L3" du 29/08/2026, et docs/HYPOTHESES.md,
+pré-enregistrement du 29/08/2026). Conservé tel quel pour l'audit —
+plus jamais importé par aucun executor. `trend_strategy.py` (dont ce
+module dépendait) N'EST PAS archivé : ses utilitaires partagés
+(TrendSignal/compute_tp_levels/etc.) restent actifs. 6 positions H3 v1
+étaient réellement ouvertes au moment du remplacement (voir
+docs/DECISIONS.md, avertissement de transition dans
+hypothesis3_executor.py). Ne pas modifier ce fichier.
+
 hypothesis3_strategy.py — Sortie à prise de profit pour l'Hypothèse #3,
 décision EXPLICITE d'Ismaël le 23/08/2026 (voir docs/DECISIONS.md) : le
 trailing Donchian(20) pur d'origine est remplacé par le mécanisme §2.10

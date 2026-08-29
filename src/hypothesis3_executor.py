@@ -1,55 +1,46 @@
 """
-hypothesis3_executor.py — Boucle autonome de l'Hypothèse #3
-(docs/HYPOTHESES.md, 20/08/2026 : « identique à l'Hypothèse #1, seule
-la résolution de bougie change »). MA(200) + Donchian(20) — EXACTEMENT
-la même logique d'ENTRÉE que le Flux B (trend_strategy.evaluate_entry,
-réutilisée telle quelle, jamais redupliquée), sur des bougies M15
-(`MINUTE_15`) au lieu de H1.
+hypothesis3_executor.py — Boucle autonome de l'Hypothèse #3.
 
-**Sortie basculée le 23/08/2026** (décision explicite d'Ismaël, voir
-docs/DECISIONS.md — va délibérément à l'encontre de l'isolation
-"timeframe seule" documentée le 20/08/2026) : `hypothesis3_strategy.
-evaluate_entry` (pas `trend_strategy.evaluate_entry` directement) ajoute
-désormais TP1(1R)/TP2(2R) au signal, déclenchant le mécanisme §2.10
-(TP1/TP2/trailing sur le reliquat) au lieu du trailing Donchian(20) pur.
-H1 reste le seul témoin en trailing pur (`trend_executor.py`, jamais
-touché).
+**REFONTE L3, 29/08/2026** (voir docs/HYPOTHESES.md, pré-enregistrement
+du 29/08/2026, et docs/DECISIONS.md) : le déclencheur MA200+Donchian(20)
+(`hypothesis3_strategy.py`, wrapper de `trend_strategy.evaluate_entry`)
+est REMPLACÉ par un pullback en tendance — régime structurel + jambe
+d'impulsion RÉUTILISÉS TELS QUELS depuis `ict_strategy._find_regime_
+and_leg` (aucune nouvelle logique de régime), entrée sur retour du prix
+au niveau de retracement PUIS reprise confirmée
+(`hypothesis3_strategy_v2.evaluate_entry`). L'ancien wrapper est
+ARCHIVÉ (voir archive/hypothesis3_strategy.py) — `trend_strategy.py`
+N'EST PAS archivé (utilitaires partagés) ; `ict_strategy.py` non plus
+(déjà réutilisé par L3 ET H2/L2's ancien code). Source live et backtest
+changent de `hypothesis3` à `hypothesis3_v2`.
 
-Process indépendant, compte Capital.com démo dédié ("hypothèse 3",
-accountId retrouvé le 21/08/2026 via GET /accounts avec la clé H3 déjà
-en place — voir docs/DECISIONS.md), totalement isolé de Station X et de
-l'Hypothèse #1 : enveloppes, coupe-circuits R et statistiques séparés
-par (actif, source="hypothesis3"), jamais mélangés (garanti par la
-généralisation de _normalize_source/_envelope_source_key du 21/08/2026,
-voir docs/DECISIONS.md — sans ce correctif préalable, les trades de
-cette hypothèse auraient été silencieusement comptés comme Station X).
+**Aucune confirmation de régime croisée** (`require_regime_
+confirmation=False`, changé depuis l'ancien H3) : L3 réutilise déjà le
+régime structurel d'`ict_strategy` en interne, une confirmation externe
+US30/US100 serait redondante — même raisonnement que H2, non
+spécifié dans le pré-enregistrement (invariant #10 : pas de variable
+hors pré-enregistrement).
 
-Le trailing (gestion de position, executor._evaluate_position_management)
-récupère désormais des bougies M15 pour cette source précise
-(executor._TREND_CANDLE_RESOLUTION), pas H1 — bug potentiel identifié et
-corrigé avant ce déploiement (voir docs/DECISIONS.md du 21/08/2026).
+**AVERTISSEMENT DE TRANSITION** (même nature que H1, voir
+`trend_executor.py`) : H3 avait **6 positions RÉELLEMENT ouvertes** au
+29/08/2026 (BTCUSD, ETHUSD, GOLD, EURUSD, US100, GBPUSD, `source=
+'hypothesis3'`), vérifié en base. Même prérequis obligatoire avant tout
+déploiement futur : attendre leur clôture naturelle, revérifier en base
+juste avant tout redémarrage — sinon elles deviendraient invisibles à
+tout process une fois celui-ci basculé sur `source='hypothesis3_v2'`.
 
-**Couche session/multi-timeframe, 23/08/2026, révisée en fin de
-journée** (décision explicite d'Ismaël, voir
-docs/DECISIONS.md/docs/HYPOTHESES.md) : **Confirmation de régime croisée
-AJOUTÉE** (`regime_confirmation.compute_index_regimes`/
-`derive_confirmed_regime`, indices US30 ET US100 combinés) — la rupture
-de canal Donchian (déclencheur INCHANGÉ) ne se traduit en signal
-persisté que si le régime confirmé actuellement EN CACHE (rafraîchi aux
-3 ouvertures de session UTC — 0h/8h/13h — plus une fois au démarrage du
-process, voir `technical_strategy_executor.py`) concorde avec la
-direction du trigger. La génération de signaux elle-même tourne en
-CONTINU, à chaque cycle, tous les actifs — plus aucune fenêtre de
-session ne la bloque (le premier gate du 23/08/2026 après-midi est
-devenu obsolète et a été retiré le même jour, voir docs/DECISIONS.md).
+**Garde-fou statistique à appliquer au moment de la calibration/
+confirmation (points F/G/H), pas ici** : L3 élimine par construction les
+mouvements sans pullback (les plus forts) — l'espérance devra être
+rapportée par signal détecté (régime+pullback réunis, non remplis
+comptés 0R) ET par trade exécuté, jamais l'une sans l'autre.
 
-8 actifs (les mêmes que l'Hypothèse #1) — voir docs/HYPOTHESES.md pour
-le raisonnement (compte totalement séparé, aucun risque de collision).
+9 actifs (8 existants + CHFJPY) — voir docs/HYPOTHESES.md.
 """
 
-import src.hypothesis3_strategy as _h3_mod
-from src.executor import HYPOTHESIS3_SOURCE
-from src.hypothesis3_strategy import evaluate_entry
+import src.hypothesis3_strategy_v2 as _h3_mod
+from src.executor import HYPOTHESIS3_V2_SOURCE
+from src.hypothesis3_strategy_v2 import evaluate_entry
 from src.hypothesis_params import apply_overrides, get_resolution_override
 from src.technical_strategy_executor import run_technical_strategy_loop
 
@@ -62,10 +53,9 @@ _HYPOTHESIS_LABEL = "Hypothèse #3"
 
 def _describe_signal(hypothesis_label: str, asset: str, signal) -> str:
     return (
-        f"{hypothesis_label} — {asset} : rupture de canal Donchian(20) en régime {signal.direction} "
-        f"(filtre MA200, bougies M15), entrée={signal.entry_price}, stop={signal.stop_price}, "
-        f"TP1={signal.tp1} (1R), TP2={signal.tp2} (2R), reliquat 20% sous trailing ATR "
-        f"(docs/HYPOTHESES.md, docs/DECISIONS.md 23/08/2026)"
+        f"{hypothesis_label} — {asset} : pullback en tendance (L3) {signal.direction}, "
+        f"entrée={signal.entry_price}, stop={signal.stop_price}, "
+        f"TP1={signal.tp1} (1R), TP2={signal.tp2} (2R) (docs/HYPOTHESES.md)"
     )
 
 
@@ -75,22 +65,17 @@ def run_hypothesis3_loop(config, db_path: str, interval_seconds: int = 60, start
     Capital.com dédiés (config.capital_*_hypothesis3), résolution M15.
 
     `startup_offset_seconds=30` (24/08/2026, voir docs/DECISIONS.md) :
-    échelonnement des 6 process de production sur la même IP, voir
-    docstring de `technical_strategy_executor.run_technical_strategy_loop`.
+    échelonnement des 6 process de production sur la même IP.
 
-    **Overrides du cycle d'évolution** (25/08/2026, voir
-    docs/HYPOTHESES.md "cycle 2") : appliqués une seule fois ici, au
-    démarrage — `apply_overrides` (TP1/TP2 de `hypothesis3_strategy`) et
-    `get_resolution_override` (résolution d'entrée et de confirmation,
-    indépendantes). Aucun effet tant qu'aucune ligne `rule_changes`
-    "H3.*" avec `statut='applique'` n'existe (fail-safe, comportement
-    actuel inchangé par défaut)."""
-    apply_overrides(_h3_mod, "H3", db_path, ["TP1_R_MULTIPLE", "TP2_R_MULTIPLE"])
-    resolution = get_resolution_override(db_path, "H3", "entree", "MINUTE_15")
-    confirming_resolution = get_resolution_override(db_path, "H3", "confirmation", resolution)
+    **Overrides du cycle d'évolution** : clé `"H3_v2"`, jamais `"H3"`
+    (n'hérite d'aucun paramètre déjà tuné pour l'ancienne logique v1) —
+    variables ajustées du pré-enregistrement (`RETRACEMENT_RATIO`,
+    `CONFIRMATION_BARS`, `STOP_BUFFER_ATR`)."""
+    apply_overrides(_h3_mod, "H3_v2", db_path, ["RETRACEMENT_RATIO", "CONFIRMATION_BARS", "STOP_BUFFER_ATR"])
+    resolution = get_resolution_override(db_path, "H3_v2", "entree", "MINUTE_15")
     run_technical_strategy_loop(
         config, db_path,
-        source=HYPOTHESIS3_SOURCE,
+        source=HYPOTHESIS3_V2_SOURCE,
         assets=HYPOTHESIS3_ASSETS,
         resolution=resolution,
         entry_fn=evaluate_entry,
@@ -103,9 +88,8 @@ def run_hypothesis3_loop(config, db_path: str, interval_seconds: int = 60, start
         hypothesis_label=_HYPOTHESIS_LABEL,
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
-        require_regime_confirmation=True,
+        require_regime_confirmation=False,
         startup_offset_seconds=startup_offset_seconds,
-        confirming_resolution=confirming_resolution,
     )
 
 

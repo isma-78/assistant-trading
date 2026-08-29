@@ -26,10 +26,11 @@ def test_hypothesis3_assets_matches_hypothesis1():
     }
 
 
-def test_describe_signal_mentions_m15_and_donchian():
+def test_describe_signal_mentions_pullback():
+    # Refonte L3 (29/08/2026, voir docs/DECISIONS.md) : MA200+Donchian
+    # remplacés par le pullback en tendance sur régime structurel.
     text = _describe_signal("Hypothèse #3", "GOLD", _FakeSignal("long", 2400.0, 2380.0, 2420.0, 2440.0))
-    assert "M15" in text
-    assert "Donchian" in text
+    assert "pullback" in text.lower()
     assert "GOLD" in text
     assert "2420" in text
     assert "2440" in text
@@ -49,7 +50,7 @@ def test_run_hypothesis3_loop_forwards_h3_credentials_and_resolution():
 
     mock_loop.assert_called_once()
     _, kwargs = mock_loop.call_args
-    assert kwargs["source"] == "hypothesis3"
+    assert kwargs["source"] == "hypothesis3_v2"  # refonte L3, 29/08/2026 (voir docs/DECISIONS.md)
     assert kwargs["resolution"] == "MINUTE_15"
     assert kwargs["api_key"] == "key3"
     assert kwargs["identifier"] == "id3"
@@ -58,7 +59,7 @@ def test_run_hypothesis3_loop_forwards_h3_credentials_and_resolution():
     assert kwargs["interval_seconds"] == 42
     assert set(kwargs["assets"]) == set(HYPOTHESIS3_ASSETS)
     assert "session_gated" not in kwargs  # paramètre retiré, voir docs/DECISIONS.md
-    assert kwargs["require_regime_confirmation"] is True
+    assert kwargs["require_regime_confirmation"] is False  # L3 a son propre regime interne (redondant sinon)
 
 
 def test_run_hypothesis3_loop_default_startup_offset_is_30s():
