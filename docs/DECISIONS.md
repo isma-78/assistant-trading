@@ -12,6 +12,48 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 7) — Point C TERMINÉ : Hypothèse #5, L5 (compression → expansion) implémentée, testée (100%) — les 5 nouvelles logiques (L1-L5) sont désormais toutes codées, testées et câblées
+
+`src/hypothesis5_strategy_v2.py` (nouveau, 100% couvert, 15 tests) :
+largeur de Bollinger(20,2σ) normalisée `(haute-basse)/médiane`, choix
+théorique figé avant tout calcul (seule mesure comparable entre actifs
+d'échelles très différentes, contrairement à l'ATR brut) — bandes
+calculées en EXCLUANT la bougie courante (même convention que
+`compute_donchian_channel`, sinon la bougie testée se compare à
+elle-même). Compression = largeur sous son `COMPRESSION_PERCENTILE`-ième
+percentile d'une distribution de référence CAUSALE (jamais la fenêtre
+de compression elle-même, évite toute circularité) pendant
+`COMPRESSION_DURATION` bougies, puis cassure de bande. **Sortie
+100% trailing** (Donchian(20), `TrendSignal.tp1=tp2=None`) — décision
+explicite du pré-enregistrement, contrairement à H1-H4 qui gardent la
+structure standard §2.10.
+
+`hypothesis5_strategy.py` (V3, régime structurel+RSI(14)/50) **archivé**
+— aucune position H5 v1 ouverte au moment du remplacement (vérifié),
+malgré un process activement déployé sur le VPS depuis le 23/08/2026
+(seule H5, avec H1/H2/H3, tournait réellement en production — H4
+n'avait jamais été démarrée). Source `hypothesis5` → `hypothesis5_v2`.
+
+**Point C est maintenant terminé pour les 5 hypothèses** :
+
+| Hyp | Ancien mécanisme | Nouveau (L) | Positions v1 ouvertes au remplacement |
+|---|---|---|---|
+| H1 | MA200+Donchian(20) | ADX + pente MA | **6** (avertissement transition) |
+| H2 | ICT/Fibonacci/FVG | Confluence multi-TF EMA/Ichimoku/RSI | 0 |
+| H3 | MA200+Donchian(20) (wrapper H1) | Pullback sur régime structurel réutilisé | **6** (avertissement transition) |
+| H4 | MA200+Bollinger (retour à la moyenne) | Divergence prix/RSI+OBV | 0 |
+| H5 | Régime structurel+RSI(14)/50 (V3) | Compression → expansion (Bollinger) | 0 |
+
+1019 tests dans la suite principale, tous verts. **100% de couverture
+maintenue sur les 18 modules critiques/stratégiques suivis** (incluant
+les 5 nouveaux modules `hypothesisN_strategy_v2.py`). Tout committé et
+poussé sur GitHub, **rien déployé sur le VPS** (point A, inchangé).
+
+**Suite du chantier** : points D (tests d'information H1/H5), E (taux
+d'échec de resserrement de stop + retry, prérequis H5), F/G/H
+(calibration/gate de puissance/confirmation, nécessitent les données
+historiques du VPS) — entrées séparées à venir.
+
 ## 2026-08-29 (suite 6) — Point C, Hypothèse #3 : L3 (pullback en tendance) implémentée, testée (100%) — AVERTISSEMENT : H3 a aussi 6 positions réellement ouvertes
 
 `src/hypothesis3_strategy_v2.py` (nouveau, 100% couvert, 17 tests) :
