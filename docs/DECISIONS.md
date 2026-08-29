@@ -12,6 +12,61 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 17) — Point 7 : capture du financement réel construite, premières données réelles persistées, constante pas encore remplacée
+
+Aucune capture n'existait (vérifié par recherche dans tout `src/` avant
+d'écrire quoi que ce soit — "si pas capturé, ajouter la capture
+d'abord" appliqué littéralement).
+
+**Sondage en direct (lecture seule, compte H1)** : `GET /history/
+transactions` expose `transactionType='SWAP'`/`note="Overnight fee"`
+par instrument, en EUR, avec un plafond `lastPeriod` empirique de 86400s
+(172800 échoue avec `error.invalid.lastPeriod`) — capture DOIT tourner
+au moins une fois par jour, sous peine de perte définitive de la
+fenêtre manquée. Six lignes trouvées la même nuit (28→29/08) avec des
+SIGNES DIFFÉRENTS selon l'instrument : USDJPY +0.23€, BTCUSD +0.03€,
+ETHUSD +0.04€, EURUSD +0.01€, contre GBPUSD -0.25€, GOLD -0.02€ — la
+réalité Capital.com EST déjà asymétrique par instrument (et donc par
+sens détenu, cohérent avec le principe même du financement overnight),
+le modèle plat du projet (`FINANCING_BPS_PER_DAY=1.0`, toujours un
+coût, jamais un crédit, identique pour tous) ne l'est pas.
+
+**Construit** (100% couvert, 18 tests) :
+- `src/financing_capture.py` : `parse_swap_transactions` (filtre +
+  normalisation) et `capture_recent_financing` (idempotent, `INSERT OR
+  IGNORE` sur la référence broker).
+- `src/financing_analysis.py` : `resolve_direction_at_time` reconstruit
+  le sens détenu au moment du débit en cherchant le trade ouvert sur cet
+  actif à cet instant (`None` si 0 ou plusieurs sens différents
+  ouverts simultanément — jamais deviné) ; `aggregate_financing_by_
+  asset_direction` agrège ensuite par (actif, sens).
+- `scripts/capture_financing.py` : script cron quotidien, lecture seule
+  côté broker, écrit uniquement dans `financing_transactions` (nouvelle
+  table dédiée) — jamais dans `trades`, aucune interaction avec les 6
+  process de trading.
+- `docs/DEPLOIEMENT_V2.md` complété (étape 7) : installation du cron
+  après le premier déploiement réussi (le script importe le nouveau
+  module, donc inexistant tant que le déploiement n'a pas eu lieu).
+
+**Action prise aujourd'hui, hors des 6 process de production** : table
+`financing_transactions` créée sur la base de production (`CREATE TABLE
+IF NOT EXISTS` isolée, aucun autre changement de schéma) et une capture
+manuelle unique exécutée pour ne pas perdre les 6 transactions déjà
+observées avant l'expiration de la fenêtre de 24h — même registre que
+le rattrapage du point 4 (écriture strictement additive, table dédiée,
+zéro effet sur les 6 boucles live). Le cron lui-même reste à installer
+par Ismaël après déploiement (étape 7 de `docs/DEPLOIEMENT_V2.md`),
+puisqu'il dépend du code pas encore déployé.
+
+**Constante `FINANCING_BPS_PER_DAY` PAS encore remplacée** — une seule
+nuit de données (6 lignes, 1 actif par ligne, aucune paire long/short
+sur le même instrument pour comparer directement l'asymétrie) est trop
+peu pour calibrer quoi que ce soit ; ce serait ajuster un modèle sur du
+bruit. Mesurer d'abord (plusieurs jours, un cron qui tourne), remplacer
+ensuite — même discipline que le point 6.
+
+---
+
 ## 2026-08-29 (suite 16) — Point 6 : mesures (a)/(b) rapportées, correction de prémisse sur `backtest_engine` (déjà à jour, rien à changer)
 
 **Correction de prémisse, vérifiée avant tout code** : la consigne

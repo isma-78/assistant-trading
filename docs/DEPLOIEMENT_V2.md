@@ -274,6 +274,25 @@ problème n'est pas corrigé :
 git checkout main
 ```
 
+## Étape 7 (une fois, après le premier déploiement réussi) — cron de capture du financement (point 7)
+
+`scripts/capture_financing.py` (nouveau, point 7, 29/08/2026) capture
+les transactions `SWAP` réelles du broker — fenêtre glissante de 24h
+CÔTÉ BROKER (`error.invalid.lastPeriod` au-delà), donc doit tourner au
+moins une fois par jour ou perd des données définitivement. La table
+`financing_transactions` a déjà été créée manuellement en amont (une
+capture manuelle du 29/08/2026 a persisté 6 lignes réelles) — ce cron
+prend le relais pour la suite, aucune action de rattrapage nécessaire.
+
+```bash
+crontab -l > /tmp/crontab_backup_$(date +%Y%m%d).txt
+(crontab -l; echo "0 4 * * * cd /home/assistant/assistant-trading && venv/bin/python scripts/capture_financing.py >> logs/financing_capture_cron.log 2>&1") | crontab -
+crontab -l
+```
+**Attendu** : la nouvelle ligne apparaît dans `crontab -l`, aucune ligne
+existante (backup 03h00, watchdog `*/5 * * * *`) n'est perdue — d'où la
+sauvegarde préalable dans `/tmp`.
+
 ## En cas d'écart
 
 Toute divergence avec un "Attendu" ci-dessus = **arrêt, pas
