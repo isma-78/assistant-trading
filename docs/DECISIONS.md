@@ -12,6 +12,64 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 16) — Point 6 : mesures (a)/(b) rapportées, correction de prémisse sur `backtest_engine` (déjà à jour, rien à changer)
+
+**Correction de prémisse, vérifiée avant tout code** : la consigne
+supposait que `backtest_engine.py` utilise un "spread moyen" à
+remplacer par du spread horaire. Faux — vérifié dans le code
+(`HistoricalBar.spread_open = open_ask - open_bid`, alimenté par le
+bid/ask RÉEL de chaque bougie historique Capital.com) : le modèle de
+coûts du backtest utilise déjà le spread réel PAR BOUGIE, plus fin
+qu'une moyenne horaire (chaque bougie HOUR porte son propre spread
+observé, pas une moyenne lissée sur toutes les bougies de cette
+heure). Aucune constante `AVERAGE_SPREAD`/`spread_moyen` n'existe nulle
+part dans le modèle de coûts (`grep` vérifié). **Rien à corriger dans
+`backtest_engine.py`** — seul `FINANCING_BPS_PER_DAY` (point 7) y est
+une constante plate à traiter séparément.
+
+**Construit** (`src/spread_analysis.py`, 100% couvert, 12 tests) :
+`hourly_spread_by_asset`/`hourly_trigger_distribution_by_source_asset`/
+`cross_triggers_with_spread`, lecture seule sur `market_snapshots`/
+`signals` déjà alimentées (24/08/2026, chaque signal évalué), aucun
+appel réseau.
+
+**Mesure (a) — spread réel par (actif, heure UTC), sur toute la base**
+(192 lignes, résumé) : **spread systématiquement 3 à 5× plus élevé aux
+heures 20-22h UTC** sur GBPUSD (0.00096 vs ~0.00013 en journée, ×7.4),
+USDJPY (0.05952 vs ~0.011, ×5.4), US30 (7.667 vs ~2.00, ×3.8), US100
+(2.74 vs 1.80, ×1.5) — cohérent avec la clôture/rollover NY (~21-22h
+UTC), une fenêtre de liquidité connue, pas une anomalie de mesure.
+EURUSD montre le même profil en plus atténué (×5.9 à 21h, mais valeur
+absolue minuscule). GOLD/BTCUSD/ETHUSD restent quasi plats sur 24h (pas
+de fenêtre de clôture équivalente pour l'or/crypto chez ce broker).
+
+**Mesure (b) — distribution horaire des déclenchements croisée avec (a)**
+: un cas concret et quantifié trouvé — **`hypothesis` (H1 v1, encore en
+legacy) sur US30 déclenche 48 fois sur 187 (26%) exactement à 21h UTC**,
+l'heure où le spread US30 est ×3.8 la normale. US100/`hypothesis` montre
+un signal plus faible (14 déclenchements à 21h, spread ×1.5). Aucune
+autre combinaison (source, actif) de la base ne montre une concentration
+comparable sur une heure chère — USDJPY/`hypothesis`, par exemple,
+n'émet AUCUN signal aux heures 20-23h alors qu'elles y sont les plus
+chères.
+
+**Lecture prudente (jamais un verdict tranché ici)** : H1/US30 déclenche
+aussi fortement à 9h UTC (47/187, spread NORMAL) — cohérent avec un
+comportement de rupture qui se déclenche aux ouvertures/clôtures de
+session (volatilité), pas nécessairement un défaut de conception
+spécifique à H1. Mais le COÛT, lui, est réel et mesurable : à budget de
+`cout_entree` insuffisant aujourd'hui pour trancher (point 4, 0,5% de
+couverture), ce couple (H1, US30, 21hUTC) est le candidat prioritaire à
+re-vérifier dès que `cout_entree`/`cout_sortie` par heure seront
+mesurables en volume — classification point 4 applicable dès que les
+données existent, jamais tranchée par ce module seul.
+
+Rien modifié dans `backtest_engine.py` avant ce rapport (consigne
+respectée) — et rien à y modifier après non plus, la prémisse étant
+fausse.
+
+---
+
 ## 2026-08-29 (suite 15) — Point 5 : le cycle d'évolution ne s'applique plus jamais automatiquement — revirement explicite sur l'écart CDC du 25/08/2026
 
 Le "cadrage de l'apprentissage" du prompt en cours est sans ambiguïté :
