@@ -214,6 +214,20 @@ CREATE TABLE IF NOT EXISTS trade_causal_decomposition (
     computed_at TEXT NOT NULL
 );
 
+-- Point 7 (29/08/2026, voir docs/DECISIONS.md) : financement RÉEL débité
+-- par Capital.com (transactionType='SWAP', endpoint /history/transactions,
+-- fenêtre glissante 24h côté broker — capture doit tourner au moins une
+-- fois par jour, sinon perte définitive). `reference` = identifiant
+-- broker, UNIQUE pour une capture idempotente (INSERT OR IGNORE).
+CREATE TABLE IF NOT EXISTS financing_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reference TEXT NOT NULL UNIQUE,
+    instrument TEXT NOT NULL,
+    size_eur REAL NOT NULL,
+    date_utc TEXT NOT NULL,
+    captured_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS trade_features (
     trade_id INTEGER PRIMARY KEY REFERENCES trades(id),
     align_matinale INTEGER,
