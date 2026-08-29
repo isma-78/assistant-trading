@@ -12,6 +12,77 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 20) — Point 18 : règle d'arrêt au niveau du programme, fixée AVANT tout résultat H2-H5 (point 17 pas encore exécuté)
+
+Écrite maintenant, explicitement AVANT de lancer le point 17 — même
+principe que les pré-enregistrements du 24-29/08/2026 : la règle de
+décision précède le regard sur la donnée, jamais l'inverse (invariant
+#10). Cette entrée n'est PAS un résultat, elle fixe la conséquence
+D'AVANCE, quel que soit le résultat qui suivra.
+
+### Bilan cumulé des essais indépendants (vérifié, pas déduit de mémoire)
+
+- **Génération v1 (H1-H5, 20-26/08/2026)** : 5 hypothèses, plusieurs
+  cycles d'évolution successifs par hypothèse (cycles 1/2/3, chantier
+  de refonte par branches du 25/08/2026, session Cowork du 26/08/2026)
+  — **AUCUN candidat n'a jamais qualifié à la fois l'entraînement ET la
+  validation**, sur l'ensemble de ces cycles, toutes hypothèses
+  confondues (voir CLAUDE.md, paliers P3 successifs). Espérance brute
+  positive trouvée pour H3/H5 (coûts nuls) mais jamais confirmée après
+  coûts ni après gate de puissance.
+- **Génération v2 (L1-L5, refonte du 29/08/2026, ce chantier)** : 5
+  nouvelles logiques d'entrée, pré-enregistrées avant tout calcul.
+  **H1/L1 déjà CLOS côté recherche** (point 15, ce chantier) : n=2400-
+  3300, effet -0,11R à -0,26R sur les 36 survivants sans exception,
+  -0,11R à 6,0 erreurs-types de zéro à n=3300 — premier négatif
+  RÉELLEMENT bien puissant du projet (borne haute à 95% = -0,0799R,
+  strictement sous zéro). **4 hypothèses restantes (H2-H5/L2-L5)
+  n'ont encore rendu AUCUN verdict** — point 17, pas exécuté au moment
+  d'écrire cette règle.
+
+Deux générations entières (10 hypothèses au total sur les deux
+générations) sans un seul edge net confirmé à ce jour — le contexte
+dans lequel cette règle est fixée, pas une prédiction de son issue.
+
+### RÈGLE FIXÉE MAINTENANT, avant tout calcul du point 17
+
+**Si AUCUNE des 4 hypothèses restantes (H2-H5/L2-L5) ne franchit À LA
+FOIS son gate de puissance ET sa confirmation (point 17, protocole déjà
+pré-enregistré : n≥200, raccourci point 14, CV imbriquée sur survivants
+positifs, gate de puissance, confirmation en une passe avec Bonferroni
+sur le nombre réel d'hypothèses confirmées, borne basse bootstrap par
+blocs calendaires, vérification année par année si positif), ALORS le
+programme de recherche fondé sur des hypothèses est SUSPENDU** —
+**aucune troisième génération de logiques ne sera lancée immédiatement
+après**, quelle que soit l'envie de retenter une variante.
+
+**Ce qui continue dans ce cas** (jamais suspendu, indépendant du sort
+des logiques) :
+- Le démo continue de tourner sur les 5 hypothèses, sur les 9 actifs
+  (aucune hypothèse n'est jamais retirée du démo, quel que soit son
+  statut de recherche — règle déjà actée, point 15).
+- La fenêtre forward continue de s'accumuler.
+- Le projet se recentre EXCLUSIVEMENT sur les points 4, 6, 7, 9-13
+  (attribution par trade, spread horaire réel, financement réel,
+  fidélité du simulateur, taux de remplissage, cadence d'émission,
+  coûts de sortie, taux d'échec de resserrement de stop) — les seuls
+  livrables qui gardent leur valeur quel que soit le sort des logiques
+  de déclenchement, puisqu'ils mesurent l'INFRASTRUCTURE d'exécution,
+  jamais une hypothèse de marché.
+- Aucune nouvelle variable de stratégie n'est testée sur un nouveau
+  budget tant que cette suspension est en vigueur — seule une
+  justification théorique VRAIMENT nouvelle (pas une variante d'une
+  logique déjà testée) pourrait la lever, décision qui reviendrait
+  explicitement à Ismaël, jamais prise en autonomie.
+
+**Si au moins une des 4 confirme** : le programme continue normalement
+sur cette hypothèse (et poursuit le monitoring sur les autres,
+suspendues individuellement si elles échouent), pas de règle
+supplémentaire nécessaire dans ce cas — c'est le chemin déjà couvert
+par le protocole pré-enregistré.
+
+---
+
 ## 2026-08-29 (suite 19) — Points 9-13 : statut des mesures pré-enregistrées jamais exécutées, code de séparation livré pour 10-11, compteurs vérifiés en base pour 9/12/13
 
 Consigné comme demandé — "rapporter le statut, reprendre quand la
