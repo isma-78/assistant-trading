@@ -464,6 +464,25 @@ def test_holding_duration_hours_across_days():
     assert holding_duration_hours("2026-06-01T00:00:00Z", "2026-06-02T00:00:00Z") == pytest.approx(24.0)
 
 
+def test_holding_duration_hours_accepts_microseconds_and_explicit_offset_format():
+    # Bug reel trouve en production le 29/08/2026 (point 4) : une partie
+    # des horodatages trades.ouvert_at/ferme_at n'est pas au format
+    # "%Y-%m-%dT%H:%M:%SZ" mais avec microsecondes + "+00:00" explicite
+    # (ex. reel : 2026-08-16T19:03:27.857413+00:00, executor.py).
+    assert holding_duration_hours(
+        "2026-08-16T19:03:27.857413+00:00", "2026-08-16T20:33:27.857413+00:00",
+    ) == pytest.approx(1.5)
+
+
+def test_holding_duration_hours_accepts_mixed_formats():
+    # Un trade peut tres bien s'ouvrir sous un format et se fermer sous
+    # l'autre (les deux formats coexistent en base) - jamais suppose
+    # identiques des deux cotes.
+    assert holding_duration_hours(
+        "2026-06-01T00:00:00Z", "2026-06-01T01:30:00.500000+00:00",
+    ) == pytest.approx(1.5, abs=1e-3)
+
+
 @pytest.mark.parametrize("hours, expected", [
     (0.0, "<1h"), (0.99, "<1h"),
     (1.0, "1h-4h"), (3.99, "1h-4h"),

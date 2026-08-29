@@ -97,8 +97,6 @@ from typing import Dict, List, Optional, Tuple
 
 from src.db import connection_scope
 
-_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-
 # Ratio coût_sortie/spread au-delà duquel une ligne est jugée implausible
 # (28/08/2026, voir docs/DECISIONS.md) — calibré sur le cas réel corrompu
 # du 28/08 (ratio ≈25) vs les cas réels authentiques du même jour
@@ -429,9 +427,20 @@ def session_bucket_from_ouvert_at(ouvert_at: str) -> str:
 
 def holding_duration_hours(ouvert_at: str, ferme_at: str) -> float:
     """Durée de détention en heures, calcul pur sur deux horodatages ISO
-    UTC — jamais une horloge murale (reproductible en rattrapage)."""
+    UTC — jamais une horloge murale (reproductible en rattrapage).
+
+    `datetime.fromisoformat` (pas `strptime` sur un format figé) : bug
+    réel trouvé en production le 29/08/2026 (point 4) — les horodatages
+    `trades.ouvert_at`/`ferme_at` ne sont PAS tous au format
+    `%Y-%m-%dT%H:%M:%SZ` attendu par convention ailleurs dans le projet.
+    Une partie (au moins `executor.py`, écriture par
+    `datetime.now(timezone.utc).isoformat()`) produit un format avec
+    microsecondes et décalage explicite `+00:00` (ex.
+    `2026-08-16T19:03:27.857413+00:00`) — `fromisoformat` accepte les
+    deux formats nativement (Python 3.11+), sans normalisation manuelle
+    ni troncature qui perdrait de la précision."""
     return (
-        datetime.strptime(ferme_at, _TIMESTAMP_FORMAT) - datetime.strptime(ouvert_at, _TIMESTAMP_FORMAT)
+        datetime.fromisoformat(ferme_at) - datetime.fromisoformat(ouvert_at)
     ).total_seconds() / 3600.0
 
 
