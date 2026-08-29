@@ -49,6 +49,14 @@ Deux couches, même convention que risk_engine.py/backtest_engine.py :
   `persist_trade_causal_decomposition`, `aggregate_by_month`) : lecture/
   écriture DB, pas soumise à la même exigence littérale.
 
+**Point 4 (29/08/2026, voir docs/DECISIONS.md)** : `aggregate_by_
+hypothesis_asset_month` croisée en plus avec outcome/session UTC/durée
+de détention (`aggregate_by_dimension`) + `classify_cost_vs_strategy`,
+qui applique la règle "fuite d'exécution = ingénierie, edge théorique
+négatif = question de lot/gate de puissance" sans jamais trancher
+elle-même un verdict de stratégie. Voir la section dédiée en bas de ce
+fichier.
+
 **Garde-fou de plausibilité (28/08/2026)** : une confirmation de clôture
 périmée (voir `capital_client.close_position`) peut produire un
 `coût_sortie` numériquement énorme (ex. trade 14239 : ratio coût_sortie/
@@ -84,9 +92,12 @@ clôtures d'urgence sans décision de gestion) — jamais une valeur
 imputée, même convention que le reste du module."""
 
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from src.db import connection_scope
+
+_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 # Ratio coût_sortie/spread au-delà duquel une ligne est jugée implausible
 # (28/08/2026, voir docs/DECISIONS.md) — calibré sur le cas réel corrompu
@@ -377,3 +388,153 @@ def aggregate_by_hypothesis_asset_month(db_path: str) -> List[Dict[str, object]]
             "delai_broker_moyen": (sum(delai_vals) / n) if all(v is not None for v in delai_vals) else None,
         })
     return results
+
+
+# ---------------------------------------------------------------------------
+# Point 4 (29/08/2026, voir docs/DECISIONS.md) : croisement outcome/session/
+# durée de détention, ET la règle de classification qui les accompagne.
+# Reste au niveau ATTRIBUTION (par trade, déterministe, exploitable dès le
+# premier trade) — ne tranche JAMAIS un verdict de stratégie ici (ça, c'est
+# le registre du gate de puissance, par lot, jamais par ce module).
+# ---------------------------------------------------------------------------
+
+_SESSION_BUCKETS = (
+    (0, 6, "00h-06hUTC_asie"),
+    (6, 12, "06h-12hUTC_europe"),
+    (12, 18, "12h-18hUTC_chevauchement_us"),
+    (18, 24, "18h-24hUTC_fin_us"),
+)
+
+_DURATION_BUCKETS = (
+    (1.0, "<1h"),
+    (4.0, "1h-4h"),
+    (12.0, "4h-12h"),
+    (24.0, "12h-24h"),
+)
+
+
+def session_bucket_from_ouvert_at(ouvert_at: str) -> str:
+    """Bucket de 6h UTC (croisable avec la mesure de spread horaire du
+    point 6 — mêmes bornes). `ouvert_at` est toujours en UTC (convention
+    du projet, horodatage Capital.com/Telegram). Lève ValueError si
+    l'heure extraite n'est dans aucun bucket (structurellement
+    impossible pour 0<=h<24, gardé en fail-safe explicite plutôt qu'un
+    bucket fourre-tout silencieux)."""
+    hour = int(ouvert_at[11:13])
+    for start, end, label in _SESSION_BUCKETS:
+        if start <= hour < end:
+            return label
+    raise ValueError(f"heure hors plage 0-23 extraite de {ouvert_at!r} : {hour}")
+
+
+def holding_duration_hours(ouvert_at: str, ferme_at: str) -> float:
+    """Durée de détention en heures, calcul pur sur deux horodatages ISO
+    UTC — jamais une horloge murale (reproductible en rattrapage)."""
+    return (
+        datetime.strptime(ferme_at, _TIMESTAMP_FORMAT) - datetime.strptime(ouvert_at, _TIMESTAMP_FORMAT)
+    ).total_seconds() / 3600.0
+
+
+def duration_bucket(hours: float) -> str:
+    """`hours` doit être >= 0 (un trade ne se ferme jamais avant de
+    s'ouvrir) — ValueError sinon, jamais une valeur absolue silencieuse
+    qui masquerait une inversion d'horodatages en amont."""
+    if hours < 0:
+        raise ValueError(f"durée de détention négative : {hours!r}h — horodatages inversés ?")
+    for ceiling, label in _DURATION_BUCKETS:
+        if hours < ceiling:
+            return label
+    return ">24h"
+
+
+def outcome_label(r_multiple_total: Optional[float]) -> str:
+    """`None` (trade fermé sans R calculé, ex. `stop_urgence`) reste
+    distinct de `"neutre"` (R exactement nul) — jamais confondus."""
+    if r_multiple_total is None:
+        return "inconnu"
+    if r_multiple_total > 0:
+        return "gagnant"
+    if r_multiple_total < 0:
+        return "perdant"
+    return "neutre"
+
+
+def aggregate_by_dimension(db_path: str, dimension: str) -> List[Dict[str, object]]:
+    """Même source (`trade_causal_decomposition` join `trades`, `invalide=0`
+    exclu) qu'`aggregate_by_hypothesis_asset_month`, mais regroupée par
+    (source, `dimension`) au lieu de (source, actif, mois) — `dimension`
+    dans {"outcome", "session", "duree"}. Volontairement PAS croisée avec
+    actif/mois en plus (fragmenterait l'échantillon sans nécessité pour
+    ce diagnostic) : c'est une coupe complémentaire, pas un remplacement.
+
+    Un trade sans `ferme_at` n'est structurellement pas possible ici (la
+    jointure exige déjà un trade `statut='ferme'` en amont, voir
+    `compute_trade_causal_decomposition`) — `duree` ne peut donc jamais
+    tomber sur `None`."""
+    if dimension not in ("outcome", "session", "duree"):
+        raise ValueError(f"dimension inconnue : {dimension!r} (attendu : outcome, session, duree)")
+
+    with connection_scope(db_path) as conn:
+        rows = conn.execute(
+            "SELECT t.source AS source, t.ouvert_at AS ouvert_at, t.ferme_at AS ferme_at, "
+            "t.r_multiple_total AS r_multiple_total, "
+            "d.r_theoretical AS r_theoretical, d.cout_entree AS cout_entree, d.cout_sortie AS cout_sortie "
+            "FROM trade_causal_decomposition d JOIN trades t ON t.id = d.trade_id "
+            "WHERE d.invalide = 0"
+        ).fetchall()
+
+    groups: Dict[Tuple[str, str], List[dict]] = {}
+    for row in rows:
+        if dimension == "outcome":
+            dim_value = outcome_label(row["r_multiple_total"])
+        elif dimension == "session":
+            dim_value = session_bucket_from_ouvert_at(row["ouvert_at"])
+        else:
+            dim_value = duration_bucket(holding_duration_hours(row["ouvert_at"], row["ferme_at"]))
+        groups.setdefault((row["source"], dim_value), []).append(dict(row))
+
+    results = []
+    for (source, dim_value), items in sorted(groups.items()):
+        n = len(items)
+        cout_entree_vals = [item["cout_entree"] for item in items]
+        cout_sortie_vals = [item["cout_sortie"] for item in items]
+        results.append({
+            "source": source,
+            dimension: dim_value,
+            "n": n,
+            "r_theorique_moyen": sum(item["r_theoretical"] for item in items) / n,
+            "cout_entree_moyen": (sum(cout_entree_vals) / n) if all(v is not None for v in cout_entree_vals) else None,
+            "cout_sortie_moyen": (sum(cout_sortie_vals) / n) if all(v is not None for v in cout_sortie_vals) else None,
+        })
+    return results
+
+
+def classify_cost_vs_strategy(
+    r_theorique_moyen: float, cout_entree_moyen: Optional[float], cout_sortie_moyen: Optional[float],
+) -> str:
+    """Applique LITTÉRALEMENT la règle du point 4 : une fuite de coût/
+    exécution est un problème d'INGÉNIERIE (corrigible immédiatement,
+    aucun budget ni fenêtre de pré-enregistrement consommé) ; une
+    espérance de SIGNAL négative est un problème de STRATÉGIE (statistique,
+    par lot, gate de puissance uniquement). Ne tranche JAMAIS elle-même
+    qu'une stratégie est mauvaise — nomme seulement où regarder ensuite.
+
+    `donnees_de_cout_incompletes` si l'un des deux coûts moyens est
+    `None` (jamais traité comme 0 — un coût inconnu n'est pas un coût
+    nul, fail-safe déjà appliqué partout ailleurs dans ce module).
+
+    Seuil de bascule "fuite à investiguer" (pas pré-enregistré — c'est un
+    diagnostic d'ingénierie, hors du périmètre anti-surapprentissage
+    §4.2/invariant #10 qui ne s'applique qu'aux variables de STRATÉGIE) :
+    la fuite d'exécution suffit à elle seule à faire passer l'espérance
+    théorique positive à négative ou nulle, OU représente au moins la
+    moitié de sa magnitude."""
+    if cout_entree_moyen is None or cout_sortie_moyen is None:
+        return "donnees_de_cout_incompletes"
+    total_leak = cout_entree_moyen + cout_sortie_moyen
+    leak_flips_sign = r_theorique_moyen > 0 and (r_theorique_moyen - total_leak) <= 0
+    if total_leak > 0 and (leak_flips_sign or abs(total_leak) >= abs(r_theorique_moyen) * 0.5):
+        return "fuite_execution_a_investiguer"
+    if r_theorique_moyen < 0:
+        return "edge_theorique_negatif_question_de_lot_gate_de_puissance"
+    return "rien_a_signaler"

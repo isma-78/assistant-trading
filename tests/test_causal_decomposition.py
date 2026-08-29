@@ -10,13 +10,19 @@ import pytest
 
 from src.causal_decomposition import (
     TradeLegDecomposition,
+    aggregate_by_dimension,
     aggregate_by_hypothesis_asset_month,
     aggregate_trade_decomposition,
+    classify_cost_vs_strategy,
     compute_trade_causal_decomposition,
     decompose_gestion_delay,
     decompose_trade_leg,
+    duration_bucket,
+    holding_duration_hours,
     is_cout_sortie_plausible,
+    outcome_label,
     persist_trade_causal_decomposition,
+    session_bucket_from_ouvert_at,
 )
 from src.db import connection_scope, init_db
 
@@ -225,15 +231,17 @@ def test_plausibility_uses_absolute_value_of_cout_sortie():
 # ---------------------------------------------------------------------------
 
 def _insert_trade_with_partials(db_path, direction="long", entry_prevu=100.0, entry_reel=100.0,
-                                 stop_initial=99.0, partials=None, actif="GOLD", source="hypothesis5"):
+                                 stop_initial=99.0, partials=None, actif="GOLD", source="hypothesis5",
+                                 ouvert_at="2026-06-01T00:00:00Z", ferme_at="2026-06-02T00:00:00Z",
+                                 r_multiple_total=None):
     with connection_scope(db_path) as conn:
         trade_id = conn.execute(
             "INSERT INTO trades (signal_id, source, actif, mode, direction, taille_initiale, "
             "prix_entree_prevu, prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
-            "pourcentage_risque_applique, ouvert_at, ferme_at, statut) "
-            "VALUES (NULL, ?, ?, 'demo', ?, 0.01, ?, ?, ?, ?, 10.0, 2.0, "
-            "'2026-06-01T00:00:00Z', '2026-06-02T00:00:00Z', 'ferme')",
-            (source, actif, direction, entry_prevu, entry_reel, stop_initial, stop_initial),
+            "pourcentage_risque_applique, ouvert_at, ferme_at, r_multiple_total, statut) "
+            "VALUES (NULL, ?, ?, 'demo', ?, 0.01, ?, ?, ?, ?, 10.0, 2.0, ?, ?, ?, 'ferme')",
+            (source, actif, direction, entry_prevu, entry_reel, stop_initial, stop_initial,
+             ouvert_at, ferme_at, r_multiple_total),
         ).lastrowid
         for fraction, r_atteint, prix_sortie, prix_sortie_reel in partials:
             conn.execute(
@@ -418,3 +426,168 @@ def test_aggregate_with_no_data_returns_empty_list(tmp_path):
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
     assert aggregate_by_hypothesis_asset_month(db_path) == []
+
+
+# ---------------------------------------------------------------------------
+# Point 4 (29/08/2026) : session_bucket_from_ouvert_at / holding_duration_
+# hours / duration_bucket / outcome_label / aggregate_by_dimension /
+# classify_cost_vs_strategy
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("ouvert_at, expected", [
+    ("2026-06-01T00:00:00Z", "00h-06hUTC_asie"),
+    ("2026-06-01T05:59:00Z", "00h-06hUTC_asie"),
+    ("2026-06-01T06:00:00Z", "06h-12hUTC_europe"),
+    ("2026-06-01T11:59:00Z", "06h-12hUTC_europe"),
+    ("2026-06-01T12:00:00Z", "12h-18hUTC_chevauchement_us"),
+    ("2026-06-01T17:59:00Z", "12h-18hUTC_chevauchement_us"),
+    ("2026-06-01T18:00:00Z", "18h-24hUTC_fin_us"),
+    ("2026-06-01T23:59:00Z", "18h-24hUTC_fin_us"),
+])
+def test_session_bucket_from_ouvert_at(ouvert_at, expected):
+    assert session_bucket_from_ouvert_at(ouvert_at) == expected
+
+
+def test_session_bucket_rejects_malformed_hour():
+    # Garde-fou sur donnee corrompue (meme registre que le ValueError de
+    # decompose_trade_leg sur une direction inconnue) - jamais un bucket
+    # par defaut silencieux sur une heure hors 0-23.
+    with pytest.raises(ValueError):
+        session_bucket_from_ouvert_at("2026-06-01T99:00:00Z")
+
+
+def test_holding_duration_hours():
+    assert holding_duration_hours("2026-06-01T00:00:00Z", "2026-06-01T03:30:00Z") == pytest.approx(3.5)
+
+
+def test_holding_duration_hours_across_days():
+    assert holding_duration_hours("2026-06-01T00:00:00Z", "2026-06-02T00:00:00Z") == pytest.approx(24.0)
+
+
+@pytest.mark.parametrize("hours, expected", [
+    (0.0, "<1h"), (0.99, "<1h"),
+    (1.0, "1h-4h"), (3.99, "1h-4h"),
+    (4.0, "4h-12h"), (11.99, "4h-12h"),
+    (12.0, "12h-24h"), (23.99, "12h-24h"),
+    (24.0, ">24h"), (100.0, ">24h"),
+])
+def test_duration_bucket(hours, expected):
+    assert duration_bucket(hours) == expected
+
+
+def test_duration_bucket_rejects_negative():
+    with pytest.raises(ValueError):
+        duration_bucket(-0.01)
+
+
+@pytest.mark.parametrize("r_multiple_total, expected", [
+    (None, "inconnu"), (1.5, "gagnant"), (-0.8, "perdant"), (0.0, "neutre"),
+])
+def test_outcome_label(r_multiple_total, expected):
+    assert outcome_label(r_multiple_total) == expected
+
+
+def test_aggregate_by_dimension_rejects_unknown_dimension(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    with pytest.raises(ValueError):
+        aggregate_by_dimension(db_path, "actif")
+
+
+def test_aggregate_by_dimension_no_data_returns_empty_list(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    assert aggregate_by_dimension(db_path, "outcome") == []
+
+
+def test_aggregate_by_dimension_outcome(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    trade_id = _insert_trade_with_partials(
+        db_path, direction="long", entry_prevu=100.0, entry_reel=100.1, stop_initial=99.0,
+        partials=[(1.0, 1.5, 102.0, 101.8)], source="hypothesis5", r_multiple_total=1.5,
+    )
+    decomposition = compute_trade_causal_decomposition(db_path, trade_id)
+    persist_trade_causal_decomposition(db_path, trade_id, decomposition, "2026-06-02T00:00:00Z")
+
+    rows = aggregate_by_dimension(db_path, "outcome")
+    assert len(rows) == 1
+    assert rows[0]["source"] == "hypothesis5"
+    assert rows[0]["outcome"] == "gagnant"
+    assert rows[0]["n"] == 1
+    assert rows[0]["cout_entree_moyen"] == pytest.approx(0.1)
+    assert rows[0]["cout_sortie_moyen"] == pytest.approx(0.2)
+
+
+def test_aggregate_by_dimension_session(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    trade_id = _insert_trade_with_partials(
+        db_path, partials=[(1.0, 1.0, 101.0, 101.0)],
+        ouvert_at="2026-06-01T14:00:00Z", ferme_at="2026-06-01T15:00:00Z",
+    )
+    decomposition = compute_trade_causal_decomposition(db_path, trade_id)
+    persist_trade_causal_decomposition(db_path, trade_id, decomposition, "2026-06-01T15:00:00Z")
+
+    rows = aggregate_by_dimension(db_path, "session")
+    assert len(rows) == 1
+    assert rows[0]["session"] == "12h-18hUTC_chevauchement_us"
+
+
+def test_aggregate_by_dimension_duree(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    trade_id = _insert_trade_with_partials(
+        db_path, partials=[(1.0, 1.0, 101.0, 101.0)],
+        ouvert_at="2026-06-01T00:00:00Z", ferme_at="2026-06-01T02:00:00Z",
+    )
+    decomposition = compute_trade_causal_decomposition(db_path, trade_id)
+    persist_trade_causal_decomposition(db_path, trade_id, decomposition, "2026-06-01T02:00:00Z")
+
+    rows = aggregate_by_dimension(db_path, "duree")
+    assert len(rows) == 1
+    assert rows[0]["duree"] == "1h-4h"
+
+
+def test_aggregate_by_dimension_excludes_invalide_rows(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    trade_id = _insert_trade_with_signal_and_spread(
+        db_path, spread=1.8, direction="long", entry_prevu=29558.4, entry_reel=29558.4,
+        stop_initial=29513.876034543184,
+        partials=[(1.0, 1.0292209943528332, 29604.225, 29558.4)],
+    )
+    decomposition = compute_trade_causal_decomposition(db_path, trade_id)
+    persist_trade_causal_decomposition(db_path, trade_id, decomposition, "2026-06-02T00:00:00Z")
+
+    assert aggregate_by_dimension(db_path, "outcome") == []
+
+
+def test_classify_missing_cost_data_is_never_treated_as_zero():
+    assert classify_cost_vs_strategy(0.05, None, 0.01) == "donnees_de_cout_incompletes"
+    assert classify_cost_vs_strategy(0.05, 0.01, None) == "donnees_de_cout_incompletes"
+
+
+def test_classify_leak_that_flips_positive_edge_to_zero_or_negative():
+    # r_theorique=0.05, fuite totale=0.06 -> r_realise implicite <= 0.
+    assert classify_cost_vs_strategy(0.05, 0.04, 0.02) == "fuite_execution_a_investiguer"
+
+
+def test_classify_leak_at_least_half_of_theoretical_edge_even_without_flip():
+    # r_theorique=0.20, fuite totale=0.10 (exactement 50%) -> signalee
+    # meme si le signe theorique positif survit.
+    assert classify_cost_vs_strategy(0.20, 0.06, 0.04) == "fuite_execution_a_investiguer"
+
+
+def test_classify_negative_theoretical_edge_without_leak_dominance():
+    assert classify_cost_vs_strategy(-0.10, 0.0, 0.0) == "edge_theorique_negatif_question_de_lot_gate_de_puissance"
+
+
+def test_classify_nothing_to_report():
+    assert classify_cost_vs_strategy(0.10, 0.0, 0.0) == "rien_a_signaler"
+
+
+def test_classify_favorable_cost_never_flagged_as_leak():
+    # coûts négatifs (favorables, ex. trade 14240 du 28/08/2026) -> jamais
+    # une "fuite" même si l'edge théorique est déjà négatif par ailleurs.
+    assert classify_cost_vs_strategy(-0.10, -0.02, -0.01) == "edge_theorique_negatif_question_de_lot_gate_de_puissance"
