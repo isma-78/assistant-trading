@@ -12,6 +12,41 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 10) — Câblage de l'amendement H2-H5→HOUR, correctif de robustesse du téléchargement (écriture atomique), et journalisation de la valeur de stop demandée — points 2, 4 et 5 de la réponse d'Ismaël
+
+**Câblage résolution** : `hypothesis3_executor.py`/`hypothesis4_
+executor.py`/`hypothesis5_executor.py` passent désormais `"HOUR"` à
+`get_resolution_override`. `hypothesis2_executor.py` idem, et ses 3 TF
+fixes remappés `extra_resolutions=["HOUR_4", "DAY"]` (natif HOUR + ×4 +
+×4, `DAY` vérifié disponible en direct avant usage). Aucune des 4
+logiques n'a nécessité de changement de code propre — confirmé
+resolution-agnostique comme anticipé dans l'amendement précédent. H1
+inchangée. 19 tests d'executor mis à jour, 1031 tests dans la suite
+principale, tous verts.
+
+**Correctif de robustesse (`scripts/download_historical_data.py::
+download_one`)** : écrit désormais dans un fichier `.tmp`, ne renomme
+vers le fichier final (rename atomique) qu'une fois la boucle terminée
+avec succès — rend la CLASSE d'incident du 29/08/2026 (plantage réseau
+écrasant un fichier de production complet par une version tronquée)
+structurellement impossible, pas seulement corrigée au cas par cas.
+5 nouveaux tests, `download_one` à 100% (le CLI `main()` reste hors
+périmètre de couverture, même convention que le reste des scripts
+ponctuels du projet).
+
+**Journalisation de la valeur de stop demandée** (`capital_client.
+update_position_stop`) : `logger.info` systématique AVANT chaque
+tentative (réussie ou non), valeur demandée également incluse dans le
+`logger.warning` de retry — comble la lacune signalée le 28/08/2026
+(taux d'échec par distance demandée non mesurable rétroactivement).
+100% de couverture maintenue.
+
+1031 tests dans la suite principale, tous verts. Committé et poussé sur
+GitHub, **rien déployé sur le VPS** (point A, toujours en vigueur —
+point 6 de la réponse d'Ismaël confirme explicitement que le
+déploiement, l'activation CHFJPY et le cycle d'ajustement continu
+restent suspendus).
+
 ## 2026-08-29 (suite 9) — AMENDEMENT au pré-enregistrement (avant tout calcul) : H2/H3/H4/H5 basculent en résolution HOUR — la profondeur M15 réelle du broker s'arrête au 2024-01-01, pas notre garde-fou local
 
 ### Sondage demandé, exécuté AVANT toute décision (lecture seule, aucun téléchargement de masse)
