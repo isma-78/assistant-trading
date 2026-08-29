@@ -99,6 +99,33 @@ def test_bar_from_raw_parses_valid_point():
     assert bar.open_bid == 1.0 and bar.open_ask == 1.02
 
 
+def test_bar_from_raw_carries_last_traded_volume():
+    raw = {
+        "snapshotTimeUTC": "2026-01-01T00:00:00",
+        "openPrice": {"bid": 1.0, "ask": 1.02},
+        "highPrice": {"bid": 1.1, "ask": 1.12},
+        "lowPrice": {"bid": 0.9, "ask": 0.92},
+        "closePrice": {"bid": 1.05, "ask": 1.07},
+        "lastTradedVolume": 4053,
+    }
+    bar = bar_from_raw(raw)
+    assert bar.volume == 4053
+    assert bar.to_candle().volume == 4053
+
+
+def test_bar_from_raw_missing_volume_is_none():
+    raw = {
+        "snapshotTimeUTC": "2026-01-01T00:00:00",
+        "openPrice": {"bid": 1.0, "ask": 1.02},
+        "highPrice": {"bid": 1.1, "ask": 1.12},
+        "lowPrice": {"bid": 0.9, "ask": 0.92},
+        "closePrice": {"bid": 1.05, "ask": 1.07},
+    }
+    bar = bar_from_raw(raw)
+    assert bar.volume is None
+    assert bar.to_candle().volume is None
+
+
 def test_bar_from_raw_missing_field_returns_none():
     assert bar_from_raw({"openPrice": {"bid": 1.0, "ask": 1.02}}) is None
 

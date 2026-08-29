@@ -81,6 +81,33 @@ def test_get_candles_computes_mid_ohlc_in_order():
     assert candles[1].close == pytest.approx(101.6)
 
 
+def test_get_candles_carries_last_traded_volume():
+    client = MagicMock()
+    client.get_prices.return_value = {
+        "prices": [
+            {
+                "snapshotTimeUTC": "2026-08-16T10:00:00",
+                "openPrice": {"bid": 100.0, "ask": 100.2},
+                "highPrice": {"bid": 101.0, "ask": 101.2},
+                "lowPrice": {"bid": 99.0, "ask": 99.2},
+                "closePrice": {"bid": 100.5, "ask": 100.7},
+                "lastTradedVolume": 4053,
+            },
+            {
+                "snapshotTimeUTC": "2026-08-16T11:00:00",
+                "openPrice": {"bid": 100.5, "ask": 100.7},
+                "highPrice": {"bid": 102.0, "ask": 102.2},
+                "lowPrice": {"bid": 100.0, "ask": 100.2},
+                "closePrice": {"bid": 101.5, "ask": 101.7},
+                # volume absent : doit rester None, jamais devine (fail-safe)
+            },
+        ]
+    }
+    candles = get_candles(client, "EURUSD", resolution="HOUR", count=2)
+    assert candles[0].volume == 4053
+    assert candles[1].volume is None
+
+
 def test_get_candles_close_rounds_away_binary_float_noise():
     # Même bug que test_get_price_snapshot_mid_rounds_away_binary_float_
     # noise, côté bougies cette fois (source de trend_strategy.evaluate_

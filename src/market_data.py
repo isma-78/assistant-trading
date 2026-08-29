@@ -33,6 +33,15 @@ class Candle:
     high: float
     low: float
     close: float
+    # `volume` (29/08/2026, voir docs/DECISIONS.md, refonte H1-H5 point C
+    # — besoin de L4/OBV) : `lastTradedVolume` brut Capital.com, DÉJÀ
+    # identifié comme volume TICK (nombre de transactions), pas un volume
+    # réel échangé (voir docs/DECISIONS.md, 25/08/2026, diagnostic H5) —
+    # utilisable pour un indicateur de MOMENTUM DE PARTICIPATION relatif
+    # (OBV), jamais comme mesure de liquidité absolue. Optionnel, `None`
+    # par défaut : rétro-compatible avec tout code existant qui construit
+    # un `Candle` sans le fournir (aucune régression).
+    volume: Optional[float] = None
 
 
 def get_price_snapshot(client: CapitalClient, epic: str) -> PriceSnapshot:
@@ -79,7 +88,10 @@ def get_candles(client: CapitalClient, epic: str, resolution: str = "HOUR", coun
         c = _mid_of(p.get("closePrice", {}))
         if None in (o, h, l, c):
             continue
-        candles.append(Candle(time_utc=p.get("snapshotTimeUTC") or p.get("snapshotTime", ""), open=o, high=h, low=l, close=c))
+        candles.append(Candle(
+            time_utc=p.get("snapshotTimeUTC") or p.get("snapshotTime", ""), open=o, high=h, low=l, close=c,
+            volume=p.get("lastTradedVolume"),
+        ))
     return candles
 
 

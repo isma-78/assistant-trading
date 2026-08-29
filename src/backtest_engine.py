@@ -72,6 +72,10 @@ class HistoricalBar:
     low_ask: float
     close_bid: float
     close_ask: float
+    # `volume` (29/08/2026, voir docs/DECISIONS.md, refonte H1-H5 point C)
+    # : même champ `lastTradedVolume` que market_data.Candle, optionnel,
+    # rétro-compatible.
+    volume: Optional[float] = None
 
     @property
     def spread_open(self) -> float:
@@ -87,6 +91,7 @@ class HistoricalBar:
             high=round((self.high_bid + self.high_ask) / 2, 8),
             low=round((self.low_bid + self.low_ask) / 2, 8),
             close=round((self.close_bid + self.close_ask) / 2, 8),
+            volume=self.volume,
         )
 
 
@@ -103,6 +108,7 @@ def bar_from_raw(raw: dict) -> Optional[HistoricalBar]:
             high_bid=h["bid"], high_ask=h["ask"],
             low_bid=l["bid"], low_ask=l["ask"],
             close_bid=c["bid"], close_ask=c["ask"],
+            volume=raw.get("lastTradedVolume"),
         )
     except (KeyError, TypeError):
         return None
