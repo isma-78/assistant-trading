@@ -70,7 +70,12 @@ def run_hypothesis5_loop(config, db_path: str, interval_seconds: int = 60, start
     variables ajustées du pré-enregistrement (`COMPRESSION_PERCENTILE`,
     `COMPRESSION_DURATION`, `STOP_BUFFER_PCT`)."""
     apply_overrides(_h5_mod, "H5_v2", db_path, ["COMPRESSION_PERCENTILE", "COMPRESSION_DURATION", "STOP_BUFFER_PCT"])
-    resolution = get_resolution_override(db_path, "H5_v2", "entree", "MINUTE_15")
+    # Amendement 29/08/2026 (voir docs/DECISIONS.md) : résolution HOUR,
+    # pas MINUTE_15 — la profondeur M15 réelle du broker s'arrête au
+    # 2024-01-01 (sondé, uniforme sur les 8 actifs), la fenêtre de
+    # découverte 2019-2022 pré-enregistrée exige HOUR (confirmée jusqu'à
+    # 2017). L5 est resolution-agnostique, aucun changement de logique.
+    resolution = get_resolution_override(db_path, "H5_v2", "entree", "HOUR")
     run_technical_strategy_loop(
         config, db_path,
         source=HYPOTHESIS5_V2_SOURCE,

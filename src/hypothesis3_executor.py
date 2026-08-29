@@ -72,7 +72,12 @@ def run_hypothesis3_loop(config, db_path: str, interval_seconds: int = 60, start
     variables ajustées du pré-enregistrement (`RETRACEMENT_RATIO`,
     `CONFIRMATION_BARS`, `STOP_BUFFER_ATR`)."""
     apply_overrides(_h3_mod, "H3_v2", db_path, ["RETRACEMENT_RATIO", "CONFIRMATION_BARS", "STOP_BUFFER_ATR"])
-    resolution = get_resolution_override(db_path, "H3_v2", "entree", "MINUTE_15")
+    # Amendement 29/08/2026 (voir docs/DECISIONS.md) : résolution HOUR,
+    # pas MINUTE_15 — la profondeur M15 réelle du broker s'arrête au
+    # 2024-01-01 (sondé, uniforme sur les 8 actifs), la fenêtre de
+    # découverte 2019-2022 pré-enregistrée exige HOUR (confirmée jusqu'à
+    # 2017). L3 est resolution-agnostique, aucun changement de logique.
+    resolution = get_resolution_override(db_path, "H3_v2", "entree", "HOUR")
     run_technical_strategy_loop(
         config, db_path,
         source=HYPOTHESIS3_V2_SOURCE,

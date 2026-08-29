@@ -46,7 +46,7 @@ def test_run_hypothesis4_loop_forwards_h4_credentials_and_resolution():
     mock_loop.assert_called_once()
     _, kwargs = mock_loop.call_args
     assert kwargs["source"] == "hypothesis4_v2"  # refonte L4, 29/08/2026 (voir docs/DECISIONS.md)
-    assert kwargs["resolution"] == "MINUTE_15"
+    assert kwargs["resolution"] == "HOUR"  # amendement 29/08/2026 (voir docs/DECISIONS.md) : profondeur M15 insuffisante
     assert "session_gated" not in kwargs  # paramètre retiré, voir docs/DECISIONS.md
     assert kwargs["require_regime_confirmation"] is False  # L4 n'a aucun filtre de régime (pré-enregistrement)
     assert kwargs["api_key"] == "key4"

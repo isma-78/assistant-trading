@@ -90,12 +90,26 @@ def _page_window(to_time: datetime, resolution: str) -> tuple:
 
 def download_one(client: CapitalClient, epic: str, resolution: str, now: datetime, max_days_back: int = SAFETY_MAX_DAYS_BACK) -> list:
     """Télécharge tout l'historique disponible pour (epic, resolution),
-    ordre chronologique (plus ancienne bougie en premier). Écrit
-    progressivement sur disque après chaque page."""
+    ordre chronologique (plus ancienne bougie en premier).
+
+    **Écriture atomique (29/08/2026, voir docs/DECISIONS.md — incident
+    réel du même jour)** : la progression est écrite après CHAQUE page
+    dans un fichier TEMPORAIRE (`{epic}_{resolution}.json.tmp`), jamais
+    directement dans le fichier final — celui-ci n'est remplacé (rename
+    atomique) qu'une fois la boucle terminée avec succès (limite
+    d'historique atteinte, page vide, ou `max_days_back` épuisé). Un
+    timeout réseau ou toute autre exception non gérée en cours de route
+    laisse désormais le fichier de production PRÉCÉDENT intact — avant
+    ce correctif, un plantage à mi-parcours pouvait écraser un fichier
+    complet par une version partielle et plus courte (constaté en
+    production sur `GOLD_MINUTE_15.json`, incident signalé et corrigé
+    manuellement le 29/08/2026 — ce correctif rend la classe d'incident
+    impossible, pas seulement ce cas précis)."""
     all_points: list = []
     to_time = now
     days_back = 0
     output_path = OUTPUT_DIR / f"{epic}_{resolution}.json"
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
 
     while days_back < max_days_back:
         from_time, to_time_window = _page_window(to_time, resolution)
@@ -130,13 +144,15 @@ def download_one(client: CapitalClient, epic: str, resolution: str, now: datetim
 
         all_points = page + all_points  # page est chronologique ; on préfixe (on remonte dans le temps)
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(json.dumps(all_points), encoding="utf-8")
+        tmp_path.write_text(json.dumps(all_points), encoding="utf-8")
         print(f"  {epic}/{resolution} : +{len(page)} bougies (total {len(all_points)}, jusqu'à {from_time.date()})")
 
         to_time = from_time
         days_back = (now - to_time).days
         time.sleep(THROTTLE_SECONDS)
 
+    if all_points:
+        tmp_path.replace(output_path)  # rename atomique : jamais de fichier final tronqué
     return all_points
 
 

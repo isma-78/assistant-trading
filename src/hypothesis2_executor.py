@@ -67,13 +67,23 @@ def run_hypothesis2_loop(config, db_path: str, interval_seconds: int = 60, start
     **Overrides du cycle d'évolution** : clé `"H2_v2"`, jamais `"H2"`
     (n'hérite d'aucun paramètre déjà tuné pour l'ancienne logique v1) —
     variables ajustées du pré-enregistrement (`EMA_PERIOD`,
-    `RSI_THRESHOLD`, `N_TF`, `SCORE_THRESHOLD`)."""
+    `RSI_THRESHOLD`, `N_TF`, `SCORE_THRESHOLD`).
+
+    **Amendement 29/08/2026** (voir docs/DECISIONS.md) : résolution
+    native HOUR, pas MINUTE_15 (profondeur M15 réelle du broker
+    confirmée à 2024-01-01 seulement, uniforme sur les 8 actifs — la
+    fenêtre de découverte 2019-2022 pré-enregistrée exige HOUR). Les 3
+    TF fixes remappés en conséquence pour préserver le même facteur
+    ×4/×4 : HOUR (natif) + HOUR_4 (×4) + DAY (×4 supplémentaire,
+    disponibilité vérifiée en direct le 29/08/2026) — remplace
+    HOUR/HOUR_4 d'origine (qui étaient les TF de CONFIRMATION quand le
+    natif était M15)."""
     apply_overrides(_h2_mod, "H2_v2", db_path, ["EMA_PERIOD", "RSI_THRESHOLD", "N_TF", "SCORE_THRESHOLD"])
     run_technical_strategy_loop(
         config, db_path,
         source=HYPOTHESIS2_V2_SOURCE,
         assets=HYPOTHESIS2_ASSETS,
-        resolution="MINUTE_15",
+        resolution="HOUR",
         entry_fn=evaluate_entry,
         api_key=config.capital_api_key_hypothesis2,
         identifier=config.capital_identifier_hypothesis2,
@@ -85,7 +95,7 @@ def run_hypothesis2_loop(config, db_path: str, interval_seconds: int = 60, start
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
         startup_offset_seconds=startup_offset_seconds,
-        extra_resolutions=["HOUR", "HOUR_4"],
+        extra_resolutions=["HOUR_4", "DAY"],
     )
 
 

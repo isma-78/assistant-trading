@@ -49,8 +49,8 @@ def test_run_hypothesis2_loop_forwards_h2_credentials_and_resolution():
     mock_loop.assert_called_once()
     _, kwargs = mock_loop.call_args
     assert kwargs["source"] == "hypothesis2_v2"  # refonte L2, 29/08/2026 (voir docs/DECISIONS.md)
-    assert kwargs["resolution"] == "MINUTE_15"
-    assert kwargs["extra_resolutions"] == ["HOUR", "HOUR_4"]  # confluence multi-timeframe L2
+    assert kwargs["resolution"] == "HOUR"  # amendement 29/08/2026 (voir docs/DECISIONS.md) : profondeur M15 insuffisante
+    assert kwargs["extra_resolutions"] == ["HOUR_4", "DAY"]  # confluence multi-timeframe L2, remappe depuis HOUR natif
     assert "session_gated" not in kwargs  # paramètre retiré, voir docs/DECISIONS.md
     assert kwargs.get("require_regime_confirmation", False) is False
     assert kwargs["api_key"] == "key2"

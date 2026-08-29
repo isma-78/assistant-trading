@@ -46,7 +46,7 @@ def test_run_hypothesis5_loop_forwards_h5_credentials_and_resolution():
     mock_loop.assert_called_once()
     _, kwargs = mock_loop.call_args
     assert kwargs["source"] == "hypothesis5_v2"  # refonte L5, 29/08/2026 (voir docs/DECISIONS.md)
-    assert kwargs["resolution"] == "MINUTE_15"
+    assert kwargs["resolution"] == "HOUR"  # amendement 29/08/2026 (voir docs/DECISIONS.md) : profondeur M15 insuffisante
     assert "session_gated" not in kwargs  # paramètre retiré, voir docs/DECISIONS.md
     assert kwargs.get("require_regime_confirmation", False) is False
     assert kwargs["api_key"] == "key5"

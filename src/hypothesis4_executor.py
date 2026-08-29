@@ -72,7 +72,12 @@ def run_hypothesis4_loop(config, db_path: str, interval_seconds: int = 60, start
     pré-enregistrement (`PIVOT_FRACTAL_N`, `MAX_PIVOT_DISTANCE_BARS`,
     `STOP_ATR_MULT`)."""
     apply_overrides(_h4_mod, "H4_v2", db_path, ["PIVOT_FRACTAL_N", "MAX_PIVOT_DISTANCE_BARS", "STOP_ATR_MULT"])
-    resolution = get_resolution_override(db_path, "H4_v2", "entree", "MINUTE_15")
+    # Amendement 29/08/2026 (voir docs/DECISIONS.md) : résolution HOUR,
+    # pas MINUTE_15 — la profondeur M15 réelle du broker s'arrête au
+    # 2024-01-01 (sondé, uniforme sur les 8 actifs), la fenêtre de
+    # découverte 2019-2022 pré-enregistrée exige HOUR (confirmée jusqu'à
+    # 2017). L4 est resolution-agnostique, aucun changement de logique.
+    resolution = get_resolution_override(db_path, "H4_v2", "entree", "HOUR")
     run_technical_strategy_loop(
         config, db_path,
         source=HYPOTHESIS4_V2_SOURCE,

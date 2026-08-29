@@ -51,7 +51,7 @@ def test_run_hypothesis3_loop_forwards_h3_credentials_and_resolution():
     mock_loop.assert_called_once()
     _, kwargs = mock_loop.call_args
     assert kwargs["source"] == "hypothesis3_v2"  # refonte L3, 29/08/2026 (voir docs/DECISIONS.md)
-    assert kwargs["resolution"] == "MINUTE_15"
+    assert kwargs["resolution"] == "HOUR"  # amendement 29/08/2026 (voir docs/DECISIONS.md) : profondeur M15 insuffisante
     assert kwargs["api_key"] == "key3"
     assert kwargs["identifier"] == "id3"
     assert kwargs["password"] == "pwd3"
