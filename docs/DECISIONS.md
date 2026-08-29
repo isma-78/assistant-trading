@@ -12,6 +12,167 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 21) — Point 17 : calibration H2-H5 — H2/L2 CONFIRMÉ POSITIF (premier edge confirmé du projet), H3/H4 clos au raccourci point 14, H5 clos au test d'information
+
+Exécuté dans l'ordre pré-enregistré (docs/HYPOTHESES.md, entrée du
+29/08/2026), sur `~/costfix_staging` (jamais sur le checkout déployé,
+jamais de `git pull`/redémarrage des 6 process live). Données : HOUR/
+HOUR_4 déjà présentes 2017→2026-08-26 sur les 8 actifs (CHFJPY exclue,
+même motif que le reste de H2-H5) ; **DAY téléchargée aujourd'hui**
+(2015-09-21→2026-08-29, `_RESOLUTION_MINUTES["DAY"]=1440` ajouté à
+`scripts/download_historical_data.py`, commit `82cf621`) — nécessaire à
+la confluence HOUR/HOUR_4/DAY d'H2 (amendement du 29/08/2026).
+
+### Vérification préalable du modèle de coûts (question posée en cours d'exécution)
+
+**Cas A confirmé, aucun bug** : tous les R-multiples utilisés ici
+(sélection, CV, sigma, coût0, confirmation) proviennent directement de
+`backtest_engine.replay_hypothesis`, qui exécute chaque entrée/sortie
+au bid/ask RÉEL de la bougie concernée (`HistoricalBar.spread_open`,
+vérifié dans le code par le point 6 du même chantier) — donc déjà
+correct heure par heure, sur les données 2019-2024 elles-mêmes,
+jamais une moyenne. Aucune moyenne de spread séparée n'a été
+recalculée nulle part dans ce calcul : `sigma`/`cost0`/`mean_r` sont
+tous des agrégats (`statistics.fmean`/`stdev`) des R-multiples déjà
+produits par le simulateur pour les trades réellement générés par le
+combo retenu — jamais une reconstruction indépendante. `cost0` en
+particulier vient de DEUX passes réelles du simulateur (coûts réels vs
+`SLIPPAGE_SPREAD_MULTIPLIER=0`/`FINANCING_BPS_PER_DAY=0`), pas d'une
+formule de spread appliquée à côté. `backtest_engine.py` n'a subi
+AUCUNE modification pendant tout ce calcul.
+
+### H5/L5 — CLOS au test d'information, calibration jamais lancée
+
+Test pré-enregistré (corrélation sens de cassure initiale / sens du
+mouvement à 20 bougies, config par défaut du module — COMPRESSION_
+PERCENTILE=20, COMPRESSION_DURATION=10, valeurs centrales de la
+grille — HOUR, découverte 2019-2022, 8 actifs) : **n=447, r=-0,0783,
+seuil de discernabilité (2×SE Fisher-z) = 0,0949 → NON discernable de
+zéro.** Conformément à la clause H5 du pré-enregistrement : calibration/
+gate/confirmation ABANDONNÉES pour H5 sans nouvelle tentative. Le
+déploiement démo (point 1/9) reste inconditionnel et a lieu quand même,
+sur la définition figée telle quelle, pour la seule collecte forward.
+
+### H3/L3 — CLOS au raccourci point 14
+
+Grille complète (m=18, RETRACEMENT_RATIO x CONFIRMATION_BARS x
+STOP_BUFFER_ATR), HOUR, découverte 2019-2022, pooled sur 8 actifs.
+**Les 18 combinaisons qualifient (n=609 à 3159, toutes >=200) et sont
+TOUTES négatives sans exception** (de -0,150R à -0,282R). Aucune
+moyenne brute positive -> CV imbriquée sautée (règle pré-enregistrée
+plus tôt aujourd'hui, "points 14-15"). H3 clos côté recherche.
+
+### H4/L4 — CLOS au raccourci point 14
+
+Grille complète (m=27, PIVOT_FRACTAL_N x MAX_PIVOT_DISTANCE_BARS x
+STOP_ATR_MULT), HOUR, découverte 2019-2022, pooled sur 8 actifs.
+**Les 27 combinaisons qualifient (n=1114 à 3887, toutes >=200) et sont
+TOUTES négatives sans exception** (de -0,108R à -0,215R). Aucune moyenne
+brute positive -> CV imbriquée sautée. H4 clos côté recherche. (Garde-fou
+OBV du pré-enregistrement sans objet : jamais atteint, aucun candidat
+n'a qualifié pour qu'il y ait un variant gagnant à rejouer sans OBV.)
+
+### H2/L2 — CONFIRMÉ POSITIF — premier edge confirmé du projet, deux générations d'hypothèses confondues
+
+**Grille (m=24, EMA_PERIOD x RSI_THRESHOLD x N_TF x SCORE_THRESHOLD),
+confluence HOUR (natif)/HOUR_4/DAY, découverte 2019-2022, pooled sur 8
+actifs.** Motif net et cohérent sur toute la grille : `SCORE_THRESHOLD
+=1.0` (alignement des 3 indicateurs EMA/Ichimoku/RSI, pas seulement
+2/3) est positif sur TOUTES les combinaisons testées ; `SCORE_THRESHOLD
+=0,667` est majoritairement négatif ou proche de zéro — cohérent avec
+un filtre de confluence stricte qui débruite réellement le signal, pas
+un artefact isolé.
+
+**CV imbriquée k=4** (2019/2020/2021/2022, sélection sur 3 ans pooled,
+évaluation sur l'année tenue à l'écart, une seule passe de découverte
+par combinaison — les 4 replis sont dérivés du MÊME passage complet,
+bucketé par année de `entry_time_utc`, jamais un recalcul par pli :
+valide ici car la génération causale d'un trade dans l'année Y ne
+dépend jamais des années futures, seulement des bougies passées déjà
+présentes dans le passage complet) :
+- 2019 tenu à l'écart : combo {EMA=100,RSI=55,N_TF=3,SCORE=1.0}
+  sélectionné (train n=937, mean=0,2203R) -> test n=202, mean=**+0,1833R**
+- 2020 tenu à l'écart : combo {EMA=20,RSI=55,N_TF=3,SCORE=1.0}
+  sélectionné (train n=883, mean=0,1830R) -> test n=328, mean=**+0,3078R**
+- 2021 tenu à l'écart : même combo (train n=899, mean=0,2353R) ->
+  test n=312, mean=**+0,1638R**
+- 2022 tenu à l'écart : même combo (train n=868, mean=0,2322R) ->
+  test n=343, mean=**+0,1780R**
+
+**Estimation débiaisée = moyenne des 4 espérances hors-bloc =
++0,2082R.** Les 4 replis sont positifs SANS EXCEPTION — pas un seul
+signe négatif, contrairement à H1/L1 (36/36 négatifs) et H3/H4
+(45/45 négatifs) : signal directionnellement stable dans le temps.
+
+**Combo final retenu** (meilleure moyenne brute sur les 4 ans pooled,
+n>=200) : `EMA_PERIOD=20, RSI_THRESHOLD=55, N_TF=3, SCORE_THRESHOLD=1.0`
+— n=1211, mean_r=0,21684R, sigma=1,05888R (mesurés directement sur les
+1211 trades réels produits par le simulateur, voir vérification du
+modèle de coûts ci-dessus).
+
+**Gate de puissance** :
+- `cost0` (passe coûts réels vs passe `SLIPPAGE_SPREAD_MULTIPLIER=0`/
+  `FINANCING_BPS_PER_DAY=0`, même combo, même 1211 trades) = **0,03188R**
+  par trade — coût mesuré, jamais supposé.
+- n projeté confirmation = n_découverte x (1,5 an / 4 ans découverte)
+  = 1211 x 0,375 = environ **454,1**.
+- MDE = (z_Bonferroni(m=5)=2,3263 + 0,8416) x sigma / racine(n_projeté) =
+  3,1679 x 1,05888 / racine(454,1) = **0,1574R**.
+- Cible (nette débiaisée, CV) = **0,2082R**.
+- Brut débiaisé (nette + cost0) = 0,2082 + 0,0319 = **0,2401R**.
+- brut_min = 2 x racine(cost0 x MDE) = 2 x racine(0,03188 x 0,1574) = **0,1417R**.
+- **Décision : MDE (0,1574) < cible (0,2082) ET brut débiaisé (0,2401)
+  >= brut_min (0,1417) -> CONFIRMATION LANCÉE.**
+
+**Confirmation, un seul passage, 2023-01-01 -> 2024-06-14, même combo,
+aucun réglage** (m=1 — seule H2 atteint cette étape parmi les 4
+restantes, compté au moment du calcul, jamais présupposé) :
+- n=389, mean_r=**+0,2431R**.
+- Borne basse (bootstrap par blocs calendaires, confidence=0,95,
+  2000 rééchantillonnages, seed=0, `evolution_engine.compute_
+  calendar_block_bootstrap_lower_bound` réutilisée telle quelle) =
+  **+0,1394R > 0 -> CONFIRMÉ.**
+- **Contrôle année par année (obligatoire, résultat positif)** :
+  2023 (n=244) mean=+0,2880R ; 2024 partiel jusqu'au 14/06 (n=145)
+  mean=+0,1674R — **les deux sous-périodes sont positives**, pas un
+  résultat porté par une seule année.
+- Aucun sous-groupe post-hoc actionable calculé (seul le contrôle
+  année par année pré-enregistré a été fait).
+
+**H2/L2 est donc le PREMIER edge confirmé de tout ce projet, toutes
+générations d'hypothèses confondues** (v1 : 5/5 jamais confirmées ;
+v2 : H1 clos négatif bien puissant, H3/H4 clos négatifs, H5 clos au
+test d'information). Signal rare et sélectif (n=1211 sur 4 ans pooled
+sur 8 actifs, environ 3 trades/mois/actif) — cohérent avec l'exigence de
+confluence stricte (3 indicateurs x 3 unités de temps simultanément).
+
+**Nombre total d'essais indépendants pré-enregistrés dans CE chantier
+(29/08/2026)** : 5 (H1-H5), 1 confirmé (H2), 4 clos (H1 négatif bien
+puissant, H3/H4 négatifs au raccourci point 14, H5 au test
+d'information). Le compte CUMULÉ sur l'historique COMPLET du projet
+(générations v1 incluses, plusieurs cycles d'évolution antérieurs)
+n'a PAS été ré-énuméré exhaustivement ici — hors du périmètre calculable
+dans ce seul chantier sans reparcourir l'intégralité de docs/DECISIONS.md
+palier par palier ; à faire si une traçabilité programme complète est
+requise, pas anticipé/deviné ici.
+
+### Conséquence sur la règle d'arrêt du point 18
+
+La règle fixée plus tôt aujourd'hui ("si aucune des 4 hypothèses
+restantes ne franchit gate ET confirmation, le programme est suspendu")
+**NE SE DÉCLENCHE PAS** : H2/L2 franchit les deux. Le programme de
+recherche par hypothèses CONTINUE sur H2 — traitement complet
+(déploiement, cycle d'ajustement continu point 8, suivi forward)
+inchangé par ailleurs. H1/H3/H4/H5 restent closes côté recherche mais
+NE SONT PAS retirées du démo (règle déjà actée, point 15).
+
+**Scripts de calibration** : vivent uniquement sur `~/costfix_staging`
+(`point17_calib.py`, `run_h34.py`, `run_h2.py`, `h5_info_test.py`,
+`h2_gate.py`, `h2_confirmation.py`) — jamais commités, jamais sur le
+checkout déployé, aucune interaction avec les 6 process live.
+
+---
+
 ## 2026-08-29 (suite 20) — Point 18 : règle d'arrêt au niveau du programme, fixée AVANT tout résultat H2-H5 (point 17 pas encore exécuté)
 
 Écrite maintenant, explicitement AVANT de lancer le point 17 — même
