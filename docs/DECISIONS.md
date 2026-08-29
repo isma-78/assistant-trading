@@ -12,6 +12,61 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 4) — Point C, Hypothèse #2 : L2 (confluence multi-timeframe EMA/Ichimoku/RSI) implémentée, testée (100%) — `hypothesis2_strategy.py` archivé, `ict_strategy.py` conservé (réutilisé par H3/L3)
+
+`src/hypothesis2_strategy_v2.py` (nouveau, 100% couvert, 25 tests) —
+**anti-lookahead Ichimoku prouvé par test AVANT l'implémentation**,
+comme demandé : `compute_ichimoku_cloud_at(candles, index)` calcule
+explicitement à partir de `index - 26` (senkou décalé de 26 périodes
+vers l'avant, jamais implicite) ; le test décisif construit deux séries
+strictement identiques jusqu'à `index-26` puis totalement divergentes
+au-delà, et prouve que le nuage utilisable à `index` est rigoureusement
+IDENTIQUE dans les deux cas — un contrôle négatif (`shift=0`) confirme
+qu'une implémentation naïve sans décalage donnerait, elle, des résultats
+différents (le test est bien discriminant, pas trivialement vrai).
+
+**Correctif de spécification trouvé en implémentant, avant tout
+calcul** : `score_threshold ∈ {0,8 ; 1,0}` de la grille pré-enregistrée
+ne correspond à AUCUNE combinaison atteignable avec 3 indicateurs
+discrets (EMA/Ichimoku/RSI) — seules 0 ; 0,333 ; 0,667 ; 1,0 sont
+possibles. Corrigé en `{0,667 ; 1,0}` (« au moins 2 des 3 s'alignent »
+vs « les 3 »), documenté dans `docs/HYPOTHESES.md` — correction
+de valeur de grille uniquement, avant tout regard sur la donnée, ne
+consomme aucun budget invariant #10 supplémentaire.
+
+**Écart architectural nécessaire, documenté** : la confluence multi-TF
+de L2 (M15 native + H1 + H4, fixes) exige plus qu'une seule résolution
+par cycle — le contrat générique `entry_fn(asset, candles)` de
+`technical_strategy_executor.py` n'y suffisait pas. Nouveau paramètre
+`extra_resolutions` (optionnel, `None` par défaut) sur
+`run_technical_strategy_loop`/`_generate_and_queue_signal` : quand
+fourni, effectue des `get_candles` supplémentaires (même actif,
+profondeur réduite `EXTRA_RESOLUTION_CANDLE_COUNT=100`) et les passe à
+`entry_fn` en arguments positionnels après `candles` — **H1/H3/H4/H5
+strictement inchangées** (un seul appel `entry_fn(asset, candles)`
+comme avant, `extra_resolutions=None`). Changement contenu à
+`technical_strategy_executor.py`, hors du périmètre restreint
+(`risk_engine`/`validator`/`executor` core).
+
+`src/hypothesis2_executor.py` rewire : source `hypothesis2` →
+`hypothesis2_v2`, `extra_resolutions=["HOUR","HOUR_4"]`, clé
+`hypothesis_params` `"H2_v2"`. **`hypothesis2_strategy.py` archivé**
+(wrapper TP1/TP2 autour de l'ancien `ict_strategy.evaluate_entry`) —
+`ict_strategy.py` lui-même **N'EST PAS archivé**, son régime structurel
+BOS/CHoCH (`classify_structure_break`) reste réutilisé par H3/L3, seule
+sa fonction `evaluate_entry` (le déclencheur ICT complet) devient morte
+pour le live une fois H2 basculée. **Aucune position H2 v1 ouverte au
+moment du changement** (vérifié en base) — notable car H2 était
+déployée et active en production depuis le 21/08/2026, contrairement à
+H4 (jamais déployée).
+
+999 tests dans la suite principale, tous verts, 100% de couverture
+maintenue sur les 16 modules critiques/stratégiques suivis (incluant
+désormais `market_data.py`, `hypothesis2_strategy_v2.py`,
+`hypothesis4_strategy_v2.py`). Committé et poussé sur GitHub, **pas
+déployé sur le VPS** (point A). Archive interne cohérente (38 tests
+archivés H2 passent standalone).
+
 ## 2026-08-29 (suite 3) — Point C, Hypothèse #4 : L4 (divergence prix/RSI+OBV) implémentée, testée (100%), déployée dans le code (pas sur le VPS) — `mean_reversion_strategy.py` archivé
 
 Prérequis codé d'abord (`Candle`/`HistoricalBar` gagnent un champ
