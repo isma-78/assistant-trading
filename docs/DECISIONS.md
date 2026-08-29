@@ -12,6 +12,80 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 19) — Points 9-13 : statut des mesures pré-enregistrées jamais exécutées, code de séparation livré pour 10-11, compteurs vérifiés en base pour 9/12/13
+
+Consigné comme demandé — "rapporter le statut, reprendre quand la
+donnée forward s'accumule" — jamais un calcul forcé sous le seuil.
+
+### Point 9 — Test de fidélité du simulateur (pré-enregistré 27/08,
+amendé 28/08, commit `13a808a`)
+
+**0/30 paires, inchangé.** Bloqué sur DEUX prérequis, ni l'un ni
+l'autre encore levé : (a) l'étape 1 (déploiement L1-L5/CHFJPY,
+`docs/DEPLOIEMENT_V2.md`) n'a pas encore été exécutée par Ismaël — la
+fenêtre forward du pré-enregistrement démarre explicitement "au
+déploiement de l'étape 1", donc n'a pas encore commencé au sens
+littéral du texte ; (b) `data/historical/*.json` s'arrête au
+26/08/2026, `download_historical_data.py` devra être relancé pour
+couvrir la fenêtre forward avant le premier calcul apparié. Aucune
+action aujourd'hui — les deux prérequis dépendent du déploiement.
+
+### Point 10 — Mesure A (taux de remplissage) : séparation des 3 causes livrée en code, 0 mesuré
+
+`trades.annulation_motif` (`rate_limit_429`|`stop_refuse`|
+`peremption_marche`|`autre_echec_placement`) — classifié EN CODE au
+moment de l'exception (`executor.py::_classify_placement_failure`),
+jamais reconstruit depuis un log texte. `src/fill_rate_analysis.py`
+calcule `c/(b+c)` (jamais `c/(a+b+c)`) et la borne haute de Wilson à
+95%, seuil <0,80 inchangé, n minimum 30 sur (b+c) inchangé. **0 ligne
+historique n'a de motif connu** (colonne inexistante avant aujourd'hui,
+jamais rétro-catégorisable — l'information n'existait dans aucun log
+structuré) : toute mesure réelle démarre de zéro à partir du prochain
+`annule` produit par le code déployé.
+
+### Point 11 — Mesure B (cadence d'émission) : règle d'épisodes codée, comparaison toujours invalide faute de volume
+
+`src/episode_counter.py` code la règle proposée le 28/08/2026
+(regrouper les tentatives rapprochées du même (actif, source,
+direction) en un seul épisode) — approximation documentée dans le
+module : aucun horodatage de résolution n'est capturé pour un trade
+`annulé` (seul `ouvert_at` existe), le regroupement se fait donc par
+proximité entre `ouvert_at` consécutifs plutôt que par proximité à la
+résolution précédente comme le texte du 28/08 le décrivait
+littéralement. Toujours pas assez de données forward pour une
+comparaison live/backtest significative (inchangé depuis le dernier
+relevé) — la fonction est prête, aucun calcul comparatif forcé.
+
+### Point 12 — Étape 3 (coûts de sortie) : compteur revérifié en base, toujours 0/30
+
+Requête directe sur `trade_causal_decomposition` (lecture seule,
+29/08/2026) : **0 ligne `invalide=0` avec `cout_sortie` non NULL**, y
+compris après le rattrapage du point 4 qui a pourtant décomposé 54
+trades aujourd'hui — **aucun des 54 n'a de `prix_sortie_reel` capturé
+sur la totalité de ses jambes** (capture ajoutée le 27/08/2026,
+quasiment aucun trade antérieur n'est éligible, et trop peu de trades
+forward ont encore fermé). Compteur inchangé par rapport au dernier
+relevé du 28/08/2026. Rappel de la règle déjà fixée : mesurer le RATIO
+`cout_sortie/spread`, jamais le coût absolu ; rapporter la DISTRIBUTION
+complète une fois n=30 atteint, jamais seulement la moyenne (un point
+réel déjà connu, trade 14240, était FAVORABLE de 1,13 spread — la
+distribution n'est donc pas présumée à sens unique). Aucune
+modification de `backtest_engine.py` sans ce rapport (toujours
+respecté).
+
+### Point 13 — Taux d'échec de resserrement de stop : infrastructure prête, 0 mesure
+
+Retry adaptatif + journalisation de la valeur de stop DEMANDÉE (avant
+tentative) construits le 29/08/2026 plus tôt dans ce chantier
+(`capital_client.py::update_position_stop`, voir entrée dédiée). Aucune
+mesure encore calculée — la journalisation vient d'être ajoutée, il n'y
+a par construction aucun historique antérieur exploitable (l'ancienne
+version ne loggait pas la valeur demandée). À mesurer FORWARD, par
+actif et par distance de stop, une fois un volume de tentatives réelles
+accumulé post-déploiement.
+
+---
+
 ## 2026-08-29 (suite 18) — Point 8 : mécanisme du cycle d'ajustement continu construit (interrupteur, plafond 30j, budget de temps, fail-safe), activation réelle laissée au point 17
 
 **Renforcement méthodologique appliqué à `evolution_engine.py` d'abord**
