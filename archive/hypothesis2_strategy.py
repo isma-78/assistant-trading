@@ -1,4 +1,14 @@
 """
+ARCHIVÉ le 29/08/2026 — remplacé par src/hypothesis2_strategy_v2.py
+(confluence multi-timeframe EMA/Ichimoku/RSI, L2) dans le cadre de la
+refonte complète H1-H5 (voir docs/DECISIONS.md, entrée "Hypothèse #2 —
+refonte L2" du 29/08/2026, et docs/HYPOTHESES.md, pré-enregistrement du
+29/08/2026). Conservé tel quel pour l'audit — plus jamais importé par
+aucun executor. `ict_strategy.py` (dont ce module dépendait) N'EST PAS
+archivé : son régime structurel BOS/CHoCH reste réutilisé par H3/L3.
+Aucune position H2 v1 n'était ouverte au moment du remplacement
+(vérifié). Ne pas modifier ce fichier.
+
 hypothesis2_strategy.py — Sortie à prise de profit pour l'Hypothèse #2,
 décision EXPLICITE d'Ismaël le 23/08/2026 (voir docs/DECISIONS.md) : le
 trailing Donchian(20) pur d'origine est remplacé par le mécanisme §2.10

@@ -158,6 +158,9 @@ def _default_describe_signal(hypothesis_label: str, asset: str, signal) -> str:
     )
 
 
+EXTRA_RESOLUTION_CANDLE_COUNT = 100  # FIGÉ — profondeur pour EMA/Ichimoku/RSI(14) sur une résolution de confirmation
+
+
 def _generate_and_queue_signal(
     db_path: str, client: CapitalClient, asset: str, *,
     source: str, resolution: str, entry_fn: Callable[[str, List[Candle]], Optional[object]],
@@ -165,6 +168,7 @@ def _generate_and_queue_signal(
     describe_signal: Optional[Callable[[str, str, object], str]] = None,
     require_regime_confirmation: bool = False,
     confirmed_regime: Optional[str] = None,
+    extra_resolutions: Optional[List[str]] = None,
 ) -> None:
     """Évalue `entry_fn` sur `asset` et, si un signal se déclenche et
     qu'aucun signal/trade de cette source n'est déjà actif dessus,
@@ -203,12 +207,31 @@ def _generate_and_queue_signal(
     remplace jamais. `require_regime_confirmation=False` par défaut : H1
     (jamais appelée avec ce paramètre) et H2/H5 (option C, voir
     docs/HYPOTHESES.md — déjà couvertes par leur régime structurel) ne
-    sont jamais affectées."""
+    sont jamais affectées.
+
+    `extra_resolutions` (H2/L2 UNIQUEMENT, 29/08/2026, voir
+    docs/DECISIONS.md point C) : résolutions supplémentaires du MÊME
+    actif à récupérer (profondeur réduite, `EXTRA_RESOLUTION_CANDLE_
+    COUNT`) et passer à `entry_fn` en arguments positionnels
+    supplémentaires (`entry_fn(asset, candles, *candles_extra)`) —
+    nécessaire pour la confluence multi-timeframe de L2
+    (`hypothesis2_strategy_v2.evaluate_entry(asset, candles_m15,
+    candles_h1, candles_h4)`), que le contrat générique à une seule
+    résolution ne permettait pas. `None` par défaut : H1/H3/H4/H5
+    strictement inchangées (un seul appel `entry_fn(asset, candles)`,
+    comme avant)."""
     if _has_active_signal_or_trade(db_path, asset, source):
         return
 
     candles = get_candles(client, asset, resolution=resolution, count=CANDLE_COUNT)
-    signal = entry_fn(asset, candles)
+    if extra_resolutions:
+        extra_candles = [
+            get_candles(client, asset, resolution=extra_resolution, count=EXTRA_RESOLUTION_CANDLE_COUNT)
+            for extra_resolution in extra_resolutions
+        ]
+        signal = entry_fn(asset, candles, *extra_candles)
+    else:
+        signal = entry_fn(asset, candles)
     if signal is None:
         return
 
@@ -278,6 +301,7 @@ def run_technical_strategy_loop(
     require_regime_confirmation: bool = False,
     startup_offset_seconds: int = 0,
     confirming_resolution: Optional[str] = None,
+    extra_resolutions: Optional[List[str]] = None,
 ) -> None:
     """Boucle continue générique d'une stratégie technique complémentaire
     (§2.11). Un seul point de variation par appelant : `source`,
@@ -443,6 +467,7 @@ def run_technical_strategy_loop(
                     describe_signal=describe_signal,
                     require_regime_confirmation=require_regime_confirmation,
                     confirmed_regime=regime_context.get(asset),
+                    extra_resolutions=extra_resolutions,
                 )
 
             reconcile_ghost_positions(db_path, client, source_filter=lambda s: s == source)

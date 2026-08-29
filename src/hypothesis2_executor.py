@@ -1,41 +1,44 @@
 """
-hypothesis2_executor.py — Boucle autonome de l'Hypothèse #2 (ICT / Smart
-Money Concepts, Option B), validée par Ismaël le 21/08/2026 (voir
-docs/HYPOTHESES.md). Détection via ict_strategy.evaluate_entry (régime
-structurel BOS/CHoCH depuis le 23/08/2026 — voir docs/DECISIONS.md,
-remplace MA200 — + confluence swings fractals/Fibonacci/FVG),
-déclencheur INCHANGÉ par tout ce qui suit.
+hypothesis2_executor.py — Boucle autonome de l'Hypothèse #2.
 
-**Sortie basculée le 23/08/2026** (décision explicite d'Ismaël, voir
-docs/DECISIONS.md) : `hypothesis2_strategy.evaluate_entry` (pas
-`ict_strategy.evaluate_entry` directement) ajoute désormais TP1(1R)/
-TP2(2R) au signal, déclenchant le mécanisme §2.10 (TP1/TP2/trailing sur
-le reliquat) au lieu du trailing Donchian(20) pur d'origine.
+**REFONTE L2, 29/08/2026** (voir docs/HYPOTHESES.md, pré-enregistrement
+du 29/08/2026, et docs/DECISIONS.md) : le déclencheur ICT/Fibonacci/FVG
+(`hypothesis2_strategy.py`, wrapper de `ict_strategy.evaluate_entry`,
+déployé et actif depuis le 21/08/2026) est REMPLACÉ par une confluence
+multi-timeframe EMA/Ichimoku(9/26/52)/RSI(14) sur M15+H1+H4
+(`hypothesis2_strategy_v2.evaluate_entry`). L'ancien wrapper est
+ARCHIVÉ (voir archive/hypothesis2_strategy.py) — `ict_strategy.py`
+lui-même N'EST PAS archivé (son régime structurel BOS/CHoCH reste
+réutilisé par H3/L3, voir docs/HYPOTHESES.md). Source live et backtest
+changent de `hypothesis2` à `hypothesis2_v2` — **aucune position H2 v1
+ouverte au moment de ce changement** (vérifié, voir docs/DECISIONS.md).
 
-**Couche session/multi-timeframe, 23/08/2026** : résolution M15 (au lieu
-de HOUR). La fenêtre de session (0h/8h/13h UTC) ne gate PLUS la
-génération de signaux depuis la révision du 23/08/2026 fin de journée
-(voir docs/DECISIONS.md/docs/HYPOTHESES.md — l'ancien gate + l'exemption
-crypto associée sont devenus obsolètes et ont été retirés) : évaluation
-continue, tous les actifs, à chaque cycle. **Aucune confirmation de
-régime croisée** (option C — H2 déjà couverte par son propre régime
-structurel BOS/CHoCH, une confirmation supplémentaire serait redondante,
-voir docs/HYPOTHESES.md).
+**Multi-timeframe** : `extra_resolutions=["HOUR", "HOUR_4"]` (nouveau
+paramètre de `technical_strategy_executor.run_technical_strategy_loop`,
+29/08/2026) déclenche deux appels `get_candles` supplémentaires (même
+actif, profondeur réduite) — `evaluate_entry` de ce module reçoit donc
+`(asset, candles_m15, candles_h1, candles_h4)`, pas la signature à une
+seule résolution des autres hypothèses.
 
-Process indépendant, compte Capital.com démo dédié ("hypothèse 2"),
-**déployé et actif en production depuis le 21/08/2026** (identifiants
-dans le `.env` du VPS) — `run_hypothesis2_loop` échoue net (ConfigError,
-fail-safe, invariant #7) si l'un des identifiants
-`CAPITAL_API_KEY_HYPOTHESIS2`/`CAPITAL_IDENTIFIER_HYPOTHESIS2`/
-`CAPITAL_API_PASSWORD_HYPOTHESIS2`/`CAPITAL_ACCOUNT_ID_HYPOTHESIS2`
-venait à manquer — jamais un repli silencieux vers un autre jeu
-d'identifiants.
+**Structure de sortie inchangée** (TP1 50%/TP2 30%/trailing, §2.10,
+comme depuis le 23/08/2026) — L2 continue d'utiliser ce mécanisme,
+calculé directement dans `hypothesis2_strategy_v2.evaluate_entry`.
 
-8 actifs (les mêmes que les Hypothèses #1 et #3) — voir docs/HYPOTHESES.md.
+**Aucune confirmation de régime croisée** — comme l'ancien H2, la
+confluence multi-TF de L2 fait déjà elle-même office de filtre de
+régime, une confirmation supplémentaire serait redondante.
+
+Process indépendant, compte Capital.com démo dédié ("hypothèse 2").
+Identifiants et statut de déploiement VPS inchangés par ce chantier —
+voir point A (déploiement suspendu au déblocage du garde-fou de taille).
+
+9 actifs (8 existants + CHFJPY) — voir docs/HYPOTHESES.md.
 """
 
-from src.executor import HYPOTHESIS2_SOURCE
-from src.hypothesis2_strategy import evaluate_entry
+import src.hypothesis2_strategy_v2 as _h2_mod
+from src.executor import HYPOTHESIS2_V2_SOURCE
+from src.hypothesis2_strategy_v2 import evaluate_entry
+from src.hypothesis_params import apply_overrides
 from src.technical_strategy_executor import run_technical_strategy_loop
 
 HYPOTHESIS2_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD", "CHFJPY"]
@@ -47,10 +50,9 @@ _HYPOTHESIS_LABEL = "Hypothèse #2"
 
 def _describe_signal(hypothesis_label: str, asset: str, signal) -> str:
     return (
-        f"{hypothesis_label} — {asset} : confluence ICT (swing fractal K=2, zone de Fibonacci, "
-        f"FVG) en régime {signal.direction} (structure BOS/CHoCH), entrée={signal.entry_price}, "
-        f"stop={signal.stop_price}, TP1={signal.tp1} (1R), TP2={signal.tp2} (2R), reliquat 20% "
-        f"sous trailing ATR (docs/HYPOTHESES.md, docs/DECISIONS.md 23/08/2026)"
+        f"{hypothesis_label} — {asset} : confluence multi-timeframe EMA/Ichimoku/RSI (L2) "
+        f"{signal.direction}, entrée={signal.entry_price}, stop={signal.stop_price}, "
+        f"TP1={signal.tp1} (1R), TP2={signal.tp2} (2R) (docs/HYPOTHESES.md)"
     )
 
 
@@ -60,11 +62,16 @@ def run_hypothesis2_loop(config, db_path: str, interval_seconds: int = 60, start
     Capital.com dédiés (config.capital_*_hypothesis2).
 
     `startup_offset_seconds=20` (24/08/2026, voir docs/DECISIONS.md) :
-    échelonnement des 6 process de production sur la même IP, voir
-    docstring de `technical_strategy_executor.run_technical_strategy_loop`."""
+    échelonnement des 6 process de production sur la même IP.
+
+    **Overrides du cycle d'évolution** : clé `"H2_v2"`, jamais `"H2"`
+    (n'hérite d'aucun paramètre déjà tuné pour l'ancienne logique v1) —
+    variables ajustées du pré-enregistrement (`EMA_PERIOD`,
+    `RSI_THRESHOLD`, `N_TF`, `SCORE_THRESHOLD`)."""
+    apply_overrides(_h2_mod, "H2_v2", db_path, ["EMA_PERIOD", "RSI_THRESHOLD", "N_TF", "SCORE_THRESHOLD"])
     run_technical_strategy_loop(
         config, db_path,
-        source=HYPOTHESIS2_SOURCE,
+        source=HYPOTHESIS2_V2_SOURCE,
         assets=HYPOTHESIS2_ASSETS,
         resolution="MINUTE_15",
         entry_fn=evaluate_entry,
@@ -78,6 +85,7 @@ def run_hypothesis2_loop(config, db_path: str, interval_seconds: int = 60, start
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
         startup_offset_seconds=startup_offset_seconds,
+        extra_resolutions=["HOUR", "HOUR_4"],
     )
 
 

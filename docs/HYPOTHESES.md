@@ -3998,7 +3998,18 @@ le split détruirait, décision explicite d'Ismaël).
   (M15/H1/H4), pondération égale du score.
 - **Grille (m=24, ≤50)** : `ema_period` ∈ {20,50,100} (3) ×
   `rsi_threshold` ∈ {50,55} (2) × `n_tf` ∈ {2,3} (2) ×
-  `score_threshold` ∈ {0.8,1.0} (2).
+  `score_threshold` ∈ {0,6667,1,0} (2).
+  **Correctif de spécification, 29/08/2026, avant tout calcul** :
+  `score_threshold` note ci-dessus une fraction des 3 indicateurs
+  (EMA/Ichimoku/RSI) qui doivent s'aligner PAR unité de temps — avec 3
+  indicateurs discrets, les seules fractions atteignables sont
+  0 ; 0,333 ; 0,667 ; 1,0. La valeur 0,8 initialement écrite ne
+  correspond à AUCUNE combinaison possible (trouvé en implémentant,
+  avant tout chiffre calculé) — remplacée par 0,667 (2 indicateurs sur
+  3), qui correspond exactement à "au moins 2 des 3 s'alignent".
+  Correction de valeur de grille uniquement, jamais du nombre de
+  variables ni de leur nature, faite avant tout regard sur la donnée —
+  ne consomme donc aucun budget invariant #10 supplémentaire.
 
 #### H3 / L3 — Pullback en tendance
 

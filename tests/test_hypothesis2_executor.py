@@ -24,11 +24,11 @@ def test_hypothesis2_assets_matches_hypothesis1_and_3():
     }
 
 
-def test_describe_signal_mentions_ict_concepts():
+def test_describe_signal_mentions_confluence_multi_timeframe():
+    # Refonte L2 (29/08/2026, voir docs/DECISIONS.md) : ICT/Fibonacci/FVG
+    # remplacés par la confluence multi-timeframe EMA/Ichimoku/RSI.
     text = _describe_signal("Hypothèse #2", "GOLD", _FakeSignal("long", 2400.0, 2380.0, 2420.0, 2440.0))
-    assert "fractal" in text.lower()
-    assert "Fibonacci" in text
-    assert "FVG" in text
+    assert "multi-timeframe" in text.lower() or "ichimoku" in text.lower()
     assert "GOLD" in text
     assert "2420" in text
     assert "2440" in text
@@ -48,8 +48,9 @@ def test_run_hypothesis2_loop_forwards_h2_credentials_and_resolution():
 
     mock_loop.assert_called_once()
     _, kwargs = mock_loop.call_args
-    assert kwargs["source"] == "hypothesis2"
+    assert kwargs["source"] == "hypothesis2_v2"  # refonte L2, 29/08/2026 (voir docs/DECISIONS.md)
     assert kwargs["resolution"] == "MINUTE_15"
+    assert kwargs["extra_resolutions"] == ["HOUR", "HOUR_4"]  # confluence multi-timeframe L2
     assert "session_gated" not in kwargs  # paramètre retiré, voir docs/DECISIONS.md
     assert kwargs.get("require_regime_confirmation", False) is False
     assert kwargs["api_key"] == "key2"

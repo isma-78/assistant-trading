@@ -19,6 +19,7 @@ from src.config import ConfigError
 from src.db import connection_scope, get_connection, init_db
 from src.market_data import Candle
 from src.technical_strategy_executor import (
+    EXTRA_RESOLUTION_CANDLE_COUNT,
     SESSION_OPEN_HOURS_UTC,
     _default_describe_signal,
     _generate_and_queue_signal,
@@ -76,6 +77,13 @@ def _no_entry_fn(asset, candles):
     return None
 
 
+def _multi_resolution_entry_fn_factory(captured_calls):
+    def _fn(asset, candles, *extra_candles):
+        captured_calls.append((asset, candles, extra_candles))
+        return None
+    return _fn
+
+
 def test_default_describe_signal_mentions_asset_and_prices():
     text = _default_describe_signal("Hypothèse #3", "GOLD", _FakeSignal("long", 2400.0, 2380.0))
     assert "GOLD" in text
@@ -115,6 +123,45 @@ def test_generate_and_queue_signal_no_signal(tmp_path):
         assert conn.execute("SELECT COUNT(*) AS n FROM signals").fetchone()["n"] == 0
     finally:
         conn.close()
+
+
+def test_generate_and_queue_signal_extra_resolutions_fetched_and_forwarded(tmp_path):
+    # H2/L2 uniquement (29/08/2026, voir docs/DECISIONS.md point C) :
+    # extra_resolutions déclenche des appels get_candles supplémentaires
+    # (même actif, profondeur EXTRA_RESOLUTION_CANDLE_COUNT) et les
+    # transmet à entry_fn en arguments positionnels après `candles`.
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.return_value = {"prices": []}
+    captured = []
+    _generate_and_queue_signal(
+        db_path, client, "EURUSD",
+        source="hypothesis2_v2", resolution="MINUTE_15", entry_fn=_multi_resolution_entry_fn_factory(captured),
+        channel="hypothesis2_channel", hypothesis_label="Hypothèse #2",
+        extra_resolutions=["HOUR", "HOUR_4"],
+    )
+    assert len(captured) == 1
+    asset, candles, extra_candles = captured[0]
+    assert asset == "EURUSD"
+    assert len(extra_candles) == 2  # HOUR puis HOUR_4, dans l'ordre demandé
+    calls = client.get_prices.call_args_list
+    assert calls[0].kwargs["resolution"] == "MINUTE_15"
+    assert calls[1] == (("EURUSD",), {"resolution": "HOUR", "max_bars": EXTRA_RESOLUTION_CANDLE_COUNT})
+    assert calls[2] == (("EURUSD",), {"resolution": "HOUR_4", "max_bars": EXTRA_RESOLUTION_CANDLE_COUNT})
+
+
+def test_generate_and_queue_signal_no_extra_fetch_when_extra_resolutions_none(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.return_value = {"prices": []}
+    _generate_and_queue_signal(
+        db_path, client, "EURUSD",
+        source="hypothesis3", resolution="MINUTE_15", entry_fn=_no_entry_fn,
+        channel="test_channel", hypothesis_label="Hypothèse #3",
+    )
+    assert client.get_prices.call_count == 1  # jamais d'appel supplémentaire par défaut
 
 
 def test_generate_and_queue_signal_inserts_with_correct_source_and_channel(tmp_path):

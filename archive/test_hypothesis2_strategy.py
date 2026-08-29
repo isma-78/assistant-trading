@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.hypothesis2_strategy import (
+from archive.hypothesis2_strategy import (
     TP1_R_MULTIPLE,
     TP2_R_MULTIPLE,
     _evaluate_entry,
@@ -93,14 +93,14 @@ def test_evaluate_entry_internal_error_is_fail_safe():
         confidence: float = 1.0
 
     with patch(
-        "src.hypothesis2_strategy._ict_evaluate_entry",
+        "archive.hypothesis2_strategy._ict_evaluate_entry",
         return_value=_BadDirectionSignal(asset="EURUSD", direction="sideways", entry_price=100.0, stop_price=90.0),
     ):
         assert evaluate_entry("EURUSD", []) is None
 
 
 def test_underscore_evaluate_entry_returns_none_when_no_base_signal():
-    with patch("src.hypothesis2_strategy._ict_evaluate_entry", return_value=None):
+    with patch("archive.hypothesis2_strategy._ict_evaluate_entry", return_value=None):
         assert _evaluate_entry("EURUSD", []) is None
 
 
