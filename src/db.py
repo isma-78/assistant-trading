@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS trades (
                         -- de regime_type/exit_type (porte sur QUAND/COMMENT le signal est généré). NULL pour
                         -- H1/Station X (jamais concernées) ; "aucune" pour les trades H2-H5 antérieurs à
                         -- cette couche (rétro-remplis) ; "session_multi_tf" pour les trades post-déploiement.
-    anomalie_technique TEXT  -- ajout 25/08/2026 hors §4.5 : NULL par défaut, texte explicatif si non-NULL.
+    anomalie_technique TEXT,  -- ajout 25/08/2026 hors §4.5 : NULL par défaut, texte explicatif si non-NULL.
                              -- Dimension INDÉPENDANTE de cloture_reason (porte sur l'OUVERTURE du trade, pas
                              -- sa clôture) et de regime_type/exit_type/timing_layer. Marque un trade dont
                              -- l'existence même résulte d'un bug (pas d'un signal de stratégie réel) —
@@ -179,6 +179,11 @@ CREATE TABLE IF NOT EXISTS trades (
                              -- sources différentes). `circuit_breaker_store.get_closed_trades_r` (risque réel)
                              -- N'EXCLUT PAS ces trades : le P&L réel reste réel pour la gestion du risque,
                              -- seule leur lecture comme SIGNAL DE PERFORMANCE STRATÉGIQUE est neutralisée.
+    annulation_motif TEXT  -- ajout 29/08/2026 (point 10, voir docs/DECISIONS.md) : NULL sauf statut='annule' ;
+                            -- "rate_limit_429" | "stop_refuse" | "peremption_marche" | "autre_echec_placement".
+                            -- Sépare les causes d'annulation en CODE (jamais reconstruit après coup depuis des
+                            -- logs texte) — voir executor.py::_classify_placement_failure et
+                            -- cancel_stale_working_orders.
 );
 
 CREATE TABLE IF NOT EXISTS trade_partials (
@@ -514,6 +519,7 @@ _COLUMN_MIGRATIONS = [
     ("trade_causal_decomposition", "invalide", "INTEGER NOT NULL DEFAULT 0"),
     ("trade_causal_decomposition", "survol_polling", "REAL"),
     ("trade_causal_decomposition", "delai_broker", "REAL"),
+    ("trades", "annulation_motif", "TEXT"),
 ]
 
 

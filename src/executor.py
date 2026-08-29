@@ -717,6 +717,26 @@ def _check_backtest_confidence_gate(db_path: str, asset: str, source: str, risk_
     )
 
 
+_RATE_LIMIT_MARKERS = ("too-many.requests", "429 Client Error")
+_STOP_REFUSAL_MARKER = "invalid.stoploss"
+
+
+def _classify_placement_failure(error_text: str) -> str:
+    """Point 10 (29/08/2026, voir docs/DECISIONS.md) : sépare les causes
+    d'échec de PLACEMENT en 3 catégories nommées (429, refus de stop,
+    autre) — jamais reconstruit après coup depuis un log texte, la
+    classification a lieu au moment même de l'exception. Calcul pur sur
+    `str(exc)` (le corps de la réponse Capital.com y est déjà inclus,
+    voir `capital_client.py::_raise_for_status`). Catégorie
+    `"autre_echec_placement"` explicite plutôt qu'un `None` silencieux
+    — la Mesure A du point 10 doit rester exhaustive sur (a)."""
+    if any(marker in error_text for marker in _RATE_LIMIT_MARKERS):
+        return "rate_limit_429"
+    if _STOP_REFUSAL_MARKER in error_text:
+        return "stop_refuse"
+    return "autre_echec_placement"
+
+
 def open_signal(
     db_path: str, client: CapitalClient, signal_row, risk_engine: RiskEngine, whitelist: dict,
     envelope_manager: CapitalManager, envelope_id: int, confidence_threshold: float, go_nogo_status: GoNoGoStatus,
@@ -952,13 +972,17 @@ def open_signal(
             level=signal_row["entree_min"],
             guaranteed_stop=adjustment.stop_distance > 0, stop_distance=adjustment.stop_distance if adjustment.stop_distance > 0 else None,
         )
-    except CapitalApiError:
+    except CapitalApiError as exc:
         logger.exception("Échec du placement de l'ordre limite pour le signal %s", signal_row["id"])
         # Ligne pré-insérée ci-dessus annulée — jamais laissée en
         # 'en_attente' sans deal_id, ce qui bloquerait indéfiniment tout
         # nouveau signal sur cet actif (invariant #7, fail-safe).
+        # `annulation_motif` (point 10, 29/08/2026, voir docs/DECISIONS.md) :
+        # sépare la cause EN CODE, jamais reconstruite après coup depuis un
+        # log texte — condition de la Mesure A (taux de remplissage).
+        motif = _classify_placement_failure(str(exc))
         with connection_scope(db_path) as conn:
-            conn.execute("UPDATE trades SET statut = 'annule' WHERE id = ?", (trade_id,))
+            conn.execute("UPDATE trades SET statut = 'annule', annulation_motif = ? WHERE id = ?", (motif, trade_id))
         return None
 
     with connection_scope(db_path) as conn:
@@ -1014,7 +1038,8 @@ def cancel_stale_working_orders(db_path: str, client: CapitalClient, max_age_sec
                 continue
             with connection_scope(db_path) as conn:
                 conn.execute(
-                    "UPDATE trades SET statut = 'annule' WHERE deal_id = ? AND statut = 'en_attente'",
+                    "UPDATE trades SET statut = 'annule', annulation_motif = 'peremption_marche' "
+                    "WHERE deal_id = ? AND statut = 'en_attente'",
                     (data["dealId"],),
                 )
     return cancelled

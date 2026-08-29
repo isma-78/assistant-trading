@@ -24,6 +24,7 @@ from src.executor import (
     ManagementActionType,
     OpenTradeState,
     _check_backtest_confidence_gate,
+    _classify_placement_failure,
     _compute_guaranteed_stop_adjustment,
     _is_stationx_source,
     cancel_stale_working_orders,
@@ -50,6 +51,23 @@ def make_engine():
         caps=RiskCaps(risk_percent_default=2.0, risk_percent_boosted=4.0, envelope_initial=500.0),
         whitelist=WHITELIST,
     )
+
+
+# --- _classify_placement_failure (point 10, 29/08/2026) -----------------
+
+def test_classify_placement_failure_rate_limit():
+    assert _classify_placement_failure('... {"errorCode":"error.too-many.requests"}') == "rate_limit_429"
+    assert _classify_placement_failure("429 Client Error:  for url: ...") == "rate_limit_429"
+
+
+def test_classify_placement_failure_stop_refuse():
+    assert _classify_placement_failure('... {"errorCode":"error.invalid.stoploss.minvalue: 78366.9"}') == "stop_refuse"
+    assert _classify_placement_failure('... {"errorCode":"error.invalid.stoploss.maxvalue: 2465.5"}') == "stop_refuse"
+
+
+def test_classify_placement_failure_other():
+    assert _classify_placement_failure("boom") == "autre_echec_placement"
+    assert _classify_placement_failure('... {"errorCode":"error.validation.guaranteed-stop-loss.required"}') == "autre_echec_placement"
 
 
 # --- _is_stationx_source (§2.11, incident du 21/08/2026) -----------------
@@ -648,6 +666,55 @@ def test_open_signal_placement_failure_marks_preinserted_trade_annule(tmp_path):
         assert len(trades) == 1
         assert trades[0]["statut"] == "annule"
         assert trades[0]["deal_id"] is None
+        assert trades[0]["annulation_motif"] == "autre_echec_placement"  # point 10, 29/08/2026
+    finally:
+        conn.close()
+
+
+def test_open_signal_placement_failure_classifies_rate_limit_429(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.side_effect = CapitalApiError(
+        '429 Client Error:  for url: ... — corps de la réponse : {"errorCode":"error.too-many.requests"}'
+    )
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT * FROM trades").fetchone()
+        assert trade["annulation_motif"] == "rate_limit_429"
+    finally:
+        conn.close()
+
+
+def test_open_signal_placement_failure_classifies_stop_refuse(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.side_effect = CapitalApiError(
+        '400 Client Error:  for url: ... — corps de la réponse : {"errorCode":"error.invalid.stoploss.minvalue: 78366.9"}'
+    )
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT * FROM trades").fetchone()
+        assert trade["annulation_motif"] == "stop_refuse"
     finally:
         conn.close()
 
@@ -1376,8 +1443,9 @@ def test_cancel_stale_working_orders_marks_trade_annule(tmp_path):
     assert cancelled == 1
     conn = get_connection(db_path)
     try:
-        trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        trade = conn.execute("SELECT statut, annulation_motif FROM trades WHERE id = ?", (trade_id,)).fetchone()
         assert trade["statut"] == "annule"
+        assert trade["annulation_motif"] == "peremption_marche"  # point 10, 29/08/2026
     finally:
         conn.close()
 
