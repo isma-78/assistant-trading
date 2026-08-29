@@ -3909,6 +3909,330 @@ complément n'ajoute que les citations demandées, aucun chiffre.
 
 ---
 
+## 2026-08-29 — PRÉ-ENREGISTREMENT : refonte complète H1-H5 (L1-L6, L6 différée), 5 nouveaux déclencheurs autonomes
+
+Écrit intégralement AVANT de regarder la moindre donnée (invariant #10),
+conformément à l'instruction reçue le 28/08/2026 soir. Règle transverse
+rappelée et appliquée sans exception dans tout ce qui suit : aucune
+fenêtre de confirmation n'est consommée avant que le calcul de
+puissance (point 6 du prompt reçu) ait été fait et écrit — cette entrée
+ne fixe QUE les définitions, budgets, grilles et procédures ; aucun
+sigma, aucune fréquence, aucun MDE numérique n'est calculé ici (ces
+chiffres viendront exclusivement de la fenêtre de DÉCOUVERTE, dans une
+entrée future dédiée au calcul de puissance).
+
+### Décision bloquante préalable (voir aussi `docs/DECISIONS.md`,
+29/08/2026) : Ichimoku figé à 9/26/52 pour H2/L2, jamais balayé —
+budget H2 ramené à 5 variables ajustées exactement au plafond.
+
+### Traduction filtre → hypothèse autonome (point 0), définitions figées
+
+Chacune des 5 logiques ci-dessous a été conçue à l'origine comme un
+FILTRE sur le signal Station X — elle devient ici un déclencheur
+AUTONOME complet (direction + entrée + stop). Sizing : montants fixes
+de `risk_engine`, INCHANGÉS, aucune modification. Structure de sortie :
+H1-H4 gardent la structure standard du projet (TP1 50%/TP2 30%/reliquat
+20% trailing 2×ATR) ; **H5 reste en 100% trailing** (aucune sortie
+partielle — si un edge existe, il vient de l'asymétrie du payoff, que
+le split détruirait, décision explicite d'Ismaël).
+
+#### H1 / L1 — Régime ADX
+
+- **Direction** : signe de la pente de MA(`ma_period`) sur les
+  `slope_lookback` dernières bougies (FIGÉ à 5 bougies — mesure de
+  pente courte, non balayée, pas de justification théorique à faire
+  varier ce paramètre indépendamment de `ma_period` lui-même).
+- **Entrée** : ADX(14) [FIGÉ, période standard universelle] franchit
+  `adx_threshold` à la hausse, ET la pente de MA confirme la direction
+  (même signe).
+- **Stop** : entrée ∓ ATR(14) [FIGÉ] × `k_atr`.
+- **Résolution** : HOUR (inchangée, convention H1 du projet).
+- **Univers** : 8 actifs existants + **CHFJPY** (historique HOUR vérifié
+  le 28/08/2026 : 2017-11-19 → aujourd'hui, couvre intégralement
+  2019-01-01+ — 9 actifs, même composition en découverte et en
+  confirmation).
+- **Variables AJUSTÉES (3, sous le plafond de 5)** :
+  1. `ma_period` — justification théorique : longueur de tendance de
+     fond, doit être testée sur plusieurs échelles (moyenne/longue)
+     pour ne pas présupposer laquelle domine en régime ADX.
+  2. `adx_threshold` — justification : seuil de "tendance établie" ADX
+     n'a pas de valeur universelle documentée pour ce marché/cette
+     résolution, doit être calibré.
+  3. `k_atr` — justification : multiplicateur de stop, doit s'ajuster à
+     la volatilité propre de chaque régime de tendance détecté.
+- **Constantes FIGÉES** : ADX(14), ATR(14), slope_lookback=5.
+- **Grille (m=48, ≤50)** : `ma_period` ∈ {100,150,200,250} (4) ×
+  `adx_threshold` ∈ {20,25,30} (3) × `k_atr` ∈ {1.5,2.0,2.5,3.0} (4).
+
+#### H2 / L2 — Confluence multi-TF
+
+- **Direction** : alignement EMA(`ema_period`)/Ichimoku(9/26/52,
+  FIGÉ)/RSI(14, FIGÉ — convention déjà établie ailleurs dans le projet,
+  H5 historique) sur `n_tf` unités de temps (M15 + M15×4 + M15×16,
+  multiples fixes de la résolution native, FIGÉS — pas une variable,
+  le CHOIX du nombre de TF à exiger `n_tf` en est une, distincte).
+- **Entrée** : score de confluence (somme à poids ÉGAUX — imposé,
+  jamais appris) atteint `score_threshold` (fraction du maximum
+  atteignable).
+- **Stop** : structure (dernier swing) ou ATR(14) si aucune structure
+  disponible — FIGÉ, pas un choix balayé (fallback mécanique, pas une
+  variable de marché).
+- **Résolution** : MINUTE_15 (native, TF de confirmation = multiples
+  fixes ci-dessus).
+- **Univers** : 8 actifs existants. **CHFJPY EXCLUE** (historique M15
+  ne remonte qu'au 2024-01-01, composition découverte/confirmation
+  doit rester identique — voir point 3 du prompt reçu, déjà constaté le
+  28/08/2026).
+- **Variables AJUSTÉES (4, sous le plafond de 5 — marge d'1 volontairement
+  non utilisée, cf. décision Ichimoku)** :
+  1. `ema_period` — justification : échelle de tendance de référence
+     pour l'alignement, pas de valeur canonique unique en confluence
+     multi-indicateurs.
+  2. `rsi_threshold` — justification : seuil de confirmation de
+     momentum, dépend de l'actif/résolution.
+  3. `n_tf` — justification : nombre d'unités de temps devant
+     s'aligner, arbitrage direct exigence/fréquence de signal.
+  4. `score_threshold` — justification : rigueur de la confluence
+     exigée avant déclenchement.
+- **Constantes FIGÉES** : Ichimoku 9/26/52, RSI(14), TF de confirmation
+  (M15/H1/H4), pondération égale du score.
+- **Grille (m=24, ≤50)** : `ema_period` ∈ {20,50,100} (3) ×
+  `rsi_threshold` ∈ {50,55} (2) × `n_tf` ∈ {2,3} (2) ×
+  `score_threshold` ∈ {0.8,1.0} (2).
+
+#### H3 / L3 — Pullback en tendance
+
+- **Tendance de fond** : réutilise TEL QUEL le mécanisme structurel
+  déjà codé (`classify_structure_break`/régime BOS-CHoCH, palier
+  P2.9) — FIGÉ, aucune nouvelle logique de régime, aucun paramètre
+  supplémentaire.
+- **Direction** : celle de la tendance de fond détectée.
+- **Entrée** : retour du prix sur le niveau de retracement
+  `retracement_ratio` du dernier mouvement impulsif, PUIS reprise
+  confirmée sur `confirmation_bars` bougies consécutives dans le sens
+  de la tendance.
+- **Stop** : au-delà du point de retracement, majoré de
+  `stop_buffer_atr` × ATR(14) [FIGÉ].
+- **Résolution** : MINUTE_15 (convention H3 inchangée).
+- **Univers** : 8 actifs existants. **CHFJPY EXCLUE** (même motif qu'H2).
+- **Mesure obligatoire (garde-fou point 7, biais de sélection)** :
+  espérance calculée **par signal détecté** (tendance + condition de
+  pullback réunies, ordres non remplis comptés 0R) rapportée CÔTE À
+  CÔTE avec l'espérance par trade exécuté — jamais l'une sans l'autre,
+  dans toute publication de résultat pour H3.
+- **Variables AJUSTÉES (3, sous le plafond de 5)** :
+  1. `retracement_ratio` — justification : niveau de retracement
+     Fibonacci n'a pas de valeur universelle validée sur ce marché.
+  2. `confirmation_bars` — justification : arbitrage réactivité/faux
+     signaux de reprise.
+  3. `stop_buffer_atr` — justification : marge de sécurité au-delà du
+     point de retracement, doit s'adapter à la volatilité.
+- **Constantes FIGÉES** : mécanisme de régime structurel (réutilisé
+  sans modification), ATR(14).
+- **Grille (m=18, ≤50)** : `retracement_ratio` ∈ {0.382,0.5,0.618} (3) ×
+  `confirmation_bars` ∈ {1,2,3} (3) × `stop_buffer_atr` ∈ {0.5,1.0} (2).
+
+#### H4 / L4 — Divergence RSI/OBV
+
+- **Direction** : sens opposé à la divergence détectée (divergence
+  haussière prix/RSI+OBV → long, baissière → short).
+- **Entrée** : divergence prix/RSI(14) [FIGÉ] ET prix/OBV entre deux
+  pivots causaux, confirmée par la clôture de la bougie suivant le
+  second pivot (jamais avant — anti-lookahead, voir garde-fou ci-dessous).
+- **Pivot** : définition fractale à `pivot_fractal_n` bougies de part et
+  d'autre (un pivot n'est confirmé qu'après `pivot_fractal_n` bougies
+  supplémentaires — **variable AJUSTÉE du budget, figée par cette
+  pré-inscription, jamais improvisée après coup**, conformément à
+  l'instruction explicite).
+- **Stop** : au-delà du pivot ayant servi à la divergence, majoré de
+  `stop_atr_mult` × ATR(14) [FIGÉ].
+- **Résolution** : MINUTE_15 (convention H4 inchangée).
+- **Univers** : 8 actifs existants. **CHFJPY EXCLUE** (même motif qu'H2).
+- **Garde-fou anti-lookahead (obligatoire, point 7)** : un pivot n'est
+  JAMAIS lu avant que `pivot_fractal_n` bougies suivantes existent dans
+  le flux causal (implémentation strictement séquentielle, jamais un
+  passage centré sur tout l'historique) — test unitaire dédié prouvant
+  l'absence d'accès futur, écrit AVEC le code, pas après.
+- **Garde-fou OBV (obligatoire, point 7)** : une fois la grille
+  calibrée et le variant gagnant sélectionné (point 5), ce MÊME variant
+  est rejoué une seconde fois avec la jambe OBV désactivée (divergence
+  RSI seule) — comparaison POST-HOC non-sélective, jamais intégrée à la
+  recherche de grille (n'inflate pas `m`). Si l'espérance ne tient que
+  jambe OBV incluse, consigné explicitement comme résultat reposant sur
+  une donnée non fiable (tick volume broker sur CFD, pas un volume réel).
+- **Variables AJUSTÉES (3, sous le plafond de 5)** :
+  1. `pivot_fractal_n` — justification : définition du pivot doit être
+     fixée a priori (degré de liberté identifié comme risque majeur par
+     Ismaël), balayée sur un petit ensemble raisonnable plutôt
+     qu'inventée post-hoc.
+  2. `max_pivot_distance_bars` — justification : fenêtre maximale entre
+     les deux pivots comparés, arbitrage significativité/fréquence.
+  3. `stop_atr_mult` — justification : marge de stop au-delà du pivot,
+     doit s'adapter à la volatilité.
+- **Constantes FIGÉES** : RSI(14), ATR(14).
+- **Grille (m=27, ≤50)** : `pivot_fractal_n` ∈ {2,3,4} (3) ×
+  `max_pivot_distance_bars` ∈ {20,40,60} (3) × `stop_atr_mult` ∈
+  {1.0,1.5,2.0} (3). (Le test avec/sans OBV n'ajoute PAS de dimension à
+  cette grille — voir garde-fou ci-dessus.)
+
+#### H5 / L5 — Compression → expansion
+
+- **Mesure de compression** : largeur de Bande de Bollinger(20,2σ)
+  [FIGÉ — choix théorique : mesure normalisée relative au prix, seule
+  comparable entre actifs d'échelles très différentes (FX vs crypto),
+  contrairement à l'ATR brut ; pas balayée entre ATR et Bollinger, un
+  seul choix justifié a priori, invariant #10] normalisée par le prix,
+  sous le `compression_percentile`-ième percentile de sa propre
+  distribution glissante, pendant `compression_duration` bougies
+  consécutives.
+- **Direction** : sens de la cassure initiale hors de la zone de
+  compression.
+- **Entrée** : clôture au-delà de la bande, dans le sens de la cassure.
+- **Stop** : intérieur de la zone de compression, à
+  `stop_buffer_pct` × largeur de bande à l'intérieur du bord cassé.
+- **Sortie** : 100% trailing (Donchian(20), FIGÉ — aucune sortie
+  partielle, décision explicite d'Ismaël, non balayée).
+- **Résolution** : MINUTE_15 (convention H5 inchangée).
+- **Univers** : 8 actifs existants. **CHFJPY EXCLUE** (même motif qu'H2).
+- **Test d'information obligatoire AVANT toute construction de la
+  logique d'entrée au-delà de la définition ci-dessus (point 7)** :
+  corrélation entre le sens de la cassure initiale et le sens du
+  mouvement final (sur la fenêtre de DÉCOUVERTE uniquement, aucun
+  seuil, aucune règle de décision — un simple coefficient rapporté).
+  **Si indiscernable de zéro** (seuil de discernabilité : |r| > 2×SE(r)
+  sous H0, formule standard SE(r)=1/√(n-3) en Fisher-z, appliquée sans
+  ajustement multiple puisque ce test ne sélectionne rien) : consigné
+  tel quel, la calibration/gate/confirmation (points 5/6/8) sont
+  ABANDONNÉES pour H5 sans nouvelle tentative — **le déploiement démo
+  du point 9 reste inconditionnel et a lieu quand même**, sur la
+  définition figée ci-dessus telle quelle, pour la seule collecte de
+  donnée forward.
+- **Risque connu à mesurer avant déploiement (garde-fou point 7,
+  bug stoploss)** : H5 étant 100% trailing, elle est la plus exposée
+  aux 5563 échecs de resserrement de stop déjà mesurés (28/08/2026,
+  `docs/DECISIONS.md`). Mesure du taux d'échec par actif + retry
+  adaptatif implémentés AVANT le déploiement de H5 (voir infrastructure
+  ci-dessous) — le seuil broker étant une bande dynamique, jamais une
+  pré-validation sur une constante statique.
+- **Variables AJUSTÉES (3, sous le plafond de 5)** :
+  1. `compression_percentile` — justification : rigueur de la
+     définition de "compression", arbitrage fréquence/qualité.
+  2. `compression_duration` — justification : durée minimale de
+     compression avant qu'une cassure soit considérée significative.
+  3. `stop_buffer_pct` — justification : marge de stop à l'intérieur de
+     la zone, doit s'adapter à la largeur de bande elle-même (déjà
+     normalisée).
+- **Constantes FIGÉES** : Bollinger(20,2σ), Donchian(20) pour le
+  trailing.
+- **Grille (m=27, ≤50)** : `compression_percentile` ∈ {10,20,30} (3) ×
+  `compression_duration` ∈ {5,10,15} (3) × `stop_buffer_pct` ∈
+  {0.0,0.25,0.5} (3).
+
+- **Test d'information symétrique pour H1/L1 (même point 7, même coût
+  nul en degrés de liberté)** : corrélation entre la valeur d'ADX(14) au
+  moment du signal et le R final du trade (fenêtre de découverte
+  uniquement, aucun seuil). Rapportée pour information, ne bloque ni
+  ne conditionne la suite pour H1 (contrairement à H5, où l'instruction
+  est explicite sur l'arrêt de construction si nul — H1 n'a pas cette
+  clause, le test est informatif seulement).
+
+### Versionnement des sources (point 4) — libellés pré-enregistrés
+
+Pour ne jamais agréger les anciennes et les nouvelles logiques sous le
+même libellé `source` (`confidence_scorer`/garde-fou Option B/toutes
+les statistiques agrègent par `source` littéral) :
+
+| Hypothèse | Ancien `source` (archivé, jamais réutilisé) | Nouveau `source` |
+|---|---|---|
+| H1 | `hypothesis` | `hypothesis_v2` |
+| H2 | `hypothesis2` | `hypothesis2_v2` |
+| H3 | `hypothesis3` | `hypothesis3_v2` |
+| H4 | `hypothesis4` | `hypothesis4_v2` |
+| H5 | `hypothesis5` | `hypothesis5_v2` |
+
+Appliqué aux trades réels ET aux lignes de backtest (`*_v2` également
+pour les sources `*_backtest`, ex. `hypothesis3_v2_backtest`, jamais
+`hypothesis3_backtest` réutilisé). Vérification requise avant
+déploiement : aucune requête existante (`metrics.py`,
+`circuit_breaker_store.py`, `confidence_scorer.py`, `dashboard.py`,
+`evolution_engine.py`) ne fait de correspondance par préfixe
+(`LIKE 'hypothesis3%'` ou équivalent) qui ré-agrégerait `hypothesis3`
+et `hypothesis3_v2` — à auditer avant le premier trade `_v2`, résultat
+consigné dans `docs/DECISIONS.md`.
+
+### Fenêtres (point 3), rappel des bornes exactes
+
+- **Découverte / calibration** : 2019-01-01 → 2022-12-31.
+- **Confirmation, hors-échantillon pur, un seul passage** :
+  2023-01-01 → 2024-06-14.
+- **Jamais avant 2019-01-01** (corruption bid/ask 2017-2018, contrainte
+  permanente `CLAUDE.md`).
+- CHFJPY : incluse pour H1 (HOUR, historique vérifié suffisant),
+  **exclue pour H2/H3/H4/H5** (M15 depuis 2024-01-01 seulement — même
+  composition d'actifs exigée en découverte et en confirmation, un
+  actif absent de l'une doit être absent de l'autre).
+
+### Procédure de calibration (point 5), fixée avant tout calcul
+
+a. Grille plafonnée par hypothèse (déclarée ci-dessus, m≤50 partout).
+b. n minimum par variante sur la découverte : **200 trades**, sinon
+   éliminée du classement quel que soit son espérance.
+c. **Estimation débiaisée obligatoire** : validation croisée temporelle
+   imbriquée à **k=4 blocs** (un bloc par année complète de la
+   découverte, 2019/2020/2021/2022 — séparation naturelle, pas
+   arbitraire), sélection sur k-1 blocs, évaluation sur le bloc laissé
+   de côté, rotation sur les 4 blocs, moyenne des 4 espérances
+   hors-bloc = estimation débiasée retenue pour le point 6. Jamais
+   l'espérance d'entraînement brute.
+d. Sélection sur la découverte uniquement — la confirmation n'est
+   jamais regardée avant le point 6.
+
+### Gate de puissance (point 6), formules fixées, AUCUN chiffre numérique ici
+
+Pour chaque hypothèse, dans cet ordre, une fois la calibration (ci-dessus)
+terminée — entrée future dédiée, jamais anticipée ici :
+1. σ(R) mesuré sur la découverte, propre à CHAQUE hypothèse/structure de
+   sortie (jamais réutiliser 1,0453, valeur des anciennes logiques).
+2. n projeté confirmation = fréquence mesurée en découverte × 1,5 an ×
+   nombre d'actifs réellement communs aux deux fenêtres (9 pour H1,
+   8 pour H2-H5 — CHFJPY exclue de ce calcul pour H2-H5).
+3. MDE = (z_Bonferroni(m=5)=2,3263 + 0,8416) × σ / √(n_projeté).
+4. Cible = espérance nette débiaisée (point 5.c), coûts réels
+   Capital.com mesurés par hypothèse (jamais supposés).
+5. Seuil de faisabilité : brut_min = 2×√(coût0 × MDE0), OBLIGATOIRE.
+Règle de décision : **MDE < cible ET brut débiaisé ≥ brut_min ⇒
+confirmation lancée (un seul passage)** ; sinon, confirmation NON
+lancée, fenêtre intacte, hypothèse "indémontrable sur cette fenêtre"
+(distinction explicite d'avec "invalidée") — déploiement démo
+inconditionnel (point 9) dans les deux cas.
+
+### Confirmation (point 8), procédure fixée
+
+Un seul passage sur 2023-01-01→2024-06-14, variante retenue, aucun
+re-découpage ni réglage. z_Bonferroni(m = nombre d'hypothèses ayant
+réellement atteint cette étape, ≤5, compté au moment du calcul, jamais
+présupposé). Seuil : borne basse corrigée > 0 par bootstrap par blocs
+CALENDAIRES (jamais moyenne−z×SE — non-indépendance déjà confirmée
+entre actifs, y compris CHFJPY↔USDJPY par la jambe yen pour H1).
+Contrôle année par année obligatoire si résultat positif. Aucun
+sous-groupe post-hoc actionnable. Le nombre total d'essais indépendants
+du projet à date sera consigné à ce moment précis (traçabilité du
+risque de faux positif au niveau programme), pas anticipé ici.
+
+### Déploiement démo (point 9) et ajustement continu (point 10)
+
+Rappelés ici pour mémoire, procédure détaillée dans le prompt reçu du
+28/08/2026 (soir) et dans `docs/DECISIONS.md` au fil de l'exécution :
+déploiement démo inconditionnel dès code+tests verts, aucun garde-fou
+de confiance/backtest ne bloque une hypothèse non qualifiée en démo
+(vérification explicite requise avant déploiement) ; cycle d'ajustement
+continu ultérieur strictement borné (re-tuning seul, ≤1 validation
+confirmatoire/30j avec compteur cumulatif, gate de puissance ré-appliqué
+à chaque validation, démo uniquement, interrupteur `evolution_cycle_
+enabled` par défaut activé pour les 5, fail-safe par hypothèse).
+
+---
+
 *Prochaine entrée : réservée à toute évolution future de l'Hypothèse #1,
 #2, #3, #4, #5, ou du backtest rétrospectif — jamais une modification de
 ce qui précède.*

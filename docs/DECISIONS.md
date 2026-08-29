@@ -12,6 +12,34 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 — Chantier refonte H1-H5 (L1-L6) : décision bloquante du point 1 — Ichimoku FIGÉ à 9/26/52 pour H2/L2, jamais balayé
+
+**Décision technique déléguée (autonomie du 16/08/2026, choix
+d'architecture), tranchée AVANT tout code, conformément à l'instruction
+« ne code pas H2 avant que ce choix soit écrit ».**
+
+Budget si Ichimoku restait balayé : EMA (période), RSI (période), seuil
+RSI, nombre de TF, seuil de score de confluence = 5 variables, PLUS
+tenkan/kijun/senkou (3 variables Ichimoku) = **8, largement au-dessus
+du plafond de 5** (invariant #10).
+
+**Choix retenu : (a) Ichimoku FIGÉ à 9/26/52** (réglages Hosoda
+canoniques, jamais balayés dans la pratique de marché standard — un cas
+d'école exact de la distinction du point 1 : constante figée à sa
+valeur standard, pas une variable ajustée). Motif du choix contre
+l'option (b) (retrait pur et simple) : retirer Ichimoku amputerait la
+conception théorique de H2 d'une de ses trois jambes de confluence
+(EMA/Ichimoku/RSI), sans aucun gain de budget supplémentaire (le
+nombre de variables AJUSTÉES reste 5 dans les deux cas — Ichimoku
+retiré ne libère rien, il retire seulement un signal). Fixer aux valeurs
+canoniques préserve l'intention de conception à coût de budget nul.
+
+**Budget final H2/L2, 5 variables AJUSTÉES (au plafond, aucune marge)** :
+EMA (période), RSI (période), seuil RSI, nombre de TF requis pour
+confluence, seuil de score de confluence. **Constantes FIGÉES, jamais
+balayées** : tenkan=9, kijun=26, senkou=52 (Ichimoku), pondération de
+score = poids égaux (imposé par l'instruction, pas un choix ouvert).
+
 ## 2026-08-28 (suite 12ter) — CHFJPY, point 2c : ajoutée à `asset_whitelist.py` et aux 5 hypothèses, 100% couverture, suite verte (968 tests) — NON DÉPLOYÉ
 
 - `src/asset_whitelist.py` : `CHFJPY` ajoutée à `_MIN_UNITS` (100, =
