@@ -60,6 +60,7 @@ def test_run_hypothesis3_loop_forwards_h3_credentials_and_resolution():
     assert set(kwargs["assets"]) == set(HYPOTHESIS3_ASSETS)
     assert "session_gated" not in kwargs  # paramètre retiré, voir docs/DECISIONS.md
     assert kwargs["require_regime_confirmation"] is False  # L3 a son propre regime interne (redondant sinon)
+    assert kwargs["legacy_sources"] == ["hypothesis3"]  # 6 positions v1 encore ouvertes (voir docs/DECISIONS.md)
 
 
 def test_run_hypothesis3_loop_default_startup_offset_is_30s():

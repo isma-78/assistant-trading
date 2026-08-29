@@ -206,6 +206,7 @@ def test_run_trend_loop_untouched_by_session_multi_timeframe_layer():
     _, kwargs = mock_loop.call_args
     assert kwargs["resolution"] == "HOUR"
     assert "session_gated" not in kwargs
+    assert kwargs["legacy_sources"] == ["hypothesis"]  # 6 positions v1 encore ouvertes (voir docs/DECISIONS.md)
     assert "require_regime_confirmation" not in kwargs
 
 

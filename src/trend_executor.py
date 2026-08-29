@@ -50,29 +50,23 @@ utilitaires partagés par toutes les hypothèses — seules ses fonctions
 `evaluate_entry`/`compute_regime` deviennent mortes pour le live.
 Source live et backtest changent de `hypothesis` à `hypothesis_v2`.
 
-**AVERTISSEMENT DE TRANSITION, NE PAS IGNORER AU MOMENT DU
-DÉPLOIEMENT** : contrairement à H2/H4 (aucune position ouverte au
-moment de leur bascule), H1 avait **6 positions RÉELLEMENT ouvertes**
-au moment de l'écriture de ce module (29/08/2026, vérifié en base :
-USDJPY, GBPUSD, EURUSD, GOLD, ETHUSD, BTCUSD, toutes `source=
-'hypothesis'`). `run_technical_strategy_loop` filtre `reconcile_ghost_
-positions`/`check_pending_fills` strictement par le `source` qui lui
-est passé — le jour où ce process redémarre avec `source=
-HYPOTHESIS_V2_SOURCE`, ces positions v1 encore ouvertes ne seraient
-PLUS JAMAIS surveillées par AUCUN process (ni détection de
-remplissage, ni gestion de trailing, ni réconciliation) : elles
-resteraient bloquées indéfiniment, invisibles. **Prérequis obligatoire
-avant tout déploiement de ce changement** : attendre la clôture
-naturelle de toutes les positions `source='hypothesis'` encore ouvertes
-(vérifier en base juste avant le redémarrage), jamais couper à chaud
-avec des positions actives. Pas un problème aujourd'hui (rien n'est
-déployé, point A) — une condition à revérifier explicitement le jour où
-le déploiement sera autorisé.
+**TRANSITION DES POSITIONS v1 RÉSOLUE (29/08/2026, voir docs/DECISIONS.md,
+point 2)** : H1 avait 6 positions RÉELLEMENT ouvertes (`source=
+'hypothesis'`) au moment de la refonte L1. Vérifié le même jour : la
+contrainte anti-doublon (`_has_active_signal_or_trade`) est scopée par
+(actif, source) exact — les signaux `hypothesis_v2` démarrent donc
+IMMÉDIATEMENT sur tous les actifs, jamais besoin d'attendre la clôture
+de l'ancien. Restait un risque distinct (gestion, pas génération) :
+`legacy_sources=[HYPOTHESIS_SOURCE]` ci-dessous étend la réconciliation/
+détection de remplissage/gestion de position/`/stop_urgence` à
+l'ancienne source (enveloppe chargée séparément), pour que ces 6
+positions restent surveillées jusqu'à leur clôture naturelle — jamais
+de nouveau signal généré sous l'ancienne étiquette.
 """
 
 import logging
 
-from src.executor import HYPOTHESIS_V2_SOURCE
+from src.executor import HYPOTHESIS_SOURCE, HYPOTHESIS_V2_SOURCE
 from src.hypothesis1_strategy_v2 import evaluate_entry
 from src.technical_strategy_executor import (
     CANDLE_COUNT,
@@ -160,6 +154,7 @@ def run_trend_loop(config, db_path: str, interval_seconds: int = 60, startup_off
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
         startup_offset_seconds=startup_offset_seconds,
+        legacy_sources=[HYPOTHESIS_SOURCE],
     )
 
 

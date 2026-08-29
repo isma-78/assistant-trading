@@ -11,7 +11,7 @@ test_trend_executor.py (dont l'existence, avant le refactor du
 """
 
 from dataclasses import dataclass
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -430,6 +430,69 @@ def test_run_technical_strategy_loop_raises_configerror_missing_credentials(tmp_
             api_key=None, identifier=None, password=None, account_id="some-account",
             channel="c", process_name="p", hypothesis_label="Hypothèse #2",
         )
+
+
+def test_run_technical_strategy_loop_legacy_sources_get_own_envelopes_and_management(tmp_path):
+    # 29/08/2026 (voir docs/DECISIONS.md, point 2) : legacy_sources doit
+    # charger ses propres enveloppes et etre inclus dans la
+    # reconciliation/detection de remplissage/gestion, jamais dans la
+    # generation de signaux.
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    config = MagicMock()
+    config.risk_percent_default = 2.0
+    config.risk_percent_boosted = 4.0
+    config.envelope_initial = 500.0
+    config.confidence_threshold = 0.75
+    config.capital_environment = "demo"
+    config.telegram_bot_token = None
+    config.telegram_chat_id = None
+
+    class _StopLoop(Exception):
+        pass
+
+    fake_client = MagicMock()
+    fake_client.get_open_positions.return_value = []
+    fake_client.get_working_orders.return_value = []
+    fake_client.get_prices.return_value = {"prices": []}
+
+    sleep_calls = {"n": 0}
+
+    def _sleep_side_effect(*_args, **_kwargs):
+        sleep_calls["n"] += 1
+        if sleep_calls["n"] >= 2:  # laisse passer time.sleep(startup_offset_seconds), coupe au suivant
+            raise _StopLoop
+
+    with (
+        patch("src.technical_strategy_executor.CapitalClient", return_value=fake_client),
+        patch("src.market_data.get_eur_conversion_rate", return_value=1.0),
+        patch("src.asset_whitelist.build_asset_whitelist", return_value={"EURUSD": MagicMock(symbol="EURUSD")}),
+        patch("src.technical_strategy_executor.load_or_create_envelope", wraps=None) as mock_load_envelope,
+        patch("src.technical_strategy_executor.reconcile_ghost_positions") as mock_reconcile,
+        patch("src.technical_strategy_executor.check_pending_fills", return_value=0) as mock_fills,
+        patch("src.technical_strategy_executor.cancel_stale_working_orders", return_value=0),
+        patch("src.technical_strategy_executor.manage_open_trades") as mock_manage,
+        patch("time.sleep", side_effect=_sleep_side_effect),
+    ):
+        mock_load_envelope.return_value = (1, MagicMock())
+        with pytest.raises(_StopLoop):
+            run_technical_strategy_loop(
+                config, db_path,
+                source="hypothesis_v2", assets=["EURUSD"], resolution="HOUR", entry_fn=_no_entry_fn,
+                api_key="key", identifier="id", password="pwd", account_id="acc",
+                channel="c", process_name="p", hypothesis_label="Hypothèse #1",
+                legacy_sources=["hypothesis"],
+            )
+
+    envelope_call_sources = {call.kwargs.get("source") for call in mock_load_envelope.call_args_list}
+    assert envelope_call_sources == {"hypothesis_v2", "hypothesis"}
+
+    assert mock_reconcile.call_args.kwargs["source_filter"]("hypothesis") is True
+    assert mock_reconcile.call_args.kwargs["source_filter"]("hypothesis_v2") is True
+    assert mock_reconcile.call_args.kwargs["source_filter"]("stationx") is False
+
+    assert set(mock_fills.call_args.kwargs["sources"]) == {"hypothesis_v2", "hypothesis"}
+    assert set(mock_manage.call_args.kwargs["include_sources"]) == {"hypothesis_v2", "hypothesis"}
 
 
 def test_run_technical_strategy_loop_raises_configerror_missing_account_id(tmp_path):

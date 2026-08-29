@@ -302,6 +302,7 @@ def run_technical_strategy_loop(
     startup_offset_seconds: int = 0,
     confirming_resolution: Optional[str] = None,
     extra_resolutions: Optional[List[str]] = None,
+    legacy_sources: Optional[List[str]] = None,
 ) -> None:
     """Boucle continue générique d'une stratégie technique complémentaire
     (§2.11). Un seul point de variation par appelant : `source`,
@@ -352,7 +353,25 @@ def run_technical_strategy_loop(
     même instant à chaque minute depuis la même IP. Chaque appelant
     (`trend_executor.py`, `hypothesisN_executor.py`) passe une valeur
     fixe distincte (~10s d'écart) — pas un mécanisme dynamique, un
-    simple décalage constant."""
+    simple décalage constant.
+
+    `legacy_sources` (29/08/2026, voir docs/DECISIONS.md, point 2 —
+    déploiement des refontes L1-L5) : sources d'une VERSION PRÉCÉDENTE
+    de cette hypothèse (ex. `["hypothesis"]` quand `source=
+    "hypothesis_v2"`) dont des positions étaient encore ouvertes au
+    moment de la bascule. `_has_active_signal_or_trade`/la génération de
+    signaux restent scopées STRICTEMENT à `source` (jamais aux sources
+    historiques — un nouveau signal n'est jamais généré sous l'ancienne
+    étiquette). Seules la réconciliation des positions fantômes, la
+    détection de remplissage et la gestion des positions ouvertes
+    (trailing/clôture) sont étendues à `legacy_sources`, avec leurs
+    propres enveloppes chargées séparément — sans cela, les positions
+    encore ouvertes sous l'ancienne source deviendraient invisibles à
+    TOUT process dès que l'ancien process est arrêté (aucun ne
+    surveillerait plus jamais leur `source`). `None` par défaut :
+    comportement strictement inchangé pour tout appelant existant
+    (H2/H4/H5, aucune position ouverte au moment de leur bascule — voir
+    docs/DECISIONS.md)."""
     import time
 
     import anthropic
@@ -395,11 +414,14 @@ def run_technical_strategy_loop(
     risk_engine = RiskEngine(caps=caps, whitelist=whitelist)
     go_nogo_status = GoNoGoStatus(allowed=True, reason="mode démo — verrou réel non applicable (§4.1 du CDC)")
 
+    management_sources = [source] + list(legacy_sources or [])
+
     envelope_managers, envelope_ids = {}, {}
     for asset in assets:
-        envelope_id, manager = load_or_create_envelope(db_path, asset, "demo", caps.envelope_initial, source=source)
-        key = (asset, source)
-        envelope_ids[key], envelope_managers[key] = envelope_id, manager
+        for src in management_sources:
+            envelope_id, manager = load_or_create_envelope(db_path, asset, "demo", caps.envelope_initial, source=src)
+            key = (asset, src)
+            envelope_ids[key], envelope_managers[key] = envelope_id, manager
 
     # Contexte de régime confirmé (H3/H4 uniquement, voir docstring) —
     # vide au démarrage : tant qu'aucun rafraîchissement n'a eu lieu,
@@ -439,13 +461,16 @@ def run_technical_strategy_loop(
                 time.sleep(interval_seconds)
                 continue
 
-            # /stop_urgence (§7.1) : chaque boucle ferme uniquement ses
-            # propres positions (cette source).
+            # /stop_urgence (§7.1) : chaque boucle ferme ses propres
+            # positions ET celles de ses sources historiques
+            # (`legacy_sources`, 29/08/2026) — une commande d'urgence
+            # doit fermer TOUT ce que ce process surveille, jamais
+            # laisser une position v1 ouverte derrière lui.
             stop_event_id = circuit_breaker_store.get_unhandled_stop_urgence_event_id(db_path, process_name)
             if stop_event_id is not None:
                 closed = force_close_all_open_trades(
                     db_path, client, envelope_managers, envelope_ids,
-                    include_sources=[source],
+                    include_sources=management_sources,
                     anthropic_client=anthropic_client, bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,
                 )
                 circuit_breaker_store.mark_stop_urgence_handled(db_path, process_name, stop_event_id)
@@ -470,9 +495,9 @@ def run_technical_strategy_loop(
                     extra_resolutions=extra_resolutions,
                 )
 
-            reconcile_ghost_positions(db_path, client, source_filter=lambda s: s == source)
+            reconcile_ghost_positions(db_path, client, source_filter=lambda s: s in management_sources)
             check_pending_fills(
-                db_path, client, sources=[source],
+                db_path, client, sources=management_sources,
                 bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,
             )
             cancel_stale_working_orders(db_path, client)
@@ -496,7 +521,7 @@ def run_technical_strategy_loop(
 
             manage_open_trades(
                 db_path, client, risk_engine, envelope_managers, envelope_ids,
-                include_sources=[source],
+                include_sources=management_sources,
                 anthropic_client=anthropic_client, bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,
             )
         except Exception:

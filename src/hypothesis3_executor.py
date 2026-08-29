@@ -21,13 +21,13 @@ US30/US100 serait redondante — même raisonnement que H2, non
 spécifié dans le pré-enregistrement (invariant #10 : pas de variable
 hors pré-enregistrement).
 
-**AVERTISSEMENT DE TRANSITION** (même nature que H1, voir
-`trend_executor.py`) : H3 avait **6 positions RÉELLEMENT ouvertes** au
-29/08/2026 (BTCUSD, ETHUSD, GOLD, EURUSD, US100, GBPUSD, `source=
-'hypothesis3'`), vérifié en base. Même prérequis obligatoire avant tout
-déploiement futur : attendre leur clôture naturelle, revérifier en base
-juste avant tout redémarrage — sinon elles deviendraient invisibles à
-tout process une fois celui-ci basculé sur `source='hypothesis3_v2'`.
+**TRANSITION DES POSITIONS v1 RÉSOLUE** (même mécanisme que H1, voir
+`trend_executor.py` et docs/DECISIONS.md, point 2) : H3 avait 6
+positions RÉELLEMENT ouvertes au 29/08/2026 (BTCUSD, ETHUSD, GOLD,
+EURUSD, US100, GBPUSD, `source='hypothesis3'`). `legacy_sources=
+[HYPOTHESIS3_SOURCE]` ci-dessous étend leur surveillance (réconciliation/
+remplissage/gestion/`/stop_urgence`) sans retarder le démarrage des
+signaux `hypothesis3_v2`, scopés indépendamment par (actif, source).
 
 **Garde-fou statistique à appliquer au moment de la calibration/
 confirmation (points F/G/H), pas ici** : L3 élimine par construction les
@@ -39,7 +39,7 @@ comptés 0R) ET par trade exécuté, jamais l'une sans l'autre.
 """
 
 import src.hypothesis3_strategy_v2 as _h3_mod
-from src.executor import HYPOTHESIS3_V2_SOURCE
+from src.executor import HYPOTHESIS3_SOURCE, HYPOTHESIS3_V2_SOURCE
 from src.hypothesis3_strategy_v2 import evaluate_entry
 from src.hypothesis_params import apply_overrides, get_resolution_override
 from src.technical_strategy_executor import run_technical_strategy_loop
@@ -95,6 +95,7 @@ def run_hypothesis3_loop(config, db_path: str, interval_seconds: int = 60, start
         interval_seconds=interval_seconds,
         require_regime_confirmation=False,
         startup_offset_seconds=startup_offset_seconds,
+        legacy_sources=[HYPOTHESIS3_SOURCE],
     )
 
 
