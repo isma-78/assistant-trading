@@ -2200,13 +2200,52 @@ def test_open_signal_rejected_when_asset_blocked_by_circuit_breaker(tmp_path):
 
 
 def test_open_signal_rejected_when_exposure_cap_exceeded(tmp_path):
+    # Enveloppe volontairement réduite à 100€ (29/08/2026) pour que le
+    # plafond par-enveloppe (10% = 10€) reste sous le plafond fixe par
+    # cluster (50€, voir CLUSTER_EXPOSURE_CAP_EUR) et que ce test isole
+    # bien le garde-fou par-enveloppe — sinon, GOLD étant un cluster à
+    # lui seul, le nouveau garde-fou de cluster (vérifié en premier)
+    # interceptait ce scénario avant d'atteindre celui-ci.
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
-    signal_row = _insert_signal(db_path, confiance=1.0)  # entree=100, stop=101 -> risque 2% de 500 = 10€
-    # Déjà 45€ engagés sur GOLD/stationx : 45 + 10 = 55 > 10% de 500 = 50
+    signal_row = _insert_signal(db_path, confiance=1.0)  # entree=100, stop=101 -> risque 2% de 100 = 2€
+    # Déjà 9€ engagés sur GOLD/station_x : 9 + 2 = 11 > 10% de 100 = 10
     existing_trade_id = _insert_open_trade(db_path, signal_row["id"], "station_x", "deal-existing")
     with connection_scope(db_path) as conn:
-        conn.execute("UPDATE trades SET risque_eur = 45.0 WHERE id = ?", (existing_trade_id,))
+        conn.execute("UPDATE trades SET risque_eur = 9.0 WHERE id = ?", (existing_trade_id,))
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+
+    envelope_manager = CapitalManager(initial_balance=100.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result is None
+    client.place_limit_order.assert_not_called()
+    conn = get_connection(db_path)
+    try:
+        decision = conn.execute("SELECT * FROM risk_decisions WHERE signal_id = ?", (signal_row["id"],)).fetchone()
+        assert "exposition" in decision["detail"]
+    finally:
+        conn.close()
+
+
+def test_open_signal_rejected_when_cluster_exposure_cap_exceeded_across_sources(tmp_path):
+    # 29/08/2026 (voir docs/DECISIONS.md, points 3/11) : le plafond par
+    # cluster agrège TOUTES les sources — cas que le plafond par-enveloppe
+    # (scopé à une seule source) ne peut PAS détecter. GOLD est un
+    # cluster à lui seul (CORRELATION_CLUSTERS) : 4 sources différentes
+    # à 10€ chacune (40€) + le risque provisoire boosté (500*4%=20€) sur
+    # une 5e source dépasse 50€, alors qu'aucune source individuelle
+    # n'approche son propre plafond de 50€.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, source="station_x")
+    for source in ("hypothesis2", "hypothesis3", "hypothesis4", "hypothesis5"):
+        _insert_open_trade(db_path, signal_row["id"], source, f"deal-{source}")
 
     client = MagicMock()
     client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
@@ -2222,9 +2261,55 @@ def test_open_signal_rejected_when_exposure_cap_exceeded(tmp_path):
     conn = get_connection(db_path)
     try:
         decision = conn.execute("SELECT * FROM risk_decisions WHERE signal_id = ?", (signal_row["id"],)).fetchone()
-        assert "exposition" in decision["detail"]
+        assert decision["reason"] == "cluster_exposure_cap"
+        assert "cluster" in decision["detail"]
     finally:
         conn.close()
+
+
+def test_open_signal_within_cluster_exposure_cap_still_approved(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, source="station_x")
+    _insert_open_trade(db_path, signal_row["id"], "hypothesis2", "deal-h2")  # 10€ seulement dans le cluster
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-new", "level": 100.0}
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result == "deal-new"
+
+
+def test_open_signal_asset_without_cluster_mapping_skips_cluster_check(tmp_path):
+    # Robustesse : un actif hypothétique absent de CORRELATION_CLUSTERS
+    # ne doit jamais faire planter open_signal, seulement sauter le
+    # garde-fou de cluster (branche `cluster is None`).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, actif="INCONNU_XYZ", source="station_x")
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-new", "level": 100.0}
+
+    custom_whitelist = {"INCONNU_XYZ": AssetSpec(symbol="INCONNU_XYZ", min_units=0.01, pip_value_per_unit=0.86)}
+    custom_engine = RiskEngine(
+        caps=RiskCaps(risk_percent_default=2.0, risk_percent_boosted=4.0, envelope_initial=500.0),
+        whitelist=custom_whitelist,
+    )
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, custom_engine, custom_whitelist, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result == "deal-new"
 
 
 def test_open_signal_within_exposure_cap_still_approved(tmp_path):

@@ -280,17 +280,20 @@ class RiskEngine:
 
         actual_risk = units * stop_distance * asset_spec.pip_value_per_unit
 
-        # Garde-fou de plausibilité de taille (28/08/2026, voir
-        # docs/DECISIONS.md, point 3) : `units` ci-dessus est arrondi au
-        # pas `min_units` (souvent trop FIN — vérifié en direct contre
-        # `minStepDistance` réel sur 4/8 actifs, écart ×10 à ×500). Ne
-        # change PAS le sizing réel (invariant #2, pas de fail-safe qui
-        # modifierait le risque à la hausse ni de nouvelle valeur
-        # imputée) — vérifie seulement, avant tout envoi au broker, que
-        # le risque réel une fois arrondi au VRAI pas resterait dans une
-        # tolérance de 20% de la cible. Sans effet tant qu'aucun
-        # `size_step` n'est renseigné (fail-safe : absence de donnée
-        # n'est jamais un motif de rejet).
+        # Garde-fou de plausibilité de taille (28/08/2026, corrigé le
+        # 28/08/2026 soir puis câblé le 29/08/2026, voir
+        # docs/DECISIONS.md, points 3-4 et 11) : `size_step` =
+        # `minSizeIncrement` réel (vérifié en direct == `minDealSize` =
+        # `min_units` ci-dessus pour les 9 instruments — structurellement
+        # un no-op aujourd'hui, câblé en défense en profondeur pour tout
+        # futur onboarding d'actif dont `min_units` serait mal
+        # renseigné). Ne change PAS le sizing réel (invariant #2, pas de
+        # fail-safe qui modifierait le risque à la hausse ni de nouvelle
+        # valeur imputée) — vérifie seulement, avant tout envoi au
+        # broker, que le risque réel une fois arrondi au VRAI pas
+        # resterait dans une tolérance de 20% de la cible. Sans effet
+        # tant qu'aucun `size_step` n'est renseigné (fail-safe : absence
+        # de donnée n'est jamais un motif de rejet).
         plausible, detail = evaluate_sizing_plausibility(
             units, risk_amount_eur, stop_distance, asset_spec.pip_value_per_unit, asset_spec.size_step,
         )

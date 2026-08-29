@@ -63,7 +63,12 @@ from src.audit_notifier import (
 )
 from src.capital_client import CapitalApiError, CapitalClient
 from src.capital_manager import CapitalManager, apply_trade_result
-from src.circuit_breaker import evaluate_exposure_cap
+from src.circuit_breaker import (
+    CLUSTER_EXPOSURE_CAP_EUR,
+    CORRELATION_CLUSTERS,
+    evaluate_cluster_exposure_cap,
+    evaluate_exposure_cap,
+)
 from src.db import connection_scope
 from src.envelope_store import load_or_create_envelope, load_reserve_total, persist_trade_result
 from src.go_nogo import GoNoGoStatus
@@ -779,6 +784,36 @@ def open_signal(
             )
     except Exception:
         logger.exception("Échec de la capture du spread pour le signal %s — sans impact sur la suite", signal_row["id"])
+
+    # Plafond par cluster de corrélation (29/08/2026, voir docs/DECISIONS.md,
+    # points 3/11) — vérifié AVANT le sizing (contrairement au plafond
+    # par-enveloppe ci-dessous, vérifié après), comme demandé : un
+    # cluster déjà à son plafond n'a pas besoin d'être dimensionné.
+    # `new_risk_eur` n'est pas encore connu à ce stade (le sizing exact
+    # dépend de decide_entry, plus bas) — approximé par le taux de
+    # risque BOOSTÉ (le maximum possible, jamais le défaut) × enveloppe,
+    # volontairement conservateur (ne sous-estime jamais l'incrément),
+    # même parti pris fail-safe que `get_open_risk_eur` (§2.3).
+    cluster = CORRELATION_CLUSTERS.get(asset)
+    if cluster is not None:
+        cluster_assets = [a for a, c in CORRELATION_CLUSTERS.items() if c == cluster]
+        cluster_open_risk_eur = circuit_breaker_store.get_cluster_open_risk_eur(db_path, cluster_assets)
+        provisional_risk_eur = envelope_manager.balance * (risk_engine.caps.risk_percent_boosted / 100.0)
+        if evaluate_cluster_exposure_cap(cluster_open_risk_eur, provisional_risk_eur):
+            with connection_scope(db_path) as conn:
+                conn.execute(
+                    "INSERT INTO risk_decisions (signal_id, decided_at, approved, reason, detail, units, risk_amount_eur) "
+                    "VALUES (?, ?, 0, 'cluster_exposure_cap', ?, NULL, NULL)",
+                    (
+                        signal_row["id"], now,
+                        f"Rejeté : plafond du cluster '{cluster}' dépassé — "
+                        f"engagé={cluster_open_risk_eur}€ + nouveau(approx.)={round(provisional_risk_eur, 2)}€ "
+                        f"> {CLUSTER_EXPOSURE_CAP_EUR}€",
+                    ),
+                )
+                conn.execute("UPDATE signals SET statut = 'rejete' WHERE id = ?", (signal_row["id"],))
+            logger.info("Signal %s rejeté : plafond de cluster '%s' dépassé", signal_row["id"], cluster)
+            return None
 
     adjustment = _compute_guaranteed_stop_adjustment(
         client, epic, signal_row["sens"], signal_row["entree_min"], signal_row["stop_loss"],

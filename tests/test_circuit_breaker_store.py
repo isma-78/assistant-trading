@@ -12,6 +12,7 @@ from src.circuit_breaker_store import (
     clear_breaker,
     get_active_global_block,
     get_closed_trades_r,
+    get_cluster_open_risk_eur,
     get_open_risk_eur,
     get_unhandled_stop_urgence_event_id,
     is_asset_blocked,
@@ -83,6 +84,32 @@ def test_get_open_risk_eur_sums_open_trades_for_source(tmp_path):
 
     assert get_open_risk_eur(db_path, "GOLD", "stationx") == 25.0
     assert get_open_risk_eur(db_path, "GOLD", "hypothesis") == 99.0
+
+
+def test_get_cluster_open_risk_eur_sums_across_assets_and_sources(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    _insert_open_trade(db_path, "BTCUSD", "hypothesis", risque_eur=10.0)
+    _insert_open_trade(db_path, "ETHUSD", "hypothesis3", risque_eur=15.0)
+    _insert_open_trade(db_path, "ETHUSD", "hypothesis4", risque_eur=20.0)
+    _insert_open_trade(db_path, "GOLD", "hypothesis", risque_eur=99.0)  # hors cluster, jamais compté
+
+    assert get_cluster_open_risk_eur(db_path, ["BTCUSD", "ETHUSD"]) == 45.0
+
+
+def test_get_cluster_open_risk_eur_excludes_closed_trades(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    _insert_open_trade(db_path, "BTCUSD", "hypothesis", risque_eur=10.0)
+    _insert_closed_trade(db_path, "BTCUSD", "hypothesis", "2026-08-20T10:00:00+00:00", 1.0, risque_eur=50.0)
+
+    assert get_cluster_open_risk_eur(db_path, ["BTCUSD", "ETHUSD"]) == 10.0
+
+
+def test_get_cluster_open_risk_eur_empty_cluster_returns_zero(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    assert get_cluster_open_risk_eur(db_path, []) == 0.0
 
 
 # ---------------------------------------------------------------------------

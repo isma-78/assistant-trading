@@ -36,6 +36,30 @@ API_ERROR_STREAK_THRESHOLD = 3
 BREADTH_PAUSE_THRESHOLD_ASSETS = 5
 CHANNEL_INACTIVITY_THRESHOLD_DAYS = 7
 
+# Plafond par cluster de corrélation (28-29/08/2026, voir docs/DECISIONS.md,
+# points 3/11) : `evaluate_exposure_cap` ci-dessus raisonne par (actif,
+# source) contre l'enveloppe de CETTE source uniquement — jamais vu qu'un
+# cluster de corrélation (empiriques, 28/08/2026 : {US30,US100} ρ=0,75 ;
+# {EURUSD,GBPUSD,USDJPY} même facteur USD ; {BTCUSD,ETHUSD} ρ=0,83 ;
+# {GOLD} seul) peut accumuler un risque bien plus grand une fois agrégé
+# TOUTES SOURCES CONFONDUES — confirmé le 28/08/2026 : le cluster crypto
+# a réellement atteint 79,81€ (8 positions simultanées, en partie dues à
+# un bug d'ouverture en double déjà corrigé le 25/08/2026), au-dessus du
+# plafond de 50€ retenu ici. Valeur fixe (pas proportionnelle au nombre
+# d'enveloppes actives) — option recommandée du 28/08/2026 : simple,
+# cohérente avec le plafond par-enveloppe existant (10% de 500€), et
+# suffisante pour bloquer l'incident déjà observé dès sa 6e position.
+CORRELATION_CLUSTERS = {
+    "US30": "indices", "US100": "indices",
+    "EURUSD": "fx_majors_jpy", "GBPUSD": "fx_majors_jpy", "USDJPY": "fx_majors_jpy",
+    # CHFJPY (28/08/2026) : partage la jambe yen avec USDJPY, rattachée
+    # au même cluster DÈS SA CRÉATION, jamais traitée comme indépendante.
+    "CHFJPY": "fx_majors_jpy",
+    "BTCUSD": "crypto", "ETHUSD": "crypto",
+    "GOLD": "gold",
+}
+CLUSTER_EXPOSURE_CAP_EUR = 50.0
+
 
 @dataclass(frozen=True)
 class RStats:
@@ -163,6 +187,18 @@ def evaluate_exposure_cap(open_risk_eur: float, envelope_balance: float, new_ris
     if envelope_balance <= 0:
         return True
     return (open_risk_eur + new_risk_eur) > envelope_balance * EXPOSURE_CAP_FRACTION
+
+
+def evaluate_cluster_exposure_cap(
+    cluster_open_risk_eur: float, new_risk_eur: float, cluster_cap_eur: float = CLUSTER_EXPOSURE_CAP_EUR,
+) -> bool:
+    """True si l'ajout de `new_risk_eur` dépasserait le plafond fixe du
+    cluster de corrélation (`CLUSTER_EXPOSURE_CAP_EUR`, toutes sources
+    confondues — voir `CORRELATION_CLUSTERS` ci-dessus). Même forme que
+    `evaluate_exposure_cap`, jamais la même portée : celle-ci agrège
+    plusieurs actifs corrélés ET plusieurs sources (hypothèses), l'autre
+    un seul (actif, source)."""
+    return (cluster_open_risk_eur + new_risk_eur) > cluster_cap_eur
 
 
 def evaluate_api_error_streak(consecutive_errors: int, threshold: int = API_ERROR_STREAK_THRESHOLD) -> bool:

@@ -3,6 +3,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src.circuit_breaker import (
+    CLUSTER_EXPOSURE_CAP_EUR,
+    CORRELATION_CLUSTERS,
     DAY_LOSS_THRESHOLD_R,
     DRAWDOWN_FROM_PEAK_THRESHOLD_R,
     WEEK_LOSS_THRESHOLD_R,
@@ -11,6 +13,7 @@ from src.circuit_breaker import (
     evaluate_api_error_streak,
     evaluate_breadth_pause,
     evaluate_circuit_breakers,
+    evaluate_cluster_exposure_cap,
     evaluate_exposure_cap,
     is_channel_inactive,
 )
@@ -174,6 +177,43 @@ def test_exposure_cap_exact_boundary_not_exceeded():
 def test_exposure_cap_depleted_envelope_always_blocks():
     assert evaluate_exposure_cap(open_risk_eur=0.0, envelope_balance=0.0, new_risk_eur=1.0) is True
     assert evaluate_exposure_cap(open_risk_eur=0.0, envelope_balance=-5.0, new_risk_eur=1.0) is True
+
+
+# ---------------------------------------------------------------------------
+# evaluate_cluster_exposure_cap / CORRELATION_CLUSTERS
+# ---------------------------------------------------------------------------
+
+def test_cluster_exposure_cap_within_limit():
+    assert evaluate_cluster_exposure_cap(cluster_open_risk_eur=20.0, new_risk_eur=10.0) is False
+
+
+def test_cluster_exposure_cap_exceeded():
+    assert evaluate_cluster_exposure_cap(cluster_open_risk_eur=45.0, new_risk_eur=10.0) is True
+
+
+def test_cluster_exposure_cap_exact_boundary_not_exceeded():
+    assert evaluate_cluster_exposure_cap(cluster_open_risk_eur=40.0, new_risk_eur=10.0) is False
+
+
+def test_cluster_exposure_cap_default_matches_module_constant():
+    assert evaluate_cluster_exposure_cap(cluster_open_risk_eur=CLUSTER_EXPOSURE_CAP_EUR, new_risk_eur=0.01) is True
+
+
+def test_cluster_exposure_cap_custom_cap_overrides_default():
+    assert evaluate_cluster_exposure_cap(cluster_open_risk_eur=90.0, new_risk_eur=5.0, cluster_cap_eur=100.0) is False
+
+
+def test_correlation_clusters_chfjpy_grouped_with_usdjpy():
+    assert CORRELATION_CLUSTERS["CHFJPY"] == CORRELATION_CLUSTERS["USDJPY"]
+
+
+def test_correlation_clusters_crypto_pair_grouped():
+    assert CORRELATION_CLUSTERS["BTCUSD"] == CORRELATION_CLUSTERS["ETHUSD"]
+
+
+def test_correlation_clusters_gold_standalone():
+    gold_cluster = CORRELATION_CLUSTERS["GOLD"]
+    assert all(asset == "GOLD" for asset, cluster in CORRELATION_CLUSTERS.items() if cluster == gold_cluster)
 
 
 # ---------------------------------------------------------------------------

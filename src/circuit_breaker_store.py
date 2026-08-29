@@ -107,6 +107,25 @@ def get_open_risk_eur(db_path: str, asset: str, source: str) -> float:
     return round(sum(row["risque_eur"] or 0.0 for row in rows if _normalize_source(row["source"]) == normalized), 2)
 
 
+def get_cluster_open_risk_eur(db_path: str, cluster_assets) -> float:
+    """Somme `risque_eur` de TOUS les trades `statut='ouvert'` dont
+    l'actif appartient à `cluster_assets` — TOUTES sources confondues
+    (contrairement à `get_open_risk_eur`, scopée à une seule source).
+    C'est précisément ce qui manque au plafond par-enveloppe existant
+    (28/08/2026, voir docs/DECISIONS.md, points 3/11) : un cluster de
+    corrélation (BTCUSD+ETHUSD, ou les 5 hypothèses simultanément sur le
+    même actif) n'est jamais vu comme une unité de risque partagée."""
+    assets = tuple(cluster_assets)
+    if not assets:
+        return 0.0
+    with connection_scope(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT risque_eur FROM trades WHERE actif IN ({','.join('?' for _ in assets)}) AND statut = 'ouvert'",
+            assets,
+        ).fetchall()
+    return round(sum(row["risque_eur"] or 0.0 for row in rows), 2)
+
+
 # ---------------------------------------------------------------------------
 # Événements (déclenchement / effacement)
 # ---------------------------------------------------------------------------

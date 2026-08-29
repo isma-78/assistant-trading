@@ -95,6 +95,16 @@ def build_asset_whitelist(usd_to_eur: float, jpy_to_eur: float) -> Dict[str, Ass
             symbol=symbol,
             min_units=min_units,
             pip_value_per_unit=rates[_QUOTE_CURRENCY[symbol]],
+            # `size_step` (28/08/2026, voir docs/DECISIONS.md, point 4 —
+            # correctif garde-fou de taille) : `minSizeIncrement`, vérifié
+            # en direct sur l'API Capital.com le 28/08/2026, identique
+            # trait pour trait à `minDealSize` (= `min_units` ci-dessus)
+            # pour les 9 instruments de la liste blanche, sans exception.
+            # Structurellement un no-op aujourd'hui (`_round_down_to_min`
+            # arrondit déjà à ce même pas avant tout calcul de risque) —
+            # câblé comme défense en profondeur pour tout futur
+            # onboarding d'actif dont `min_units` serait mal renseigné.
+            size_step=min_units,
         )
         for symbol, min_units in _MIN_UNITS.items()
     }
