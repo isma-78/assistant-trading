@@ -24,6 +24,15 @@ CE QUE CE MODULE NE FAIT PAS (lignes rouges, invariant #10) :
   fait qu'écrire une ligne `rule_changes`, relue par
   `hypothesis_params.py` au PROCHAIN REDÉMARRAGE du process concerné
   (jamais en cours de run, invariant #4) — jamais un ordre.
+- **N'écrit plus JAMAIS `statut='applique'` (revirement du 29/08/2026,
+  point 5, voir docs/DECISIONS.md)** : `apply_immediately` existait
+  (25/08/2026) comme "écart CDC assumé" explicite pour H2-H5 — Ismaël
+  est revenu dessus explicitement le 29/08/2026 ("NE s'applique JAMAIS
+  automatiquement — Ismaël valide/rejette"). Toute ligne écrite par ce
+  module porte désormais `statut='propose'`, sans exception ni bascule —
+  la validation humaine (mise à jour manuelle de `rule_changes.statut`,
+  puis pré-enregistrement dans docs/HYPOTHESES.md, puis nouveau budget
+  de variable consommé) reste entièrement hors de ce module.
 
 Deux couches, même convention que risk_engine.py/backtest_engine.py :
 - Calcul pur (bonferroni_one_sided_z, compute_lower_bound,
@@ -226,17 +235,17 @@ def evaluate_validation(n_trades: int, mean_r: Optional[float], min_trades: int)
 
 
 def build_rule_change_rows(
-    hypothesis: str, candidate: CandidateSpec, constat_stat: str, now_iso: str, apply_immediately: bool,
+    hypothesis: str, candidate: CandidateSpec, constat_stat: str, now_iso: str,
 ) -> List[dict]:
     """Une ligne `rule_changes` par paramètre du candidat retenu (schéma
     mono-variable par ligne, §3.8) — toutes partagent `constat_stat` et
     l'horodatage pour rester traçables comme un seul lot.
-    `apply_immediately=True` écrit statut='applique' directement :
-    reproduit l'écart CDC déjà assumé par Ismaël pour le chantier H2-H5
-    du 25/08/2026 (déploiement automatique sans confirmation manuelle
-    par trade) — pas une nouvelle décision prise ici, voir
-    docs/HYPOTHESES.md. Le candidat de référence 'A' (sans override)
-    n'a rien à écrire — ValueError plutôt qu'une ligne vide silencieuse."""
+
+    Toujours `statut='propose'`, `validated_at=None`, `applied_at=None`
+    (point 5, 29/08/2026, voir docstring du module — plus de paramètre
+    `apply_immediately`, ce module ne sait plus écrire `'applique'`).
+    Le candidat de référence 'A' (sans override) n'a rien à écrire —
+    ValueError plutôt qu'une ligne vide silencieuse."""
     if not candidate.overrides:
         raise ValueError(
             f"Le candidat {candidate.name!r} n'a aucun override à écrire "
@@ -249,9 +258,9 @@ def build_rule_change_rows(
             "variable": f"{hypothesis}.{param_name}",
             "constat_stat": constat_stat,
             "ajustement_propose": str(value),
-            "statut": "applique" if apply_immediately else "propose",
-            "validated_at": now_iso if apply_immediately else None,
-            "applied_at": now_iso if apply_immediately else None,
+            "statut": "propose",
+            "validated_at": None,
+            "applied_at": None,
         })
     return rows
 
@@ -262,7 +271,17 @@ def build_rule_change_rows(
 # ordre, il propose un paramètre de STRATÉGIE relu au redémarrage suivant.
 # ---------------------------------------------------------------------------
 
-def persist_rule_changes(db_path: str, rows: List[dict]) -> List[int]:
+def persist_rule_changes(
+    db_path: str, rows: List[dict], notify_fn: Optional[Callable[[dict], None]] = None,
+) -> List[int]:
+    """`notify_fn` (point 5, 29/08/2026) : appelée une fois PAR ligne
+    écrite, APRÈS le commit (jamais avant — ne jamais notifier une
+    proposition qui aurait échoué à s'écrire). Reçoit la ligne complète
+    (dict), donc `constat_stat` — le chiffre qui motive la proposition —
+    est toujours dans le message envoyé. Callable injectée (même
+    convention que `train_fn`/`validation_fn`) : ce module reste sans
+    accès réseau/config Telegram propre, l'appelant (script) construit
+    `notify_fn` avec de vrais identifiants."""
     ids: List[int] = []
     with connection_scope(db_path) as conn:
         for row in rows:
@@ -273,6 +292,9 @@ def persist_rule_changes(db_path: str, rows: List[dict]) -> List[int]:
                 row,
             )
             ids.append(cursor.lastrowid)
+    if notify_fn is not None:
+        for row in rows:
+            notify_fn(row)
     return ids
 
 
@@ -294,14 +316,16 @@ def run_evolution_cycle(
     min_trades_validation: int,
     db_path: str,
     now_iso: Optional[str] = None,
-    apply_immediately: bool = True,
     persist: bool = True,
+    notify_fn: Optional[Callable[[dict], None]] = None,
 ) -> EvolutionCycleReport:
     """Orchestrateur mécanique complet : entraînement (tous les
     candidats) -> sélection (entraînement seul) -> validation (une seule
     fois, seulement si un candidat autre que la référence a été
-    sélectionné) -> écriture rule_changes (seulement si la validation
-    passe). Ne fait jamais rien de plus qu'un seul essai de validation
+    sélectionné) -> écriture rule_changes, TOUJOURS `statut='propose'`
+    (point 5, 29/08/2026 — plus d'application automatique, voir
+    docstring du module), avec notification optionnelle par ligne
+    écrite. Ne fait jamais rien de plus qu'un seul essai de validation
     par appel."""
     now_iso = now_iso or datetime.now(timezone.utc).isoformat()
     training_results = [train_fn(c) for c in candidates]
@@ -327,8 +351,8 @@ def run_evolution_cycle(
         f"sur l'entraînement ({selection.reason}) puis validé ({validation.reason})."
     )
     if not persist:
-        # Dry-run : calcule tout, n'écrit rien (ni 'propose' ni 'applique').
+        # Dry-run : calcule tout, n'écrit rien.
         return EvolutionCycleReport(hypothesis, training_results, selection, validation, [])
-    rows = build_rule_change_rows(hypothesis, selected_candidate, constat_stat, now_iso, apply_immediately)
-    ids = persist_rule_changes(db_path, rows)
+    rows = build_rule_change_rows(hypothesis, selected_candidate, constat_stat, now_iso)
+    ids = persist_rule_changes(db_path, rows, notify_fn=notify_fn)
     return EvolutionCycleReport(hypothesis, training_results, selection, validation, ids)

@@ -200,41 +200,67 @@ def test_validation_passes():
 
 def test_build_rows_rejects_reference_candidate():
     with pytest.raises(ValueError):
-        build_rule_change_rows("H3", CandidateSpec(name="A"), "constat", "2026-08-26T00:00:00", True)
+        build_rule_change_rows("H3", CandidateSpec(name="A"), "constat", "2026-08-26T00:00:00")
 
 
-def test_build_rows_one_per_param_applied():
+def test_build_rows_one_per_param_always_proposed():
+    # Point 5 (29/08/2026) : plus de statut 'applique' possible depuis ce
+    # module, quel que soit l'appelant - revirement explicite sur
+    # l'ecart CDC assume le 25/08/2026 (voir docs/DECISIONS.md).
     candidate = CandidateSpec(name="B", overrides={"TP1_R_MULTIPLE": 0.5, "TP2_R_MULTIPLE": 1.5}, theory="x")
-    rows = build_rule_change_rows("H3", candidate, "constat", "2026-08-26T00:00:00", apply_immediately=True)
+    rows = build_rule_change_rows("H3", candidate, "constat", "2026-08-26T00:00:00")
     assert len(rows) == 2
     variables = {r["variable"] for r in rows}
     assert variables == {"H3.TP1_R_MULTIPLE", "H3.TP2_R_MULTIPLE"}
-    assert all(r["statut"] == "applique" for r in rows)
-    assert all(r["applied_at"] == "2026-08-26T00:00:00" for r in rows)
-
-
-def test_build_rows_proposed_not_applied_when_not_immediate():
-    candidate = CandidateSpec(name="B", overrides={"RSI_PERIOD": 9}, theory="x")
-    rows = build_rule_change_rows("H5", candidate, "constat", "2026-08-26T00:00:00", apply_immediately=False)
-    assert rows[0]["statut"] == "propose"
-    assert rows[0]["applied_at"] is None
-    assert rows[0]["validated_at"] is None
+    assert all(r["statut"] == "propose" for r in rows)
+    assert all(r["applied_at"] is None for r in rows)
+    assert all(r["validated_at"] is None for r in rows)
 
 
 # ---------------------------------------------------------------------------
 # persist_rule_changes + run_evolution_cycle — orchestration (doubles)
 # ---------------------------------------------------------------------------
 
-def test_persist_rule_changes_readable_by_hypothesis_params(tmp_path):
+def test_persist_rule_changes_never_readable_as_active_override(tmp_path):
+    # Point 5 (29/08/2026) : une proposition ecrite par ce module n'est
+    # JAMAIS active tant qu'un humain n'a pas change son statut a la main
+    # (hors de ce module - voir docstring). get_active_override ne lit
+    # que statut='applique'.
     db_path = str(tmp_path / "t.db")
     init_db(db_path)
     rows = build_rule_change_rows(
         "H5", CandidateSpec(name="B", overrides={"RSI_PERIOD": 9}, theory="x"),
-        "constat", "2026-08-26T00:00:00", apply_immediately=True,
+        "constat", "2026-08-26T00:00:00",
     )
     ids = persist_rule_changes(db_path, rows)
     assert len(ids) == 1
-    assert get_active_override(db_path, "H5", "RSI_PERIOD") == "9"
+    assert get_active_override(db_path, "H5", "RSI_PERIOD") is None
+
+
+def test_persist_rule_changes_calls_notify_fn_once_per_row_after_commit(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    candidate = CandidateSpec(name="B", overrides={"TP1_R_MULTIPLE": 0.5, "TP2_R_MULTIPLE": 1.5}, theory="x")
+    rows = build_rule_change_rows("H3", candidate, "constat 42 trades, borne basse +0.03R", "2026-08-26T00:00:00")
+
+    notified = []
+
+    def notify_fn(row):
+        # Le commit doit deja avoir eu lieu - relisible en base des l'appel.
+        assert get_active_override(db_path, "H3", "TP1_R_MULTIPLE") is None  # 'propose', pas 'applique'
+        notified.append(row["variable"])
+
+    persist_rule_changes(db_path, rows, notify_fn=notify_fn)
+    assert set(notified) == {"H3.TP1_R_MULTIPLE", "H3.TP2_R_MULTIPLE"}
+
+
+def test_persist_rule_changes_without_notify_fn_is_a_noop_for_notification(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    candidate = CandidateSpec(name="B", overrides={"RSI_PERIOD": 9}, theory="x")
+    rows = build_rule_change_rows("H5", candidate, "constat", "2026-08-26T00:00:00")
+    ids = persist_rule_changes(db_path, rows)  # pas de notify_fn -> ne doit jamais lever
+    assert len(ids) == 1
 
 
 def test_run_evolution_cycle_no_candidate_qualifies(tmp_path):
@@ -306,7 +332,11 @@ def test_run_evolution_cycle_validation_fails_writes_nothing(tmp_path):
     assert get_active_override(db_path, "H5", "RSI_PERIOD") is None
 
 
-def test_run_evolution_cycle_full_success_applies_immediately(tmp_path):
+def test_run_evolution_cycle_full_success_writes_propose_never_active(tmp_path):
+    # Point 5 (29/08/2026) : un cycle reussi ecrit toujours 'propose',
+    # jamais lu comme override actif tant qu'aucune validation humaine
+    # n'a change le statut a la main (revirement sur l'ecart CDC du
+    # 25/08/2026, voir docs/DECISIONS.md).
     db_path = str(tmp_path / "t.db")
     init_db(db_path)
     candidates = [CandidateSpec(name="A"), CandidateSpec(name="B", overrides={"RSI_PERIOD": 9}, theory="x")]
@@ -325,10 +355,10 @@ def test_run_evolution_cycle_full_success_applies_immediately(tmp_path):
     )
     assert report.validation.passed is True
     assert len(report.applied_rule_change_ids) == 1
-    assert get_active_override(db_path, "H5", "RSI_PERIOD") == "9"
+    assert get_active_override(db_path, "H5", "RSI_PERIOD") is None
 
 
-def test_run_evolution_cycle_success_not_applied_immediately_stays_proposed(tmp_path):
+def test_run_evolution_cycle_notify_fn_forwarded_to_persist(tmp_path):
     db_path = str(tmp_path / "t.db")
     init_db(db_path)
     candidates = [CandidateSpec(name="A"), CandidateSpec(name="B", overrides={"RSI_PERIOD": 9}, theory="x")]
@@ -341,13 +371,13 @@ def test_run_evolution_cycle_success_not_applied_immediately_stays_proposed(tmp_
     def validation_fn(c):
         return TrainingResult(c.name, n_trades=100, r_values=tuple([0.2] * 100))
 
+    notified = []
     report = run_evolution_cycle(
         "H5", candidates, train_fn, validation_fn, min_trades_train=150, min_trades_validation=60,
-        db_path=db_path, apply_immediately=False,
+        db_path=db_path, notify_fn=lambda row: notified.append(row["variable"]),
     )
-    assert len(report.applied_rule_change_ids) == 1
-    # Statut 'propose', jamais lu par hypothesis_params tant que non 'applique'.
-    assert get_active_override(db_path, "H5", "RSI_PERIOD") is None
+    assert report.applied_rule_change_ids
+    assert notified == ["H5.RSI_PERIOD"]
 
 
 def test_run_evolution_cycle_dry_run_persists_nothing(tmp_path):

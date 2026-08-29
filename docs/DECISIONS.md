@@ -12,6 +12,58 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 15) — Point 5 : le cycle d'évolution ne s'applique plus jamais automatiquement — revirement explicite sur l'écart CDC du 25/08/2026
+
+Le "cadrage de l'apprentissage" du prompt en cours est sans ambiguïté :
+"toute règle de stratégie modifiée sur la base de quelques trades est du
+surapprentissage" et "NE s'applique JAMAIS automatiquement — Ismaël
+valide/rejette". `evolution_engine.py` (construit le 26/08/2026)
+contredisait ça DIRECTEMENT : `run_evolution_cycle(...,
+apply_immediately=True)` était le comportement PAR DÉFAUT, exercé
+explicitement par `scripts/run_evolution_cycle.py` (le script H1). Ce
+n'est pas un bug — c'était un écart CDC assumé le 25/08/2026 — mais
+Ismaël revient dessus explicitement aujourd'hui, ce qui prime.
+
+**Corrigé** (`src/evolution_engine.py`, 100% couvert, 35 tests) :
+- `apply_immediately` retiré ENTIÈREMENT de `build_rule_change_rows`/
+  `run_evolution_cycle` — plus aucune bascule possible, le module ne
+  sait plus écrire `statut='applique'`. Toute ligne `rule_changes`
+  qu'il écrit est désormais `propose`/`validated_at=None`/
+  `applied_at=None`, sans exception.
+- `hypothesis_params.get_active_override` ne lit QUE `statut='applique'`
+  (inchangé) — une proposition de ce module est donc structurellement
+  invisible à tout process tant qu'un humain n'a pas changé son statut
+  à la main. Vérifié par test (`get_active_override` reste `None` même
+  après un cycle "réussi").
+- `scripts/run_evolution_cycle.py` : appel mis à jour (plus
+  d'`apply_immediately`), message de sortie corrigé pour ne plus dire
+  "ÉCRIT (statut='applique')".
+- **Notification par proposition, avec le chiffre qui la motive** :
+  `persist_rule_changes(..., notify_fn=...)` — appelée une fois PAR
+  ligne, APRÈS le commit (jamais avant, jamais si l'écriture a échoué).
+  `scripts/run_evolution_cycle.py` construit un `notify_fn` réel
+  (Telegram, `audit_notifier.send_notification`, mêmes identifiants que
+  `control_bot`) : message = variable + `constat_stat` (le chiffre) +
+  ajustement proposé + rappel explicite "jamais appliqué
+  automatiquement — /etat pour valider ou rejeter". Best-effort :
+  identifiants Telegram absents ou envoi en échec ne fait jamais échouer
+  le cycle déjà écrit en base (la proposition reste relisible sans la
+  notification).
+
+**Ce qui reste délibérément hors de ce module (charge humaine, pas un
+gap)** : la validation/rejet de la proposition (changer `statut` à la
+main), l'ajout de la variable validée au pré-enregistrement
+(`docs/HYPOTHESES.md`), la consommation du budget de variables
+(invariant #10), et le test sur données JAMAIS regardées jusque-là —
+c'est exactement le contrat demandé ("le cycle ne fait QUE proposer").
+Aucune de ces étapes n'est automatisable sans réintroduire l'écart
+qu'on vient de fermer.
+
+35 tests passent sur `evolution_engine.py`, 1080 au total, aucune
+régression.
+
+---
+
 ## 2026-08-29 (suite 14) — Point 4 : rapport d'attribution construit, premier tirage réel, un bug réel trouvé et corrigé
 
 `aggregate_by_hypothesis_asset_month` existait déjà (chantier du

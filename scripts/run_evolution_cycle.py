@@ -47,7 +47,9 @@ import src.hypothesis5_strategy as h5_mod
 import src.mean_reversion_strategy as h4_mod
 import src.trend_strategy as h1_mod
 from src.asset_whitelist import ASSET_WHITELIST
+from src.audit_notifier import send_notification
 from src.backtest_engine import HistoricalBar, bar_from_raw, replay_hypothesis
+from src.config import load_config
 from src.confidence_scorer import PHASE_A_MIN_TRADES_BACKTEST, PHASE_B_MIN_TRADES_BACKTEST
 from src.evolution_engine import CandidateSpec, TrainingResult, run_evolution_cycle
 from src.risk_engine import RiskCaps, RiskEngine
@@ -222,17 +224,38 @@ def main() -> None:
         print(f"  [validation] {c.name}: n={r.n_trades} espérance={esp}")
         return r
 
+    def notify_fn(row: dict) -> None:
+        # Point 5 (29/08/2026) : une notification PAR proposition écrite,
+        # avec le chiffre qui la motive (constat_stat) — jamais un simple
+        # "un changement a été proposé" muet. Best-effort : un échec
+        # d'envoi Telegram ne doit jamais faire échouer un cycle déjà
+        # écrit en base (la ligne 'propose' existe déjà, relisible via
+        # /etat ou une requête directe même sans notification).
+        try:
+            config = load_config()
+        except Exception:
+            print(f"  [notification] TELEGRAM_BOT_TOKEN/CHAT_ID absents — proposition {row['variable']} non notifiée (relisible dans rule_changes).")
+            return
+        message = (
+            f"Nouvelle proposition d'évolution — {row['variable']}\n"
+            f"Constat : {row['constat_stat']}\n"
+            f"Ajustement proposé : {row['ajustement_propose']}\n"
+            f"Statut : propose (jamais appliqué automatiquement — /etat pour valider ou rejeter)."
+        )
+        if not send_notification(config.telegram_bot_token, config.telegram_chat_id, message):
+            print(f"  [notification] Échec de l'envoi Telegram pour {row['variable']} (proposition déjà écrite en base).")
+
     report = run_evolution_cycle(
         hyp_key, candidates, train_fn, validation_fn,
         min_trades_train=PHASE_B_MIN_TRADES_BACKTEST, min_trades_validation=PHASE_A_MIN_TRADES_BACKTEST,
-        db_path=args.db, apply_immediately=True, persist=not args.dry_run,
+        db_path=args.db, persist=not args.dry_run, notify_fn=None if args.dry_run else notify_fn,
     )
 
     print(f"\nSélection : {report.selection.reason}")
     if report.validation is not None:
         print(f"Validation : {report.validation.reason} -> {'PASS' if report.validation.passed else 'FAIL'}")
     if report.applied_rule_change_ids:
-        mode = "DRY-RUN (rien écrit)" if args.dry_run else "ÉCRIT (rule_changes.statut='applique')"
+        mode = "DRY-RUN (rien écrit)" if args.dry_run else "ÉCRIT (rule_changes.statut='propose' — jamais appliqué automatiquement, voir docs/DECISIONS.md point 5)"
         print(f"Résultat : {mode} — ids {report.applied_rule_change_ids}")
     else:
         print("Résultat : aucun changement proposé.")
