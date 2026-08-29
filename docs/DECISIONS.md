@@ -12,6 +12,48 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 6) — Point C, Hypothèse #3 : L3 (pullback en tendance) implémentée, testée (100%) — AVERTISSEMENT : H3 a aussi 6 positions réellement ouvertes
+
+`src/hypothesis3_strategy_v2.py` (nouveau, 100% couvert, 17 tests) :
+régime structurel + jambe d'impulsion **réutilisés tels quels** depuis
+`ict_strategy._find_regime_and_leg` (aucune nouvelle logique de
+régime, exactement comme demandé) — entrée sur retour du prix au
+niveau de retracement (`RETRACEMENT_RATIO` de la jambe) PUIS reprise
+confirmée sur `CONFIRMATION_BARS` bougies consécutives, événement
+ponctuel exactement `CONFIRMATION_BARS` bougies après le repli (même
+motif "one-shot" que H1/H4, jamais un état persistant qui refirait à
+chaque cycle). Une vérification défensive retirée comme code mort
+(ATR(14) exige toujours moins d'historique — 15 bougies — que le
+régime/jambe structurels déjà validés — 25 minimum — même constat que
+pour L1).
+
+`hypothesis3_strategy.py` **archivé** (wrapper autour de l'ancien
+`trend_strategy.evaluate_entry`) — ni `trend_strategy.py` ni
+`ict_strategy.py` ne sont archivés (utilitaires/régime partagés).
+Source `hypothesis3` → `hypothesis3_v2`. `require_regime_
+confirmation=False` (L3 a déjà son propre régime interne, une
+confirmation croisée US30/US100 serait redondante — non spécifiée au
+pré-enregistrement, invariant #10 respecté).
+
+**AVERTISSEMENT DE TRANSITION, même nature que H1** : H3 a également
+**6 positions RÉELLEMENT ouvertes** au 29/08/2026 (BTCUSD, ETHUSD,
+GOLD, EURUSD, US100, GBPUSD, `source='hypothesis3'`), vérifié en base
+— documenté dans `hypothesis3_executor.py` comme prérequis obligatoire
+avant tout déploiement futur (attendre leur clôture naturelle,
+revérifier juste avant tout redémarrage).
+
+**Garde-fou statistique rappelé pour plus tard (points F/G/H), pas
+construit ici** : L3 élimine par construction les mouvements sans
+pullback (les plus forts) — l'espérance devra être rapportée par
+signal détecté (régime+pullback réunis, non remplis comptés 0R) ET par
+trade exécuté, jamais l'une sans l'autre, au moment de la calibration.
+
+1027 tests dans la suite principale, tous verts, 100% de couverture
+maintenue sur les 18 modules critiques/stratégiques suivis. Committé
+et poussé sur GitHub, **pas déployé sur le VPS** (point A). Sur les 5
+hypothèses, seules H2 et H4 avaient 0 position ouverte au moment de
+leur bascule — H1 et H3 en ont 6 chacune, H5 reste à vérifier.
+
 ## 2026-08-29 (suite 5) — Point C, Hypothèse #1 : L1 (régime ADX) implémentée, testée (100%) — AVERTISSEMENT : H1 a 6 positions réellement ouvertes, bascule interdite tant qu'elles n'ont pas clôturé
 
 `src/hypothesis1_strategy_v2.py` (nouveau, 100% couvert, 19 tests) :
