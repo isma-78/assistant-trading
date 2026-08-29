@@ -12,6 +12,54 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-29 (suite 5) — Point C, Hypothèse #1 : L1 (régime ADX) implémentée, testée (100%) — AVERTISSEMENT : H1 a 6 positions réellement ouvertes, bascule interdite tant qu'elles n'ont pas clôturé
+
+`src/hypothesis1_strategy_v2.py` (nouveau, 100% couvert, 19 tests) :
+ADX(14) de Wilder (True Range + Directional Movement lissés, formule
+standard) franchit `ADX_THRESHOLD` À LA HAUSSE (événement ponctuel,
+jamais un état persistant — vérifié par construction, testé une bougie
+avant/exactement au franchissement/une bougie après), pente de
+MA(`MA_PERIOD`) sur `SLOPE_LOOKBACK=5` bougies confirmant la même
+direction, stop = ATR(14) × `K_ATR`. Deux vérifications défensives
+retirées comme code mort après preuve qu'elles sont structurellement
+inatteignables (ADX exige toujours plus d'historique qu'ATR — 29 contre
+15 bougies minimum ; la garde en tête de `compute_adx_series` garantit
+toujours assez d'indices DX) : simplification, pas une régression.
+
+`trend_strategy.py` **N'EST PAS archivé** (`TrendSignal`/
+`compute_tp_levels`/`compute_donchian_channel`/
+`compute_trailing_stop_channel` restent des utilitaires partagés par
+TOUTES les hypothèses) — seules `evaluate_entry`/`compute_regime`
+(MA200+Donchian d'origine) deviennent mortes pour le live, marquées
+dépréciées en tête de fichier.
+
+**AVERTISSEMENT DE TRANSITION, différent de H2/H4** : H1 a **6
+positions RÉELLEMENT ouvertes** au 29/08/2026 (USDJPY, GBPUSD, EURUSD,
+GOLD, ETHUSD, BTCUSD, toutes `source='hypothesis'`), vérifié en base.
+`run_technical_strategy_loop` filtre `reconcile_ghost_positions`/
+`check_pending_fills` strictement par le `source` transmis — si ce
+process redémarrait un jour avec `source='hypothesis_v2'` pendant que
+ces positions v1 sont encore ouvertes, elles deviendraient invisibles à
+TOUT process (plus aucune détection de remplissage, gestion de
+trailing, ou réconciliation), bloquées indéfiniment. **Documenté en
+tête de `trend_executor.py` comme prérequis obligatoire avant tout
+déploiement futur de ce changement** : attendre la clôture naturelle de
+toutes les positions `source='hypothesis'` encore ouvertes, revérifier
+en base juste avant tout redémarrage. Sans conséquence aujourd'hui
+(rien n'est déployé, point A), mais une condition qui devra être
+revérifiée explicitement le jour où le déploiement sera autorisé — la
+même vérification faite pour H2/H4 (aucune position ouverte) aurait été
+trompeuse si appliquée sans regarder H1 spécifiquement.
+
+**Point signalé, non corrigé (hors périmètre)** : `CANDLE_COUNT` (220,
+constante générique partagée) peut être insuffisant si `MA_PERIOD` est
+un jour calibré à 250 (+5 pour la pente = 255 bougies nécessaires) —
+documenté par un test dédié plutôt que silencieusement ignoré.
+
+1018 tests dans la suite principale, tous verts, 100% de couverture
+maintenue sur les 18 modules critiques/stratégiques suivis. Committé et
+poussé sur GitHub, **pas déployé sur le VPS** (point A).
+
 ## 2026-08-29 (suite 4) — Point C, Hypothèse #2 : L2 (confluence multi-timeframe EMA/Ichimoku/RSI) implémentée, testée (100%) — `hypothesis2_strategy.py` archivé, `ict_strategy.py` conservé (réutilisé par H3/L3)
 
 `src/hypothesis2_strategy_v2.py` (nouveau, 100% couvert, 25 tests) —
