@@ -172,6 +172,165 @@ continue via le cron prévu à l'étape 7 du déploiement.
 
 ---
 
+## 2026-08-30 (suite 2) — Point 1 : BUG DE LOOKAHEAD RÉEL CONFIRMÉ dans la confluence multi-timeframe H2 — LA CONFIRMATION D'H2 (+0,2431R) EST INVALIDE, LA FENÊTRE 2023-01-01→2024-06-14 EST BRÛLÉE
+
+**Dit sans atténuation, comme demandé : le défaut existe. Il a été
+trouvé, reproduit concrètement, corrigé dans le code. La confirmation
+d'H2 rendue hier (point 17) reposait dessus et ne peut plus être
+considérée comme une preuve d'edge. Aucun chiffre de backtest déjà
+publié pour H2 (CV, gate, confirmation) ne peut être réutilisé tel
+quel.**
+
+### a. Audit ligne par ligne — où et comment
+
+Le mécanisme en cause : `backtest_engine.py::_advance_confirming_pointer`
+(utilisé pour aligner les fenêtres `extra_resolution_bars` — HOUR_4/DAY
+pour H2 — sur l'horodatage de la bougie `own_bars[t]` en cours de
+traitement), appelé depuis `replay_hypothesis` à l'ancienne ligne 395 :
+```python
+extra_pointers[key] = _advance_confirming_pointer(series, extra_pointers[key], bar.time_utc)
+```
+Où `bar.time_utc` (ancienne ligne 433, `bar = own_bars[t]`) est
+l'horodatage d'**OUVERTURE** de la bougie `own_bars[t]` (convention
+Capital.com `snapshotTimeUTC`, voir `bar_from_raw`, ligne 106) — **jamais
+sa clôture**. Et l'ancienne définition de `_advance_confirming_pointer`
+(lignes 263-277) :
+```python
+def _advance_confirming_pointer(series, pointer, as_of_time):
+    while pointer < len(series) and series[pointer].time_utc <= as_of_time:
+        pointer += 1
+    return pointer
+```
+compare elle aussi une **OUVERTURE** (`series[pointer].time_utc`,
+l'horodatage de la bougie CANDIDATE de la résolution supérieure) à
+`as_of_time` — jamais sa clôture non plus. **Deux erreurs qui se
+combinent** : (1) l'instant de référence est l'ouverture de la bougie
+`own_bars[t]`, pas sa clôture réelle (le moment où sa donnée est
+effectivement connue) ; (2) le critère d'inclusion d'une bougie
+candidate ne vérifie que son ouverture, jamais si elle est réellement
+terminée.
+
+**Conséquence concrète, reproduite** (voir `tests/test_backtest_engine.py`,
+`test_advance_confirming_pointer_excludes_bar_not_yet_closed_at_higher_resolution` —
+écrit pour PROUVER le bug avant correction, puis validé après) : pour
+une hypothèse en résolution HOUR avec une bougie propre `own_bars[t]`
+ouverte à 14h00 (donc réellement close à 15h00, l'instant réel de
+décision), une bougie HOUR_4 ouverte à 12h00 (donc réellement close à
+16h00 — encore en cours à 15h00) était **incluse** dans la fenêtre
+transmise à `entry_fn`, avec son close **FINAL** (connu dans le fichier
+historique téléchargé après coup), alors que ce close n'existait pas
+encore à l'instant simulé.
+
+Ce close est ensuite directement CONSOMMÉ par
+`hypothesis2_strategy_v2.py::compute_tf_vote` (ligne 135,
+`price = candles[index].close`) et par `_evaluate_entry` (lignes
+173-175) :
+```python
+votes = [
+    compute_tf_vote(candles_m15, len(candles_m15) - 1),
+    compute_tf_vote(candles_h1, len(candles_h1) - 1),
+    compute_tf_vote(candles_h4, len(candles_h4) - 1),
+]
+```
+`len(candles_h1) - 1`/`len(candles_h4) - 1` désignent systématiquement
+le DERNIER élément de la fenêtre transmise — c'est-à-dire, avec le bug,
+la bougie HOUR_4/DAY la plus récente **même si elle n'était pas
+close**. Le vote de confluence sur ces deux unités de temps (2 des 3
+requises par `N_TF=3`, donc les DEUX exigées par la configuration
+confirmée) était donc calculé, sur toute la période 2019-2024, avec une
+information qui n'aurait jamais été disponible en temps réel — jusqu'à
+près de 4 heures d'avance pour HOUR_4, jusqu'à près de 24 heures
+d'avance pour DAY.
+
+**C'est précisément le mode de défaillance décrit par Ismaël avant même
+l'audit** : un signal qui exige l'alignement de 3 échelles de temps
+(`SCORE_THRESHOLD=1.0`, alignement complet) est mathématiquement plus
+facile à obtenir quand deux des trois "confirmations" sont en réalité
+calculées avec la tendance déjà connue du reste de la période — ce qui
+produirait exactement un edge large, stable d'année en année (les 4
+replis de la CV étaient positifs sans exception), qui n'a aucune raison
+de survivre à l'exécution réelle (où cette information n'existe pas).
+
+### b. Test unitaire dédié — distinct du test Ichimoku
+
+`tests/test_backtest_engine.py` :
+- `test_advance_confirming_pointer_excludes_bar_not_yet_closed_at_higher_resolution` —
+  prouve qu'une bougie HOUR_4 (12h-16h) est EXCLUE de la fenêtre à
+  l'instant de décision 15h00 (own bar HOUR close réellement à 15h00).
+- `test_advance_confirming_pointer_includes_bar_once_actually_closed` —
+  prouve que la MÊME bougie devient lisible EXACTEMENT à sa clôture
+  réelle (16h00), pas une seconde avant (15h59:59 : encore exclue).
+
+Distinct, comme demandé, du test Ichimoku existant
+(`compute_ichimoku_cloud_at`, décalage `senkou_shift=26` PÉRIODES —
+porte sur combien de bougies en arrière lire dans UNE SEULE série ;
+celui-ci porte sur QUAND une bougie d'une AUTRE série, de résolution
+différente, devient lisible). Le passage du test Ichimoku ne protégeait
+en rien de celui-ci, exactement comme signalé.
+
+### c. Conséquences — sans atténuation
+
+- **La confirmation d'H2 (n=389, +0,2431R, borne basse bootstrap
+  +0,1394R, gate franchi) est INVALIDE.** Elle a été calculée avec des
+  R-multiples eux-mêmes calculés à partir de signaux générés par une
+  confluence qui voyait jusqu'à 24h dans le futur sur 2 de ses 3
+  composantes. Aucune conclusion de recherche ne peut plus s'appuyer
+  sur ce chiffre.
+- **La fenêtre de confirmation 2023-01-01→2024-06-14 est BRÛLÉE pour
+  H2** : un chiffre en a déjà été tiré et publié (docs/DECISIONS.md,
+  hier) sur la base du code fautif — la rejouer avec le code corrigé
+  reviendrait à choisir a posteriori la fenêtre dont on connaît déjà
+  approximativement le résultat, une forme de contamination même en
+  gardant la même procédure. **Aucun rejeu de la CV/gate/confirmation
+  d'H2 sur 2019-2024 n'est fait ici, et ne doit pas l'être.**
+- **Le code est corrigé** (`backtest_engine.py`, `market_data.py`,
+  `technical_strategy_executor.py`, voir commit `c753ce5`) — tout
+  calcul FUTUR (y compris un éventuel réexamen d'H3/H4, qui utilisaient
+  `confirming_bars` dans leur ancienne version v1, jamais dans leur
+  version v2 actuelle — sans objet pour leur clôture déjà actée) sera
+  correct.
+- **H2 continue de trader en démo, EXACTEMENT sa configuration actuelle**
+  (`EMA_PERIOD=20, RSI_THRESHOLD=55, N_TF=3, SCORE_THRESHOLD=1.0`,
+  inchangée) — pas retirée, pas réglée, conformément à la règle "aucune
+  hypothèse retirée de la démo" ET à l'instruction explicite de ne pas
+  optimiser H2. **La seule voie de validation qui reste est le suivi
+  FORWARD** (point 3, entrée séparée) : le live ne peut structurellement
+  pas voir le futur (données non encore existantes), donc un edge
+  forward mesuré sur cette même configuration serait, lui, probant.
+- **Correctif live appliqué en plus, même chantier** (voir 1a) : le
+  live (`get_candles`) renvoie systématiquement la bougie HOUR_4/DAY EN
+  COURS comme dernier élément (vérifié en direct le 30/08/2026 sur
+  BTCUSD — bougie ouverte à 04h00, non close à 06h53, `closePrice`
+  pourtant déjà renvoyé) — pas un lookahead au sens strict en live
+  (information réelle, présente, jamais future), mais une incohérence
+  avec le backtest désormais corrigé. `market_data.
+  drop_incomplete_last_candle` retire cette bougie avant `entry_fn`,
+  uniquement sur les résolutions supplémentaires (H2), jamais sur la
+  résolution native des 5 hypothèses (comportement réactif historique,
+  hors périmètre de cet audit). **Ce correctif live doit être déployé**
+  pour que le suivi forward du point 3 mesure la configuration
+  réellement voulue, pas une variante qui mélange encore une bougie
+  partielle — déploiement fait séparément, voir entrée dédiée.
+
+### Conséquence sur la règle d'arrêt du point 18 (30/08/2026)
+
+Ré-évaluée à la lumière de ce qui précède : au moment présent, **aucune
+des 4 hypothèses restantes (H2-H5) ne porte une confirmation VALIDE**
+(H2 : confirmation invalidée ci-dessus ; H1 : clos négatif bien
+puissant ; H3/H4 : clos négatifs au raccourci point 14 ; H5 : clos au
+test d'information). **La condition de déclenchement de la règle du
+point 18 est donc techniquement remplie** — mais H2 dispose d'un chemin
+de validation EXPLICITE et déjà engagé (suivi forward, point 3), ce que
+n'ont pas H1/H3/H4/H5 (clos pour des raisons de fond, pas de méthode).
+**Décision : la suspension du programme n'est PAS prononcée
+maintenant** — le suivi forward de H2 continue sur les 2-3 prochains
+mois (jalons du point 3), et la question sera retranchée avec les
+chiffres forward en main, jamais avant. Aucune sixième hypothèse ne
+sera construite pendant ce temps (interdiction déjà actée, point 6 du
+prompt reçu).
+
+---
+
 ## 2026-08-30 (suite) — Point 3 : DÉPLOIEMENT EXÉCUTÉ — les 5 hypothèses tradent sur les 9 actifs, cycle continu et capture financement en cron
 
 Exécuté directement sur instruction explicite d'Ismaël ("APPLIQUE ET
