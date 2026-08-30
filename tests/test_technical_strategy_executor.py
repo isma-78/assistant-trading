@@ -11,7 +11,7 @@ test_trend_executor.py (dont l'existence, avant le refactor du
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -150,6 +150,47 @@ def test_generate_and_queue_signal_extra_resolutions_fetched_and_forwarded(tmp_p
     assert calls[0].kwargs["resolution"] == "MINUTE_15"
     assert calls[1] == (("EURUSD",), {"resolution": "HOUR", "max_bars": EXTRA_RESOLUTION_CANDLE_COUNT})
     assert calls[2] == (("EURUSD",), {"resolution": "HOUR_4", "max_bars": EXTRA_RESOLUTION_CANDLE_COUNT})
+
+
+def test_generate_and_queue_signal_drops_in_progress_candle_on_extra_resolutions(tmp_path):
+    # Point 1 (30/08/2026, voir docs/DECISIONS.md) : audit lookahead
+    # multi-timeframe H2 - le broker renvoie systematiquement la bougie
+    # HOUR_4 EN COURS comme dernier element de /prices (verifie en
+    # direct le 30/08/2026) ; elle ne doit JAMAIS atteindre entry_fn.
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    now = datetime.now(timezone.utc)
+    closed_bar_open = now - timedelta(hours=6)  # largement close (HOUR_4 = 4h)
+    in_progress_bar_open = now - timedelta(minutes=1)  # ouverte il y a 1 min, encore en cours
+
+    def _price_point(dt):
+        ts = dt.strftime("%Y-%m-%dT%H:%M:%S")
+        return {
+            "snapshotTimeUTC": ts,
+            "openPrice": {"bid": 1.0, "ask": 1.0}, "highPrice": {"bid": 1.0, "ask": 1.0},
+            "lowPrice": {"bid": 1.0, "ask": 1.0}, "closePrice": {"bid": 1.0, "ask": 1.0},
+        }
+
+    client = MagicMock()
+
+    def get_prices_side_effect(asset, resolution, max_bars):
+        if resolution == "HOUR_4":
+            return {"prices": [_price_point(closed_bar_open), _price_point(in_progress_bar_open)]}
+        return {"prices": []}
+
+    client.get_prices.side_effect = get_prices_side_effect
+    captured = []
+    _generate_and_queue_signal(
+        db_path, client, "EURUSD",
+        source="hypothesis2_v2", resolution="HOUR", entry_fn=_multi_resolution_entry_fn_factory(captured),
+        channel="hypothesis2_channel", hypothesis_label="Hypothèse #2",
+        extra_resolutions=["HOUR_4"],
+    )
+    assert len(captured) == 1
+    _, _, extra_candles = captured[0]
+    hour4_window = extra_candles[0]
+    assert len(hour4_window) == 1  # la bougie en cours a ete retiree
+    assert hour4_window[0].time_utc == closed_bar_open.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def test_generate_and_queue_signal_skips_during_expensive_hour(tmp_path):

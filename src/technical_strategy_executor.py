@@ -80,7 +80,7 @@ from src.executor import (
     reconcile_ghost_positions,
 )
 from src.go_nogo import GoNoGoStatus
-from src.market_data import Candle, get_candles
+from src.market_data import Candle, drop_incomplete_last_candle, get_candles
 from src.regime_confirmation import compute_index_regimes, derive_confirmed_regime
 from src.retry import retry_with_backoff
 from src.risk_engine import RiskCaps, RiskEngine
@@ -244,8 +244,21 @@ def _generate_and_queue_signal(
 
     candles = get_candles(client, asset, resolution=resolution, count=CANDLE_COUNT)
     if extra_resolutions:
+        # `drop_incomplete_last_candle` (30/08/2026, voir docs/DECISIONS.md,
+        # audit lookahead multi-timeframe H2) : le broker renvoie
+        # systématiquement la bougie EN COURS de formation comme dernier
+        # élément — jamais lue comme "close" pour une résolution
+        # SUPÉRIEURE (HOUR_4/DAY), pour rester cohérent avec le backtest
+        # corrigé le même jour (`backtest_engine.py`, qui n'utilise
+        # jamais de bougie non close). Uniquement sur les résolutions
+        # supplémentaires : la résolution native (`candles` ci-dessus)
+        # garde son comportement réactif historique, inchangé, commun
+        # aux 5 hypothèses depuis l'origine — hors périmètre de cet audit.
         extra_candles = [
-            get_candles(client, asset, resolution=extra_resolution, count=EXTRA_RESOLUTION_CANDLE_COUNT)
+            drop_incomplete_last_candle(
+                get_candles(client, asset, resolution=extra_resolution, count=EXTRA_RESOLUTION_CANDLE_COUNT),
+                extra_resolution,
+            )
             for extra_resolution in extra_resolutions
         ]
         signal = entry_fn(asset, candles, *extra_candles)

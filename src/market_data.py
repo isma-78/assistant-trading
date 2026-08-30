@@ -11,6 +11,7 @@ construction dynamique de la liste blanche, rien de plus.
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from src.capital_client import CapitalApiError, CapitalClient
@@ -92,6 +93,49 @@ def get_candles(client: CapitalClient, epic: str, resolution: str = "HOUR", coun
             time_utc=p.get("snapshotTimeUTC") or p.get("snapshotTime", ""), open=o, high=h, low=l, close=c,
             volume=p.get("lastTradedVolume"),
         ))
+    return candles
+
+
+# Durée réelle d'une bougie par résolution (secondes) — même valeurs que
+# `scripts/download_historical_data.py::_RESOLUTION_MINUTES`, dupliquées
+# ici plutôt qu'importées (ce module ne dépend jamais de `scripts/`,
+# convention déjà établie ailleurs dans le projet).
+RESOLUTION_SECONDS = {"MINUTE_15": 900, "HOUR": 3600, "HOUR_4": 14400, "DAY": 86400}
+
+
+def drop_incomplete_last_candle(
+    candles: List[Candle], resolution: str, now: Optional[datetime] = None,
+) -> List[Candle]:
+    """Retire la dernière bougie de `candles` si elle n'est PAS encore
+    close à l'instant `now` (défaut : instant réel UTC) — le broker
+    renvoie systématiquement la bougie EN COURS de formation comme
+    dernier élément de `/prices` (vérifié en direct le 30/08/2026,
+    `snapshotTimeUTC` de la dernière bougie HOUR_4 encore ouverte à
+    l'appel), contrairement à un fichier historique où toute bougie
+    présente est déjà close par construction.
+
+    Corrige, côté LIVE, l'asymétrie trouvée en auditant le lookahead
+    multi-timeframe d'H2 (30/08/2026, voir docs/DECISIONS.md) : sans ce
+    filtre, la confluence sur une résolution SUPÉRIEURE (HOUR_4/DAY)
+    lirait le close encore provisoire d'une bougie non terminée — pas un
+    lookahead au sens strict en live (l'information est réelle,
+    disponible MAINTENANT, jamais future), mais une incohérence avec le
+    backtest corrigé (qui n'utilise jamais que des bougies RÉELLEMENT
+    closes) : sans ce correctif, le forward live et le backtest
+    évalueraient deux définitions différentes de "confluence H1/H4".
+
+    `resolution` inconnue de `RESOLUTION_SECONDS` -> `candles` renvoyée
+    telle quelle (fail-safe, jamais un crash sur une résolution non
+    prévue ici) — liste vide -> renvoyée telle quelle."""
+    if not candles or resolution not in RESOLUTION_SECONDS:
+        return candles
+    now = now or datetime.now(timezone.utc)
+    last_open = datetime.fromisoformat(candles[-1].time_utc)
+    if last_open.tzinfo is None:
+        last_open = last_open.replace(tzinfo=timezone.utc)
+    last_close = last_open + timedelta(seconds=RESOLUTION_SECONDS[resolution])
+    if last_close > now:
+        return candles[:-1]
     return candles
 
 

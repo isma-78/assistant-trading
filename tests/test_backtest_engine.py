@@ -448,27 +448,53 @@ def _candle(time_utc, value=100.0):
 
 def test_advance_confirming_pointer_stops_before_future_bar():
     series = [_candle("2026-01-01T00:00:00"), _candle("2026-01-01T05:00:00"), _candle("2026-01-01T06:00:00")]
-    # A l'instant 01h, seule la 1ere bougie (00h) est deja close - les
-    # bougies a 05h/06h sont dans le futur relatif a cet instant, meme
-    # si elles occupent les indices 1 et 2 (index-based les aurait incluses).
-    ptr = _advance_confirming_pointer(series, 0, "2026-01-01T01:00:00")
+    # A l'instant 01h, seule la 1ere bougie (00h, close a 01h) est deja
+    # close - les bougies a 05h/06h sont dans le futur relatif a cet
+    # instant, meme si elles occupent les indices 1 et 2 (index-based
+    # les aurait incluses).
+    ptr = _advance_confirming_pointer(series, 0, "2026-01-01T01:00:00", bar_duration_seconds=3600)
     assert ptr == 1
 
 
-def test_advance_confirming_pointer_includes_bar_at_exact_time():
-    series = [_candle("2026-01-01T00:00:00"), _candle("2026-01-01T01:00:00")]
-    ptr = _advance_confirming_pointer(series, 0, "2026-01-01T01:00:00")
-    assert ptr == 2
+def test_advance_confirming_pointer_excludes_bar_not_yet_closed_at_higher_resolution():
+    # Point 1 (30/08/2026, voir docs/DECISIONS.md) : audit lookahead
+    # multi-timeframe H2, demande explicite d'Ismael. Bougie HOUR_4
+    # ouverte a 12h00 (close reelle a 16h00, duration=14400s) : encore
+    # EN COURS de formation a l'instant de decision 15h00 (bougie HOUR
+    # "own" ouverte a 14h00, close a 15h00) - ne doit JAMAIS etre
+    # lisible avant sa propre cloture, meme si son OUVERTURE precede
+    # largement l'instant considere.
+    hour4_series = [
+        _candle("2026-01-01T04:00:00"), _candle("2026-01-01T08:00:00"),
+        _candle("2026-01-01T12:00:00"),  # couvre 12h-16h, PAS close a 15h
+        _candle("2026-01-01T16:00:00"),
+    ]
+    own_bar_close_time = "2026-01-01T15:00:00"  # cloture reelle de la bougie HOUR ouverte a 14h00
+    ptr = _advance_confirming_pointer(hour4_series, 0, own_bar_close_time, bar_duration_seconds=14400)
+    window = _trailing_window(hour4_series, ptr, lookback=10)
+    assert [c.time_utc for c in window] == ["2026-01-01T04:00:00", "2026-01-01T08:00:00"]
+    assert "2026-01-01T12:00:00" not in [c.time_utc for c in window]  # bougie encore en cours, exclue
+
+
+def test_advance_confirming_pointer_includes_bar_once_actually_closed():
+    # Meme bougie HOUR_4 (12h-16h) : devient lisible des que l'instant de
+    # decision atteint EXACTEMENT sa cloture reelle (16h00), jamais avant.
+    hour4_series = [_candle("2026-01-01T12:00:00")]
+    ptr_before = _advance_confirming_pointer(hour4_series, 0, "2026-01-01T15:59:59", bar_duration_seconds=14400)
+    assert ptr_before == 0  # encore une seconde avant sa cloture -> exclue
+    ptr_at_close = _advance_confirming_pointer(hour4_series, 0, "2026-01-01T16:00:00", bar_duration_seconds=14400)
+    assert ptr_at_close == 1  # cloture atteinte exactement -> incluse
 
 
 def test_advance_confirming_pointer_never_goes_backward():
     series = [_candle("2026-01-01T00:00:00"), _candle("2026-01-01T01:00:00"), _candle("2026-01-01T02:00:00")]
-    ptr = _advance_confirming_pointer(series, 2, "2026-01-01T00:30:00")  # instant anterieur au pointeur deja atteint
+    # instant anterieur au pointeur deja atteint
+    ptr = _advance_confirming_pointer(series, 2, "2026-01-01T00:30:00", bar_duration_seconds=3600)
     assert ptr == 2  # ne recule jamais, meme si as_of_time est "avant"
 
 
 def test_advance_confirming_pointer_empty_series():
-    assert _advance_confirming_pointer([], 0, "2026-01-01T00:00:00") == 0
+    assert _advance_confirming_pointer([], 0, "2026-01-01T00:00:00", bar_duration_seconds=3600) == 0
 
 
 def test_trailing_window_respects_lookback():
@@ -519,6 +545,7 @@ def test_replay_regime_confirmation_handles_mismatched_confirming_length():
         "TEST", own_bars, entry_fn=entry_fn, risk_engine=risk_engine, whitelist=whitelist,
         envelope_initial=1000.0, confidence_threshold=0.0, lookback=DEFAULT_LOOKBACK,
         require_regime_confirmation=True, confirming_bars=confirming,
+        own_bar_duration_seconds=3600, confirming_bar_duration_seconds=1800,
     )
     assert len(result.trades) == 1
     assert result.trades[0].direction == "long"
@@ -539,6 +566,7 @@ def test_replay_regime_confirmation_blocks_mismatched_direction():
         "TEST", own_bars, entry_fn=lambda a, c: signal, risk_engine=risk_engine, whitelist=whitelist,
         envelope_initial=1000.0, confidence_threshold=0.0, lookback=DEFAULT_LOOKBACK,
         require_regime_confirmation=True, confirming_bars=confirming,
+        own_bar_duration_seconds=3600, confirming_bar_duration_seconds=3600,
     )
     assert result.trades == []
 
@@ -574,6 +602,7 @@ def test_replay_regime_confirmation_allows_matching_direction():
         "TEST", own_bars, entry_fn=entry_fn, risk_engine=risk_engine, whitelist=whitelist,
         envelope_initial=1000.0, confidence_threshold=0.0, lookback=DEFAULT_LOOKBACK,
         require_regime_confirmation=True, confirming_bars=confirming,
+        own_bar_duration_seconds=3600, confirming_bar_duration_seconds=3600,
     )
     assert len(result.trades) == 1
     assert result.trades[0].direction == "long"
@@ -589,6 +618,18 @@ def test_replay_regime_confirmation_without_confirming_bars_blocks_everything():
         require_regime_confirmation=True, confirming_bars=None,
     )
     assert result.trades == []
+
+
+def test_replay_raises_when_confirming_bars_given_without_duration():
+    risk_engine, whitelist = _make_risk_engine()
+    bars = _flat_bars(6)
+    confirming = {"US30": _flat_bars(6), "US100": _flat_bars(6)}
+    with pytest.raises(ValueError):
+        replay_hypothesis(
+            "TEST", bars, entry_fn=lambda a, c: None, risk_engine=risk_engine, whitelist=whitelist,
+            envelope_initial=1000.0, confidence_threshold=0.0, lookback=5,
+            require_regime_confirmation=True, confirming_bars=confirming,
+        )
 
 
 def test_replay_extra_resolution_bars_passed_as_positional_args():
@@ -609,9 +650,33 @@ def test_replay_extra_resolution_bars_passed_as_positional_args():
         "TEST", own_bars, entry_fn=entry_fn, risk_engine=risk_engine, whitelist=whitelist,
         envelope_initial=1000.0, confidence_threshold=0.0, lookback=10,
         extra_resolution_bars={"A": extra_a, "B": extra_b},
+        own_bar_duration_seconds=3600, extra_resolution_seconds={"A": 3600, "B": 3600},
     )
     assert len(captured) == len(own_bars)
     assert all(c[1] <= 10 and c[2] <= 10 for c in captured)  # jamais plus que `lookback`
+
+
+def test_replay_raises_when_extra_resolution_bars_given_without_own_duration():
+    risk_engine, whitelist = _make_risk_engine()
+    own_bars = _flat_bars(6, level=50.0)
+    with pytest.raises(ValueError):
+        replay_hypothesis(
+            "TEST", own_bars, entry_fn=lambda a, c, e: None, risk_engine=risk_engine, whitelist=whitelist,
+            envelope_initial=1000.0, confidence_threshold=0.0, lookback=5,
+            extra_resolution_bars={"A": _flat_bars(6, level=1.0)},
+        )
+
+
+def test_replay_raises_when_extra_resolution_seconds_missing_a_key():
+    risk_engine, whitelist = _make_risk_engine()
+    own_bars = _flat_bars(6, level=50.0)
+    with pytest.raises(ValueError):
+        replay_hypothesis(
+            "TEST", own_bars, entry_fn=lambda a, c, e1, e2: None, risk_engine=risk_engine, whitelist=whitelist,
+            envelope_initial=1000.0, confidence_threshold=0.0, lookback=5,
+            extra_resolution_bars={"A": _flat_bars(6, level=1.0), "B": _flat_bars(6, level=2.0)},
+            own_bar_duration_seconds=3600, extra_resolution_seconds={"A": 3600},  # "B" manquant
+        )
 
 
 def test_replay_extra_resolution_bars_aligned_by_timestamp_not_position():
@@ -636,6 +701,7 @@ def test_replay_extra_resolution_bars_aligned_by_timestamp_not_position():
         "TEST", own_bars, entry_fn=entry_fn, risk_engine=risk_engine, whitelist=whitelist,
         envelope_initial=1000.0, confidence_threshold=0.0, lookback=100,
         extra_resolution_bars={"FINE": fine_extra},
+        own_bar_duration_seconds=3600, extra_resolution_seconds={"FINE": 43200},
     )
     # Le pointeur avance strictement avec le temps (jamais par position) :
     # la fenetre "FINE" visible croit au fil des bougies own_bars, jamais

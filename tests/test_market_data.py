@@ -3,6 +3,7 @@ Tests de market_data — prix, bougies, ATR, moyenne mobile, conversion EUR.
 CapitalClient est simulé (MagicMock), aucun appel réseau réel.
 """
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,6 +13,7 @@ from src.market_data import (
     Candle,
     compute_atr,
     compute_moving_average,
+    drop_incomplete_last_candle,
     get_candles,
     get_eur_conversion_rate,
     get_price_snapshot,
@@ -227,3 +229,45 @@ def test_get_eur_conversion_rate_unknown_currency_raises():
     client = MagicMock()
     with pytest.raises(ValueError):
         get_eur_conversion_rate(client, "GBP")
+
+
+# ---------------------------------------------------------------------------
+# drop_incomplete_last_candle (30/08/2026, voir docs/DECISIONS.md, audit
+# lookahead multi-timeframe H2)
+# ---------------------------------------------------------------------------
+
+def _c(time_utc):
+    return Candle(time_utc=time_utc, open=1.0, high=1.0, low=1.0, close=1.0)
+
+
+def test_drop_incomplete_last_candle_removes_bar_still_forming():
+    # Bougie HOUR_4 reellement observee en direct le 30/08/2026 : ouverte
+    # a 04h00, non close a 06h53 (close theorique 08h00).
+    candles = [_c("2026-08-30T00:00:00"), _c("2026-08-30T04:00:00")]
+    now = datetime(2026, 8, 30, 6, 53, tzinfo=timezone.utc)
+    result = drop_incomplete_last_candle(candles, "HOUR_4", now=now)
+    assert [c.time_utc for c in result] == ["2026-08-30T00:00:00"]
+
+
+def test_drop_incomplete_last_candle_keeps_bar_once_actually_closed():
+    candles = [_c("2026-08-30T00:00:00"), _c("2026-08-30T04:00:00")]
+    now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)  # cloture exacte de la bougie 04h00
+    result = drop_incomplete_last_candle(candles, "HOUR_4", now=now)
+    assert [c.time_utc for c in result] == ["2026-08-30T00:00:00", "2026-08-30T04:00:00"]
+
+
+def test_drop_incomplete_last_candle_empty_list_returns_empty():
+    assert drop_incomplete_last_candle([], "HOUR_4") == []
+
+
+def test_drop_incomplete_last_candle_unknown_resolution_returns_unchanged():
+    candles = [_c("2026-08-30T04:00:00")]
+    now = datetime(2026, 8, 30, 4, 1, tzinfo=timezone.utc)
+    assert drop_incomplete_last_candle(candles, "MINUTE_1", now=now) == candles
+
+
+def test_drop_incomplete_last_candle_defaults_to_real_now():
+    # Bougie DAY ouverte il y a 2 jours -> deja close depuis longtemps,
+    # jamais retiree meme sans `now` explicite (instant reel).
+    candles = [_c("2020-01-01T00:00:00")]
+    assert drop_incomplete_last_candle(candles, "DAY") == candles

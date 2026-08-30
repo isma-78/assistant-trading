@@ -25,7 +25,7 @@ historique incomplète (bid/ask manquant) est ignorée, jamais devinée.
 """
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
 
 from src.capital_manager import CapitalManager, apply_trade_result
@@ -260,19 +260,49 @@ def _historical_regime(
     return derive_confirmed_regime(asset, index_regimes)
 
 
-def _advance_confirming_pointer(series: List[Candle], pointer: int, as_of_time: str) -> int:
+def _bar_close_time(time_utc: str, duration_seconds: float) -> datetime:
+    """Horodatage de CLÔTURE d'une bougie — `time_utc` (convention
+    Capital.com `snapshotTimeUTC`) est l'horodatage d'OUVERTURE, jamais
+    de clôture. Nécessaire depuis le correctif du 30/08/2026 (voir
+    docs/DECISIONS.md, audit lookahead multi-timeframe H2) :
+    `_advance_confirming_pointer` comparait auparavant l'OUVERTURE de la
+    bougie candidate à `as_of_time`, jamais sa clôture — une bougie tout
+    juste ouverte (donc encore EN COURS de formation, high/low/close
+    inconnus) passait le test à tort dès que son ouverture précédait
+    `as_of_time`, même de quelques secondes."""
+    return datetime.fromisoformat(time_utc) + timedelta(seconds=duration_seconds)
+
+
+def _advance_confirming_pointer(
+    series: List[Candle], pointer: int, as_of_time: str, bar_duration_seconds: float,
+) -> int:
     """Avance `pointer` (jamais en arrière) jusqu'à l'index de la
-    première bougie de `series` dont `time_utc > as_of_time` — c'est-à-
-    dire jusqu'à inclure toutes les bougies déjà closes à `as_of_time`,
-    aucune bougie future. Correctif du 25/08/2026 (voir docs/
-    DECISIONS.md) : `own_bars` et les séries de confirmation (US30/
-    US100) n'ont PAS le même nombre de bougies en pratique (heures de
-    marché différentes par instrument) — aligner par position dans la
-    liste comparait silencieusement des bougies d'instants différents.
-    Les deux séries étant chronologiques par construction, ce pointeur
-    monotone donne un résultat correct en O(n) amorti sur toute la
-    boucle appelante, sans recherche répétée depuis le début."""
-    while pointer < len(series) and series[pointer].time_utc <= as_of_time:
+    première bougie de `series` dont la CLÔTURE (`time_utc +
+    bar_duration_seconds`) est postérieure à `as_of_time` — c'est-à-dire
+    jusqu'à inclure toutes les bougies déjà RÉELLEMENT closes à
+    `as_of_time`, jamais une bougie encore en cours de formation.
+
+    **Bug réel corrigé le 30/08/2026** (voir docs/DECISIONS.md, audit
+    lookahead multi-timeframe demandé par Ismaël sur la confluence H2) :
+    la version précédente comparait l'OUVERTURE de la bougie candidate
+    à `as_of_time` (`series[pointer].time_utc <= as_of_time`). Pour une
+    résolution supérieure à celle de la série appelante (ex. HOUR_4/DAY
+    pour une hypothèse en HOUR), une bougie HOUR_4 ouverte à 12h00 reste
+    EN COURS jusqu'à 16h00 — l'ancienne condition l'incluait dès 12h00,
+    donnant accès à son close final (connu dans l'historique téléchargé
+    a posteriori) alors qu'il n'existait pas encore à l'instant simulé.
+    Reproduit et corrigé, voir `tests/test_backtest_engine.py`,
+    `test_advance_confirming_pointer_excludes_bar_not_yet_closed_at_higher_resolution`.
+
+    Correctif du 25/08/2026 conservé : `own_bars` et les séries de
+    confirmation n'ont PAS le même nombre de bougies en pratique (heures
+    de marché différentes par instrument) — aligner par position dans
+    la liste comparait silencieusement des bougies d'instants
+    différents. Les deux séries étant chronologiques par construction,
+    ce pointeur monotone donne un résultat correct en O(n) amorti sur
+    toute la boucle appelante, sans recherche répétée depuis le début."""
+    as_of_dt = datetime.fromisoformat(as_of_time)
+    while pointer < len(series) and _bar_close_time(series[pointer].time_utc, bar_duration_seconds) <= as_of_dt:
         pointer += 1
     return pointer
 
@@ -300,6 +330,9 @@ def replay_hypothesis(
     lookback: int = DEFAULT_LOOKBACK,
     slippage_multiplier: float = SLIPPAGE_SPREAD_MULTIPLIER,
     extra_resolution_bars: Optional[Dict[str, List[HistoricalBar]]] = None,
+    own_bar_duration_seconds: Optional[float] = None,
+    confirming_bar_duration_seconds: Optional[float] = None,
+    extra_resolution_seconds: Optional[Dict[str, float]] = None,
 ) -> BacktestResult:
     """Rejoue `entry_fn` sur `own_bars` (ordre chronologique), fenêtre
     glissante stricte de `lookback` bougies (jamais de bougie future),
@@ -333,7 +366,39 @@ def replay_hypothesis(
     evaluate_entry(asset, candles_m15, candles_h1, candles_h4)`, dont
     le contrat à 3 résolutions dépasse le contrat générique à une seule
     résolution). `None` par défaut : H1/H3/H4/H5 strictement
-    inchangées (un seul argument à `entry_fn`, comme avant)."""
+    inchangées (un seul argument à `entry_fn`, comme avant).
+
+    `own_bar_duration_seconds`/`confirming_bar_duration_seconds`/
+    `extra_resolution_seconds` (30/08/2026, voir docs/DECISIONS.md,
+    audit lookahead multi-timeframe H2) : durée réelle d'une bougie de
+    `own_bars`/`confirming_bars`/chaque série de `extra_resolution_bars`
+    (secondes) — OBLIGATOIRE dès que `confirming_bars` ou
+    `extra_resolution_bars` est fourni (`ValueError` sinon, jamais un
+    défaut silencieux qui réintroduirait le bug corrigé). Sert à
+    calculer l'instant de clôture RÉEL de la bougie `own_bars[t]`
+    (`t.time_utc` est son OUVERTURE, pas sa clôture) avant de
+    sélectionner les bougies de confirmation/résolutions supplémentaires
+    déjà closes à cet instant — jamais une bougie encore en cours de
+    formation à une résolution supérieure (ex. HOUR_4/DAY pour une
+    hypothèse en HOUR)."""
+    if confirming_bars and confirming_bar_duration_seconds is None:
+        raise ValueError(
+            "confirming_bar_duration_seconds est obligatoire dès que confirming_bars est fourni "
+            "(voir docs/DECISIONS.md, correctif du 30/08/2026 — jamais de défaut silencieux ici)."
+        )
+    if extra_resolution_bars:
+        if own_bar_duration_seconds is None:
+            raise ValueError(
+                "own_bar_duration_seconds est obligatoire dès que extra_resolution_bars est fourni "
+                "(voir docs/DECISIONS.md, correctif du 30/08/2026)."
+            )
+        missing = set(extra_resolution_bars) - set(extra_resolution_seconds or {})
+        if missing:
+            raise ValueError(
+                f"extra_resolution_seconds doit couvrir toutes les clés de extra_resolution_bars "
+                f"(manquant : {sorted(missing)})."
+            )
+
     own_candles = [b.to_candle() for b in own_bars]
     confirming_candles: Dict[str, List[Candle]] = {}
     if require_regime_confirmation and confirming_bars:
@@ -379,11 +444,28 @@ def replay_hypothesis(
                 )
             continue
 
+        # Instant de décision RÉEL = clôture de `bar` (son `time_utc` est
+        # son OUVERTURE) — correctif du 30/08/2026, voir docs/DECISIONS.md.
+        # Sans effet sur `window`/`entry_fn(asset, window)` seul (bar `t`
+        # est déjà traitée comme "juste close" par construction de la
+        # boucle, voir `execution_bar = own_bars[t + 1]` plus bas) ;
+        # nécessaire dès qu'on compare `bar` à une AUTRE série de bougies
+        # (confirmation ou résolution supplémentaire), sans quoi une
+        # bougie de résolution supérieure encore en cours de formation
+        # (ouverte avant la clôture de `bar`, mais pas encore close)
+        # serait incluse à tort.
+        own_close_time = (
+            _bar_close_time(bar.time_utc, own_bar_duration_seconds).isoformat()
+            if own_bar_duration_seconds is not None else bar.time_utc
+        )
+
         if require_regime_confirmation:
             hour = _bar_hour(bar.time_utc)
             if hour is not None and _should_refresh_regime_context(last_regime_refresh_hour, hour):
                 for key, series in confirming_candles.items():
-                    confirming_pointers[key] = _advance_confirming_pointer(series, confirming_pointers[key], bar.time_utc)
+                    confirming_pointers[key] = _advance_confirming_pointer(
+                        series, confirming_pointers[key], own_close_time, confirming_bar_duration_seconds,
+                    )
                 us30_window = _trailing_window(confirming_candles.get("US30", []), confirming_pointers.get("US30", 0), lookback)
                 us100_window = _trailing_window(confirming_candles.get("US100", []), confirming_pointers.get("US100", 0), lookback)
                 confirmed_regime = _historical_regime(us30_window, us100_window, asset)
@@ -392,7 +474,9 @@ def replay_hypothesis(
         if extra_candles:
             extra_windows = []
             for key, series in extra_candles.items():
-                extra_pointers[key] = _advance_confirming_pointer(series, extra_pointers[key], bar.time_utc)
+                extra_pointers[key] = _advance_confirming_pointer(
+                    series, extra_pointers[key], own_close_time, extra_resolution_seconds[key],
+                )
                 extra_windows.append(_trailing_window(series, extra_pointers[key], lookback))
             signal = entry_fn(asset, window, *extra_windows)
         else:
