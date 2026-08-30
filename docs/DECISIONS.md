@@ -172,6 +172,73 @@ continue via le cron prévu à l'étape 7 du déploiement.
 
 ---
 
+## 2026-08-30 (suite 4) — Points 3-5 : premier relevé forward H2, quatre compteurs, 429 quantifiés par hypothèse et par actif
+
+### Point 3 — Suivi forward H2 : premier relevé, n=0 (attendu)
+
+`src/h2_forward_tracking.py` construit et testé (voir commit dédié) —
+jalons n=53/n=121 vérifiés indépendamment (voir ce module). Premier
+relevé réel, ~13 minutes après le redémarrage corrigé : **n=0**, aucun
+trade `hypothesis2_v2` encore clôturé depuis le correctif — attendu, la
+cadence de référence est ~22/mois, pas ~22/13min. Rien à rapporter
+avant plusieurs jours au minimum. Le module est prêt, relançable à
+chaque point d'étape sans modification.
+
+### Point 4 — Quatre compteurs
+
+- **Attribution** : 54/10448 décomposés, 53 valides — inchangé,
+  toujours sous le seuil de lisibilité n≥30 par groupe individuel.
+- **Mesures A/B** : `annulation_motif` toujours connu sur **0 des 251
+  trades `annule`** de la base — la colonne n'existe que depuis hier,
+  aucune ligne historique n'est jamais rétro-catégorisée (règle déjà
+  actée). Toute mesure réelle démarre au premier `annule` produit par
+  le code actuel.
+- **Étape 3 (coûts de sortie)** : 0/30, inchangé.
+- **Cycle d'ajustement continu** : H2 seule hypothèse qualifiée (point
+  17) ; le registre `HYPOTHESES` de `scripts/run_continuous_adjustment_
+  cycle.py` reste vide — câbler un pipeline de re-tuning pour H2 dans
+  ce cron resterait prématuré tant que le point 3 n'a pas de volume
+  (le cycle ne doit rien proposer sur une hypothèse déjà sous
+  surveillance forward serrée), non forcé, conformément à la consigne.
+
+### Point 5 — 429 quantifiés, hygiène vérifiée, jamais corrigés sans rapport
+
+**Depuis le redémarrage corrigé (07h02 UTC), sur ~13 minutes
+d'observation** : **429 concentrés exclusivement sur
+`hypothesis2_executor`** (14 occurrences, 7 cycles avortés), **zéro**
+sur `executor_loop`/`trend_executor`/`hypothesis3_executor`/
+`hypothesis4_executor`/`hypothesis5_executor` — cohérent avec le
+volume d'appels ×3 d'H2 (HOUR+HOUR_4+DAY par actif, contre 1 pour les
+4 autres). Par actif : EURUSD (12) et GBPUSD (2) concentrent la
+totalité des occurrences observées sur cette fenêtre — trop peu
+d'observations pour conclure à un motif stable par actif, à
+reconfirmer sur une fenêtre plus longue.
+
+**Le retry couvre-t-il 100% des cas ? Réponse honnête, pas
+"garanti"** : un 429 avorte le cycle ENTIER pour cette hypothèse (une
+seule exception non capturée par actif, comportement délibérément non
+générique, voir docs/DECISIONS.md 24/08/2026) — le cycle suivant
+(60s plus tard) repart proprement du premier actif de la liste, donc
+AUCUN actif n'est durablement ignoré. Mais ce n'est pas rigoureusement
+"zéro perte" : si une condition de déclenchement (franchissement de
+seuil) apparaît puis disparaît entièrement DANS la fenêtre d'un cycle
+avorté (~60-120s), elle ne sera jamais vue — un risque de TIMING, pas
+de donnée perdue en base, propre aux résolutions horaires où une
+fenêtre de 1-2 minutes reste marginale relativement à une bougie
+complète, mais non nul. **Aucune correction tentée** (pas demandé,
+comportement déjà connu et volontairement non générique) — signalé
+comme divergence live/backtest de plus, comme demandé (le backtest n'a
+structurellement aucune notion de 429).
+
+- **12 positions v1 sous `legacy_sources`** (6 `hypothesis`, 6
+  `hypothesis3`) : inchangé, aucune fermeture naturelle depuis hier —
+  rien forcé.
+- **Financement** : n=12 (2 nuits), aucune constante écrite — inchangé
+  depuis le dernier relevé (prochaine capture attendue ce soir,
+  ~21h UTC).
+
+---
+
 ## 2026-08-30 (suite 3) — Correctif lookahead déployé : le suivi forward de H2 mesure désormais la configuration corrigée
 
 Redéploiement ciblé (git pull `60050ca`, tests verts sur le VPS —
