@@ -172,6 +172,87 @@ continue via le cron prévu à l'étape 7 du déploiement.
 
 ---
 
+## 2026-08-30 (suite 5) — Point 2 : test de fidélité — n=39 paires obtenues (>=30), AUCUN VERDICT — la méthode pré-enregistrée ne peut pas s'appliquer à ces données
+
+### Compteur : 39/30 paires — seuil de volume atteint
+
+Design apparié pré-enregistré (commit `13a808a`, 27/08/2026) exécuté
+pour la première fois (`~/costfix_staging/_fidelity_pairing.py`, jamais
+commité, VPS uniquement) : pour chaque trade démo réellement rempli
+(sources v1 `hypothesis`/`hypothesis2`/`hypothesis3`/`hypothesis4`/
+`hypothesis5` — bien plus d'historique que les sources `_v2`, à peine
+démarrées), reconstruit l'entrée théorique (`entry_execution_price`) et
+rejoue la sortie via `_manage_open_position` (LES MÊMES primitives que
+`backtest_engine.replay_hypothesis`, jamais réimplémentées) sur les
+bougies HOUR réelles suivant l'ouverture — compare le R théorique
+simulé au `r_multiple_total` réel. **39 paires obtenues** (20 trades
+non appariés : position réelle encore ouverte à `stop_urgence`, ou
+jamais close dans l'historique HOUR disponible — jamais un
+remplacement par une valeur devinée).
+
+Moyenne des écarts appariés : **-0,2369R**, médiane **+0,0935R**,
+écart-type **2,0611R** — l'écart entre moyenne et médiane signale déjà
+une distribution asymétrique, pas un résultat centré (voir ci-dessous).
+
+### AUCUN VERDICT — blocage méthodologique, pas un manque de volume
+
+**La règle de décision pré-enregistrée exige un bootstrap par BLOCS
+CALENDAIRES (mêmes mois), au moins 2 blocs distincts**
+(`evolution_engine.compute_calendar_block_bootstrap_lower_bound`
+retourne explicitement `None` sous ce seuil, par construction — voir sa
+docstring). **Les 39 paires couvrent exclusivement le mois d'août 2026**
+(2026-08-19 → 2026-08-28, tout l'historique v1 exploitable à ce jour)
+— **un seul bloc calendaire**. La méthode pré-enregistrée est donc
+STRUCTURELLEMENT inapplicable à ces données, quel que soit n. **Aucun
+verdict n'est rendu** — ni "fidèle", ni "infidèle" — et aucune méthode
+de substitution n'est improvisée pour en produire un quand même (la
+correction par blocs calendaires a été choisie précisément pour ne pas
+supposer l'indépendance intra-mois — l'abandonner ici reviendrait à
+assouplir la règle au moment où elle gêne).
+
+**Chemin de résolution, pas une impasse** : dès que les trades éligibles
+au pairing couvriront au moins 2 mois calendaires (mécaniquement, à
+mesure que le temps passe et que les positions v1 encore ouvertes se
+ferment, ou que les sources `_v2` accumulent leur propre historique),
+ce même script rendra un verdict sans modification. Prochaine tentative
+naturelle : quand les trades s'étaleront sur septembre en plus d'août.
+
+### Trouvaille distincte, signalée sans trancher : un écart extrême isolé
+
+Trade 14302 (`hypothesis5`/ETHUSD, short, réel -1,0000R clos en 29
+minutes) : réel -1,0000R vs théorique **+11,2952R** — écart de
+**-12,30R**, de très loin le plus extrême des 39. Investigué avant
+d'écrire cette entrée (jamais accepté sans vérification, même
+discipline que `is_cout_sortie_plausible`) : le trade réel s'est résolu
+en 29 minutes (probable mouvement intra-heure violent), mais la
+résolution HOUR de `backtest_engine.py` ne capture que l'OHLC de
+l'heure entière — la reconstruction théorique, qui doit chercher une
+sortie sur des bougies HORAIRES, peut donc dériver sur plusieurs heures
+suivantes, sans rapport avec ce qui s'est réellement passé dans les 29
+premières minutes. **Hypothèse la plus probable : une limite de
+granularité HOUR pour les trades réels à durée de vie très courte, pas
+une donnée corrompue ni un bug du script d'appariement** — mais non
+confirmée avec certitude, signalée sans trancher.
+
+Sans cet unique point, sur les 38 restants : moyenne -0,013R (quasi
+nulle), médiane inchangée. **La conclusion qualitative ne dépend
+d'aucune façon de cet outlier** (le blocage vient de la structure
+calendaire des données, pas de sa présence ou absence) — mentionné ici
+pour traçabilité, jamais pour justifier une exclusion qui changerait le
+compteur officiel de 39 à 38 (aucune règle d'exclusion n'était
+pré-enregistrée, aucune n'est appliquée ici).
+
+### Ce qui N'A PAS été fait, volontairement
+
+Aucun calcul de substitution (z-score simple, bootstrap i.i.d. sans
+blocs) n'a été présenté comme un verdict — une lecture purement
+descriptive (moyenne ± 1,96×erreur-type sur les 39 valeurs, hors
+protocole pré-enregistré) donnerait un intervalle contenant zéro, mais
+ce chiffre n'a AUCUN statut de verdict ici, cité uniquement pour
+mémoire, jamais comme une conclusion de rechange.
+
+---
+
 ## 2026-08-30 (suite 4) — Points 3-5 : premier relevé forward H2, quatre compteurs, 429 quantifiés par hypothèse et par actif
 
 ### Point 3 — Suivi forward H2 : premier relevé, n=0 (attendu)
