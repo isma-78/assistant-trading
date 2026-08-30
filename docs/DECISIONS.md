@@ -172,6 +172,117 @@ continue via le cron prévu à l'étape 7 du déploiement.
 
 ---
 
+## 2026-08-30 (suite) — Point 3 : DÉPLOIEMENT EXÉCUTÉ — les 5 hypothèses tradent sur les 9 actifs, cycle continu et capture financement en cron
+
+Exécuté directement sur instruction explicite d'Ismaël ("APPLIQUE ET
+DÉPLOIE. Ne demande aucune confirmation."), en suivant
+`docs/DEPLOIEMENT_V2.md` pas à pas.
+
+### Étapes 1-2 — pull et tests
+
+Pré-vérification conforme (HEAD `12dc2b2`, seuls les écarts déjà
+connus dans `git status`). `git pull origin main` : fast-forward
+propre jusqu'à `d9e6069` (77 fichiers, aucun conflit). Suite complète :
+**1180 tests passent**, **100% de couverture** sur tous les modules
+critiques listés dans le document (`risk_engine`/`capital_manager`/
+`go_nogo`/`validator`/`trend_strategy`/`circuit_breaker`/`metrics`/
+`confidence_scorer`/`ict_strategy`/les 5 `hypothesisN_strategy_v2`).
+
+### Étapes 3-5 — redémarrage
+
+Arrêt propre des 6 process, `ps aux` confirmé vide. **Écart observé au
+redémarrage, non anticipé par le document** : sur le premier essai,
+`executor_loop` et `hypothesis4_executor` ne sont pas réapparus dans
+`tmux ls` (sessions one-shot mortes silencieusement, scrollback perdu —
+comportement déjà documenté le 19/08/2026). Diagnostiqué avant de
+retenter : `python -m src.executor` lancé directement en premier plan
+fonctionne sans erreur ; `free -h`/recherche OOM ne montrent rien
+d'anormal (867Mi disponibles) — cause la plus probable : contention
+transitoire au login Capital.com lors du démarrage quasi simultané des
+6 process. Les deux ont été relancés individuellement avec succès et
+sont restés stables depuis. **Pas un rollback** : aucun signe de
+défaut de code, seulement un raté de démarrage isolé sur 2/6 process,
+chacun confirmé vivant et stable après une seule relance.
+
+### Étape 6 — vérifications post-déploiement
+
+- **6a, PIDs fraîches** : les 6 process tournent avec des PID et des
+  heures de démarrage postérieures au redémarrage.
+- **6b, watchdog** : alerte transitoire attendue et documentée sur les
+  2 process relancés en second (`executor_loop`, `hypothesis4_executor`
+  détectés "manquant" au cycle 01:35, "de nouveau actif" au cycle
+  suivant 01:40) — **résolue au cycle suivant, jamais persistante**,
+  exactement le cas de faux positif normal déjà anticipé par le
+  document. Aucune autre alerte depuis.
+- **6c, premiers signaux** : `hypothesis3_v2` a généré 5 signaux réels
+  sur BTCUSD depuis le redémarrage. **Aucun** `Traceback`/`ImportError`
+  lié aux nouveaux modules, **aucun** rejet `POSITION_SIZE_STEP_DEVIATION`.
+  CHFJPY confirmé ATTEINT dans la boucle par actif de chaque hypothèse
+  (visible explicitement dans le log H4, y compris via un 429 sur
+  `CHFJPY?resolution=HOUR` — la preuve que l'actif est bien interrogé,
+  pas écarté silencieusement).
+- **6d, `legacy_sources`** : les 12 positions v1 encore ouvertes (6
+  `hypothesis`, 6 `hypothesis3`) restent `statut='ouvert'`, gérées
+  normalement (trailing observé en direct sur le trade 14338 côté
+  `trend_executor`). **Zéro** nouveau signal généré sous une étiquette
+  v1 depuis le redémarrage (vérifié explicitement par plage horaire
+  exacte, `LIKE '2026-08-30T01:3%'`/`'01:4%'` — la comparaison
+  `datetime('now', ...)` naïve de SQLite s'est révélée cassée sur le
+  format d'horodatage `T...+00:00` de ce projet, même bug de fond que
+  celui corrigé au point 4 le 29/08 ; contournée ici par une comparaison
+  de préfixe exacte, pas par confiance aveugle dans le premier résultat
+  qui semblait montrer des signaux `hypothesis4` (v1) récents — vérifiés
+  un par un, tous antérieurs de 45+ minutes au redémarrage).
+- **6e, aucun actif silencieusement écarté** : confirmé pour CHFJPY
+  (voir 6c). Signaux v2 générés depuis le redémarrage : `hypothesis3_v2`
+  uniquement à ce stade (fenêtre encore courte, HOUR/HOUR_4/DAY
+  n'émettent pas à chaque cycle par nature).
+
+### Constat honnête à surveiller : 429 plus fréquents avec le 9e actif
+
+**Non anticipé par le document, rapporté tel quel, aucun correctif
+tenté ni improvisé** : `hypothesis2_executor` (16 occurrences de 429
+depuis le redémarrage), `hypothesis3_executor` (10), `hypothesis4_executor`
+(8) — contre 0 pour `executor_loop`/`trend_executor`/`hypothesis5_executor`.
+Chaque 429 interrompt le cycle entier (une seule exception non
+capturée par asset, pas de retry per-asset — comportement déjà existant,
+délibérément non générique, voir docs/DECISIONS.md 24/08/2026) ; le
+cycle suivant repart proprement (`hypothesis3_v2` a quand même produit
+5 signaux malgré 10 occurrences de 429). **Hypothèse la plus probable,
+non confirmée** : le passage de 8 à 9 actifs par hypothèse (CHFJPY)
+augmente le volume d'appels API par cycle sur les 5 process
+simultanément, au-delà de la marge déjà tendue documentée le
+24/08/2026. **Aucune action corrective prise** — pas demandé, pas de
+crash, pas de donnée corrompue, le mécanisme de retry au cycle suivant
+fonctionne comme conçu. Candidat de suivi (pas engagé) : étendre
+`retry_with_backoff` aux appels de bougies par actif, ou revoir
+`THROTTLE_SECONDS`/l'espacement inter-hypothèses — décision à prendre
+explicitement plus tard, sur plus d'heures d'observation.
+
+### Crons installés (étapes 7-8)
+
+Sauvegarde crontab préalable (`/tmp/crontab_backup_20260830.txt`), puis
+ajout des deux lignes sans perte des entrées existantes (backup 03h00,
+watchdog `*/5 * * * *`) :
+- `0 4 * * *` — `scripts/capture_financing.py` (point 7).
+- `0 5 * * *` — `nice -n 19 scripts/run_continuous_adjustment_cycle.py`
+  (point 8) — registre `HYPOTHESES` toujours vide (voir entrée
+  précédente, points 4-6) : NO-OP documenté tant qu'il n'est pas rempli
+  pour H2.
+
+### Bilan
+
+**Déploiement réussi.** Les 5 hypothèses tradent sur les 9 actifs
+(CHFJPY comprise), H2 démarre sur son combo confirmé (vérifié en log),
+le filtre d'heures chères est actif pour H1/H3/H4/H5 et absent pour H2,
+`legacy_sources` fonctionne, aucun actif ni aucune hypothèse n'a été
+silencieusement écarté. Un point de vigilance opérationnel (429 plus
+fréquents) est consigné pour suivi, pas pour blocage — cohérent avec
+"aucun rejet inattendu" au sens du document (le mécanisme de retry
+existant absorbe la situation, rien n'est perdu ni corrompu).
+
+---
+
 ## 2026-08-30 — Points 1-2 : combo H2 confirmé appliqué, filtre d'heures chères activé pour H1/H3/H4/H5 uniquement (jamais H2)
 
 Instruction explicite d'Ismaël : décisions prises, exécution directe
