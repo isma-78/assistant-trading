@@ -172,6 +172,25 @@ continue via le cron prévu à l'étape 7 du déploiement.
 
 ---
 
+## 2026-08-30 (suite 3) — Correctif lookahead déployé : le suivi forward de H2 mesure désormais la configuration corrigée
+
+Redéploiement ciblé (git pull `60050ca`, tests verts sur le VPS —
+1199 passent —, 6 process redémarrés proprement, tous vivants au
+premier essai cette fois). H2 confirmé actif sur son combo inchangé
+(log de démarrage : `EMA_PERIOD=20, RSI_THRESHOLD=55.0, N_TF=3,
+SCORE_THRESHOLD=1.0`). Seul changement de comportement réel : les
+bougies HOUR_4/DAY encore en cours de formation ne sont plus transmises
+à `evaluate_entry` (voir point 1). Watchdog propre sur 3 cycles
+consécutifs après redémarrage, aucune alerte. Le compteur forward de H2
+(point 3) repart de zéro sur cette base corrigée à partir de
+maintenant — tout trade H2 antérieur à ce redémarrage reposait sur
+l'ancien comportement live (bougie partielle incluse, jamais un
+lookahead en direct mais une définition légèrement différente de la
+confluence) et ne doit pas être mélangé aux trades postérieurs dans un
+futur calcul de borne basse forward.
+
+---
+
 ## 2026-08-30 (suite 2) — Point 1 : BUG DE LOOKAHEAD RÉEL CONFIRMÉ dans la confluence multi-timeframe H2 — LA CONFIRMATION D'H2 (+0,2431R) EST INVALIDE, LA FENÊTRE 2023-01-01→2024-06-14 EST BRÛLÉE
 
 **Dit sans atténuation, comme demandé : le défaut existe. Il a été
