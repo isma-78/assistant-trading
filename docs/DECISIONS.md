@@ -12,6 +12,166 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-30 (suite 2) — Points 4-6 : vérifications sur H2 confirmée, financement intégré à l'attribution, cinq compteurs
+
+Exécuté en parallèle du déploiement (mené séparément) — aucune écriture
+touchant les 6 process live, aucun `git pull` sur le checkout déployé.
+
+### Point 4a — σ(R) et erreur-type EXACTS sur la confirmation
+
+Rejoué le combo confirmé (`EMA_PERIOD=20, RSI_THRESHOLD=55, N_TF=3,
+SCORE_THRESHOLD=1.0`) sur la fenêtre de confirmation
+(2023-01-01→2024-06-14) avec capture des 389 R-multiples individuels
+(`~/costfix_staging/h2_verification.py`, jamais commité) — **n=389,
+mean_r=0,243073 identiques au chiffre déjà consigné** (vérification
+croisée avec `H2_confirmation_result.json` déjà produit par le point 17 :
+n et mean_r strictement identiques bit pour bit).
+
+**σ(R) réel = 1,075307** (écart-type échantillon des 389 R-multiples
+réels) — **PAS 1,25 comme l'estimation d'Ismaël**. **Erreur-type réelle
+= σ/√389 = 0,054520R** — **PAS 0,0632R**. Les deux estimations à la
+main étaient dans le bon ordre de grandeur mais surestimaient σ d'environ
+16% et l'erreur-type d'environ 16% également (cohérent, l'écart vient
+du même facteur) — corrigé ici avec la valeur mesurée directement sur
+les trades réels, jamais reconstruite algébriquement depuis la borne
+basse et un z supposé.
+
+### Point 4b — Bornes basses corrigées Bonferroni, m=1/2/4/5 : confirmées positives, petits écarts avec l'estimation manuelle signalés
+
+Recalcul avec `evolution_engine.compute_calendar_block_bootstrap_lower_
+bound` (réutilisée telle quelle, `confidence = 1 - 0,05/m`,
+2000 rééchantillonnages, seed=0) sur les 389 R-multiples réels et leurs
+horodatages d'entrée :
+
+| m | confidence | Borne basse (calculée ici) | Borne basse (Ismaël) | Écart |
+|---|---|---|---|---|
+| 1 | 0,95 | **+0,139439R** | +0,1390R | +0,0004R |
+| 2 | 0,975 | **+0,123280R** | +0,1191R | +0,0042R |
+| 4 | 0,9875 | **+0,106346R** | +0,1013R | +0,0050R |
+| 5 | 0,99 | **+0,103198R** | +0,0959R | +0,0073R |
+
+**Conclusion qualitative confirmée sans réserve : positive à m=1, 2, 4
+ET 5** — l'écart croît légèrement avec m (0,04 à 0,7 centième de R,
+jamais assez pour changer un signe) mais ne s'annule jamais. Cause de
+l'écart résiduel non investiguée (candidats plausibles : graine/nombre
+de rééchantillonnages légèrement différents côté calcul manuel, ou
+arrondi intermédiaire) — signalé honnêtement plutôt que masqué, sans
+impact sur la conclusion : **H2 reste positive jusqu'à m=5, le niveau
+de correction le plus sévère qu'un reproche de comparaisons multiples
+pourrait raisonnablement exiger sur ce chantier.**
+
+### Point 4c — Détail par année et par actif, fenêtre de confirmation, OBSERVATION SEULEMENT
+
+Rappel de la règle déjà actée : aucun sous-groupe post-hoc actionnable.
+Le tableau ci-dessous est une DESCRIPTION, pas un calcul statistique —
+aucun test, aucun seuil, aucune recommandation d'inclure/exclure un
+actif n'en est tiré.
+
+| Actif | n | Moyenne R (confirmation) |
+|---|---|---|
+| US30 | 44 | +0,7037R |
+| GOLD | 45 | +0,3611R |
+| GBPUSD | 44 | +0,2802R |
+| ETHUSD | 51 | +0,2506R |
+| US100 | 62 | +0,2054R |
+| USDJPY | 47 | +0,2094R |
+| EURUSD | 45 | +0,0551R |
+| BTCUSD | 51 | **-0,0553R** |
+
+7 des 8 actifs positifs, BTCUSD légèrement négatif sur cette fenêtre —
+rapporté tel quel, jamais un motif pour retirer BTCUSD de la
+confluence (aucun mécanisme de ce chantier ne permettrait de le faire
+sans rouvrir la calibration au complet, ce qui n'est pas fait ici).
+
+### Point 4d — Compte cumulé des essais indépendants du projet
+
+Convention de comptage retenue (déjà celle utilisée par le projet
+lui-même dans ses corrections Bonferroni successives) : **un "essai"
+= un candidat/design ayant reçu une décision statistique explicite
+(qualifie/ne qualifie pas, ou confirmé/clos)** — pas chaque combinaison
+de grille interne à un candidat unique (celles-ci sont déjà absorbées
+par la procédure de sélection+CV d'un seul essai, jamais comptées
+séparément — même logique que "m=5 hypothèses" au point 17, pas "m=24"
+pour la seule grille d'H2).
+
+**Génération v1 (20-26/08/2026), cycles d'évolution formels** :
+- Cycle 1 (25/08) : 11 candidats (H2:2, H3:3, H4:3, H5:3) — tous négatifs.
+- Cycle 2 (25/08) : 8 candidats (H3:3, H4:3, H5:2) — tous négatifs.
+- Cycle 3 (25/08) : 2 candidats (H4-B, H5-B) — tous négatifs/insuffisants.
+- Trois chantiers (25/08) : 1 candidat testé (squeeze Bollinger H4,
+  rejeté) — le volume H5 n'a jamais produit de candidat construit
+  (condition non remplie), Station X vs H2 n'était pas un candidat.
+- Refonte par branches (25/08) : 2 candidats finaux (H3, H5 — pipeline
+  résolution/stop/confluence convergeant vers UN candidat final par
+  hypothèse) — aucun ne qualifie (H3 au plus proche, borne basse encore
+  négative).
+- Session Cowork (26/08) : chantier H1 pré-enregistré mais **jamais
+  exécuté** — 0 essai.
+
+**Sous-total v1 : 24 essais formels, 0 confirmé.**
+
+**Génération v2 (29/08/2026, ce chantier, point 17)** : 5 essais
+(H1-H5), 1 confirmé (H2), 4 clos (H1 négatif bien puissant, H3/H4 au
+raccourci point 14, H5 au test d'information).
+
+**TOTAL CUMULÉ SUR L'HISTOIRE DU PROJET : 29 essais formels, 1 confirmé
+(H2/L2, aujourd'hui).**
+
+**Limite honnête de cette reconstruction** : les 5 designs H1-H5
+ORIGINAUX (déployés en démo directement, avant l'introduction de la
+discipline découverte/confirmation le 24/08/2026) ne sont PAS comptés
+comme des essais distincts — aucun seuil de décision n'a jamais été
+appliqué à leur conception initiale, ils ont été mesurés
+RÉTROACTIVEMENT (diagnostic Phase 1 du 25/08) plutôt que soumis à un
+protocole de test enregistré à l'avance. Les inclure ferait monter le
+compte à 34, mais fausserait la nature de la correction (Bonferroni
+suppose des tests, pas des mesures rétroactives sans seuil). Compte
+exact sur ce qui est dénombrable avec certitude ; pas un chiffre
+inventé pour paraître précis.
+
+### Point 5 — Financement intégré à l'attribution, aucune constante
+
+`src/causal_decomposition.py` étendu : `sum_real_financing_for_window`
+(pur, 100% couvert) + `compute_trade_financing_cost` (orchestration) —
+composant **cout_financement** strictement SÉPARÉ de `cout_entree`/
+`cout_sortie` (coûts d'exécution) et de `derive_gestion` (détecteur de
+cohérence) — jamais fondu avec eux. `None` explicite (jamais 0) pour
+toute nuit non capturée. Converti en R via `risque_eur` du trade
+(valeur EUR d'1R pour ce trade précis), pour rester comparable aux
+autres composants sans jamais les mélanger dans le même champ.
+
+**Recapture tentée** : `n=12` inchangé (2 nuits, 28→29 et 29→30/08) —
+la nuit suivante (30→31/08) n'est pas encore passée au moment du
+calcul (serveur à 01h34 UTC le 30/08, prochain débit attendu ~21h UTC).
+**n=2 par groupe (actif, sens) — toujours sous le seuil de lisibilité
+n≥30, aucune conclusion tirée, aucune constante écrite.** La capture
+continue via le cron prévu à l'étape 7 du déploiement.
+
+### Point 6 — Cinq compteurs
+
+- **Test de fidélité du simulateur** : 0/30 paires — dépend du
+  déploiement, mené séparément, non touché ici.
+- **Mesures A/B** (`src/fill_rate_analysis.py`/`src/episode_counter.py`,
+  déjà commités) : toujours 0 mesuré en production — aucune ligne
+  historique n'a de `annulation_motif` connu (colonne ajoutée
+  aujourd'hui), toute mesure réelle démarre au premier `annule` produit
+  par le code déployé.
+- **Étape 3 (coûts de sortie)** : revérifié en base — **0 ligne
+  `invalide=0` avec `cout_sortie` non NULL, sur 30**, inchangé.
+- **Attribution** : revérifié en base — **54 décomposés / 10 448
+  fermés, 53 valides**, inchangé — sous le seuil de lisibilité n≥30 par
+  groupe individuel dans tous les cas.
+- **Cycle d'ajustement continu** : H2 est la SEULE hypothèse qualifiée
+  (point 17) — le registre `HYPOTHESES` de
+  `scripts/run_continuous_adjustment_cycle.py` reste VIDE : câbler un
+  pipeline de re-tuning (train_fn/validation_fn) pour H2 dans ce script
+  cron est une tâche d'ingénierie distincte, non demandée dans ce
+  message, PAS entreprise ici — signalée explicitement comme prochaine
+  étape naturelle plutôt que silencieusement oubliée. H1/H3/H4/H5
+  restent en démo sans être promues (closes côté recherche).
+
+---
+
 ## 2026-08-30 — Points 1-2 : combo H2 confirmé appliqué, filtre d'heures chères activé pour H1/H3/H4/H5 uniquement (jamais H2)
 
 Instruction explicite d'Ismaël : décisions prises, exécution directe
