@@ -76,6 +76,7 @@ from src.technical_strategy_executor import (
 )
 import src.hypothesis1_strategy_v2 as _h1_mod
 from src.hypothesis_params import apply_overrides
+from src.spread_analysis import compute_expensive_hours_by_asset
 
 logger = logging.getLogger(__name__)
 
@@ -136,8 +137,16 @@ def run_trend_loop(config, db_path: str, interval_seconds: int = 60, startup_off
     **Overrides du cycle d'évolution** : clé `"H1_v2"`, jamais `"H1"`
     (n'hérite d'aucun paramètre déjà tuné pour l'ancienne logique v1) —
     variables ajustées du pré-enregistrement (`MA_PERIOD`,
-    `ADX_THRESHOLD`, `K_ATR`)."""
+    `ADX_THRESHOLD`, `K_ATR`).
+
+    **Filtre d'heures chères ACTIVÉ (30/08/2026, voir docs/DECISIONS.md,
+    point 1)** : H1 n'a rien de "confirmé" au sens du point 17 (clos
+    négatif, point 15) — ce filtre ne peut donc que réduire un coût déjà
+    mesuré et déterministe, jamais invalider un résultat de recherche.
+    Calculé UNE FOIS au démarrage (jamais recalculé à chaque cycle,
+    même convention que `whitelist`)."""
     apply_overrides(_h1_mod, "H1_v2", db_path, ["MA_PERIOD", "ADX_THRESHOLD", "K_ATR"])
+    expensive_hours_by_asset = compute_expensive_hours_by_asset(db_path)
     run_technical_strategy_loop(
         config, db_path,
         source=HYPOTHESIS_V2_SOURCE,
@@ -155,6 +164,7 @@ def run_trend_loop(config, db_path: str, interval_seconds: int = 60, startup_off
         interval_seconds=interval_seconds,
         startup_offset_seconds=startup_offset_seconds,
         legacy_sources=[HYPOTHESIS_SOURCE],
+        expensive_hours_by_asset=expensive_hours_by_asset,
     )
 
 

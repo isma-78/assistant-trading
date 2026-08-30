@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
+from src.db import init_db
 from src.hypothesis3_executor import (
     HYPOTHESIS3_ASSETS,
     _describe_signal,
@@ -45,7 +46,7 @@ def test_run_hypothesis3_loop_forwards_h3_credentials_and_resolution():
     config.capital_api_password_hypothesis3 = "pwd3"
     config.capital_account_id_hypothesis3 = "acc3"
 
-    with patch("src.hypothesis3_executor.run_technical_strategy_loop") as mock_loop:
+    with patch("src.hypothesis3_executor.run_technical_strategy_loop") as mock_loop, patch("src.hypothesis3_executor.compute_expensive_hours_by_asset", return_value={}):
         run_hypothesis3_loop(config, "db.sqlite", interval_seconds=42)
 
     mock_loop.assert_called_once()
@@ -67,7 +68,21 @@ def test_run_hypothesis3_loop_default_startup_offset_is_30s():
     # Échelonnement des 6 process (24/08/2026, voir docs/DECISIONS.md) :
     # executor_loop=0s, trend_executor=10s, H2=20s, H3=30s, H4=40s, H5=50s.
     config = MagicMock()
-    with patch("src.hypothesis3_executor.run_technical_strategy_loop") as mock_loop:
+    with patch("src.hypothesis3_executor.run_technical_strategy_loop") as mock_loop, patch("src.hypothesis3_executor.compute_expensive_hours_by_asset", return_value={}):
         run_hypothesis3_loop(config, "db.sqlite")
     _, kwargs = mock_loop.call_args
     assert kwargs["startup_offset_seconds"] == 30
+
+
+def test_run_hypothesis3_loop_activates_expensive_hours_filter(tmp_path):
+    # Point 1 (30/08/2026, voir docs/DECISIONS.md) : H3 est close cote
+    # recherche mais reste en demo - le filtre doit rester actif.
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    config = MagicMock()
+    with patch("src.hypothesis3_executor.run_technical_strategy_loop") as mock_loop, \
+         patch("src.hypothesis3_executor.compute_expensive_hours_by_asset", return_value={"GBPUSD": {21}}) as mock_expensive:
+        run_hypothesis3_loop(config, db_path)
+    mock_expensive.assert_called_once_with(db_path)
+    _, kwargs = mock_loop.call_args
+    assert kwargs["expensive_hours_by_asset"] == {"GBPUSD": {21}}

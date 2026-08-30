@@ -41,6 +41,7 @@ import src.hypothesis4_strategy_v2 as _h4_mod
 from src.executor import HYPOTHESIS4_V2_SOURCE
 from src.hypothesis4_strategy_v2 import evaluate_entry
 from src.hypothesis_params import apply_overrides, get_resolution_override
+from src.spread_analysis import compute_expensive_hours_by_asset
 from src.technical_strategy_executor import run_technical_strategy_loop
 
 HYPOTHESIS4_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD", "CHFJPY"]
@@ -70,7 +71,13 @@ def run_hypothesis4_loop(config, db_path: str, interval_seconds: int = 60, start
     (n'hérite d'aucun paramètre déjà tuné pour l'ancienne logique v1,
     voir docs/DECISIONS.md point B) — variables ajustées du
     pré-enregistrement (`PIVOT_FRACTAL_N`, `MAX_PIVOT_DISTANCE_BARS`,
-    `STOP_ATR_MULT`)."""
+    `STOP_ATR_MULT`).
+
+    **Filtre d'heures chères ACTIVÉ (30/08/2026, voir docs/DECISIONS.md,
+    point 1)** : H4 est close côté recherche (raccourci point 14, point
+    17) mais reste en démo — ce filtre ne peut que réduire un coût déjà
+    mesuré et déterministe, jamais rouvrir une conclusion de recherche
+    déjà actée."""
     apply_overrides(_h4_mod, "H4_v2", db_path, ["PIVOT_FRACTAL_N", "MAX_PIVOT_DISTANCE_BARS", "STOP_ATR_MULT"])
     # Amendement 29/08/2026 (voir docs/DECISIONS.md) : résolution HOUR,
     # pas MINUTE_15 — la profondeur M15 réelle du broker s'arrête au
@@ -78,6 +85,7 @@ def run_hypothesis4_loop(config, db_path: str, interval_seconds: int = 60, start
     # découverte 2019-2022 pré-enregistrée exige HOUR (confirmée jusqu'à
     # 2017). L4 est resolution-agnostique, aucun changement de logique.
     resolution = get_resolution_override(db_path, "H4_v2", "entree", "HOUR")
+    expensive_hours_by_asset = compute_expensive_hours_by_asset(db_path)
     run_technical_strategy_loop(
         config, db_path,
         source=HYPOTHESIS4_V2_SOURCE,
@@ -95,6 +103,7 @@ def run_hypothesis4_loop(config, db_path: str, interval_seconds: int = 60, start
         interval_seconds=interval_seconds,
         require_regime_confirmation=False,
         startup_offset_seconds=startup_offset_seconds,
+        expensive_hours_by_asset=expensive_hours_by_asset,
     )
 
 

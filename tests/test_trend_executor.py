@@ -199,7 +199,8 @@ def test_run_trend_loop_untouched_by_session_multi_timeframe_layer():
     # reçoit strictement leurs valeurs par défaut (False), quoi qu'il
     # advienne du reste de la couche.
     config = MagicMock()
-    with patch("src.trend_executor.run_technical_strategy_loop") as mock_loop:
+    with patch("src.trend_executor.run_technical_strategy_loop") as mock_loop, \
+         patch("src.trend_executor.compute_expensive_hours_by_asset", return_value={}):
         run_trend_loop(config, "db.sqlite", interval_seconds=42)
 
     mock_loop.assert_called_once()
@@ -214,7 +215,25 @@ def test_run_trend_loop_default_startup_offset_is_10s():
     # Échelonnement des 6 process (24/08/2026, voir docs/DECISIONS.md) :
     # executor_loop=0s, trend_executor=10s, H2=20s, H3=30s, H4=40s, H5=50s.
     config = MagicMock()
-    with patch("src.trend_executor.run_technical_strategy_loop") as mock_loop:
+    with patch("src.trend_executor.run_technical_strategy_loop") as mock_loop, \
+         patch("src.trend_executor.compute_expensive_hours_by_asset", return_value={}):
         run_trend_loop(config, "db.sqlite")
     _, kwargs = mock_loop.call_args
     assert kwargs["startup_offset_seconds"] == 10
+
+
+def test_run_trend_loop_activates_expensive_hours_filter(tmp_path):
+    # Point 1 (30/08/2026, voir docs/DECISIONS.md) : H1 n'est pas la
+    # configuration confirmee du point 17 (elle est close, negative) -
+    # le filtre d'heures cheres doit etre actif pour elle.
+    from src.db import init_db
+
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    config = MagicMock()
+    with patch("src.trend_executor.run_technical_strategy_loop") as mock_loop, \
+         patch("src.trend_executor.compute_expensive_hours_by_asset", return_value={"GBPUSD": {21}}) as mock_expensive:
+        run_trend_loop(config, db_path)
+    mock_expensive.assert_called_once_with(db_path)
+    _, kwargs = mock_loop.call_args
+    assert kwargs["expensive_hours_by_asset"] == {"GBPUSD": {21}}

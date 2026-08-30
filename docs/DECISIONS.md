@@ -12,6 +12,52 @@ la plus récente en tête.
 
 ---
 
+## 2026-08-30 — Points 1-2 : combo H2 confirmé appliqué, filtre d'heures chères activé pour H1/H3/H4/H5 uniquement (jamais H2)
+
+Instruction explicite d'Ismaël : décisions prises, exécution directe
+sans confirmation intermédiaire.
+
+### Point 1 — `rule_changes` écrites et vérifiées
+
+4 lignes insérées en production (`statut='applique'`, clé `H2_v2` —
+jamais `H2`, cohérent avec la convention déjà en place qui n'hérite
+d'aucun paramètre de l'ancienne logique v1) :
+`H2_v2.EMA_PERIOD=20`, `H2_v2.RSI_THRESHOLD=55`, `H2_v2.N_TF=3`,
+`H2_v2.SCORE_THRESHOLD=1.0` — `constat_stat` cite les chiffres exacts
+de la confirmation (n=389, +0,2431R, borne basse +0,1394R). Vérifié en
+relisant via `hypothesis_params.get_active_override` : les 4 valeurs
+sont lues correctement.
+
+**`hypothesis2_executor.py` renforcé** : `run_hypothesis2_loop` capture
+désormais le retour de `apply_overrides` et journalise explicitement
+les 4 valeurs RÉELLEMENT actives sur le module après application (pas
+seulement leur présence en base) — `"H2_v2 : paramètres RÉELLEMENT
+actifs après démarrage — EMA_PERIOD=20, RSI_THRESHOLD=55.0, N_TF=3,
+SCORE_THRESHOLD=1.0 (overrides appliqués depuis rule_changes :
+['EMA_PERIOD', 'N_TF', 'RSI_THRESHOLD', 'SCORE_THRESHOLD'])"`. Lu
+UNIQUEMENT au démarrage (invariant #6) — testé explicitement avec une
+base réelle (2 tests, dont un vérifiant le cas "aucun override" pour
+ne jamais régresser silencieusement).
+
+### Point 2 — Filtre d'heures chères : H1/H3/H4/H5 oui, H2 non
+
+Câblé dans `trend_executor.py`/`hypothesis3_executor.py`/
+`hypothesis4_executor.py`/`hypothesis5_executor.py` (`expensive_hours_
+by_asset = compute_expensive_hours_by_asset(db_path)`, calculé une
+fois au démarrage, transmis à `run_technical_strategy_loop`).
+**Explicitement PAS câblé dans `hypothesis2_executor.py`** — aucun
+import, aucun appel, vérifié par un test dédié
+(`test_run_hypothesis2_loop_never_activates_expensive_hours_filter`) :
+H2 doit démarrer EXACTEMENT dans la configuration qui a passé la
+confirmation (point 17), pas une variante non testée. L'effet du
+filtre sur H2, s'il devait être évalué un jour, sera une question
+distincte, jamais mélangée à ce résultat confirmé.
+
+1180 tests passent au total, 100% de couverture maintenue sur les
+modules critiques.
+
+---
+
 ## 2026-08-29 (suite 23) — Point 19 : checklist de "definition of done", question ouverte sur l'application du combo H2 confirmé
 
 ╔═══════════════════════════════════════════════════════════════╗

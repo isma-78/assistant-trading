@@ -40,6 +40,7 @@ import src.hypothesis5_strategy_v2 as _h5_mod
 from src.executor import HYPOTHESIS5_V2_SOURCE
 from src.hypothesis5_strategy_v2 import evaluate_entry
 from src.hypothesis_params import apply_overrides, get_resolution_override
+from src.spread_analysis import compute_expensive_hours_by_asset
 from src.technical_strategy_executor import run_technical_strategy_loop
 
 HYPOTHESIS5_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD", "CHFJPY"]
@@ -68,7 +69,12 @@ def run_hypothesis5_loop(config, db_path: str, interval_seconds: int = 60, start
     **Overrides du cycle d'évolution** : clé `"H5_v2"`, jamais `"H5"`
     (n'hérite d'aucun paramètre déjà tuné pour l'ancienne logique v1) —
     variables ajustées du pré-enregistrement (`COMPRESSION_PERCENTILE`,
-    `COMPRESSION_DURATION`, `STOP_BUFFER_PCT`)."""
+    `COMPRESSION_DURATION`, `STOP_BUFFER_PCT`).
+
+    **Filtre d'heures chères ACTIVÉ (30/08/2026, voir docs/DECISIONS.md,
+    point 1)** : H5 est close au test d'information pré-enregistré
+    (point 17) mais reste en démo — ce filtre ne peut que réduire un
+    coût déjà mesuré et déterministe, jamais rouvrir cette clôture."""
     apply_overrides(_h5_mod, "H5_v2", db_path, ["COMPRESSION_PERCENTILE", "COMPRESSION_DURATION", "STOP_BUFFER_PCT"])
     # Amendement 29/08/2026 (voir docs/DECISIONS.md) : résolution HOUR,
     # pas MINUTE_15 — la profondeur M15 réelle du broker s'arrête au
@@ -76,6 +82,7 @@ def run_hypothesis5_loop(config, db_path: str, interval_seconds: int = 60, start
     # découverte 2019-2022 pré-enregistrée exige HOUR (confirmée jusqu'à
     # 2017). L5 est resolution-agnostique, aucun changement de logique.
     resolution = get_resolution_override(db_path, "H5_v2", "entree", "HOUR")
+    expensive_hours_by_asset = compute_expensive_hours_by_asset(db_path)
     run_technical_strategy_loop(
         config, db_path,
         source=HYPOTHESIS5_V2_SOURCE,
@@ -92,6 +99,7 @@ def run_hypothesis5_loop(config, db_path: str, interval_seconds: int = 60, start
         describe_signal=_describe_signal,
         interval_seconds=interval_seconds,
         startup_offset_seconds=startup_offset_seconds,
+        expensive_hours_by_asset=expensive_hours_by_asset,
     )
 
 

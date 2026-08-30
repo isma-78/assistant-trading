@@ -35,11 +35,15 @@ voir point A (déploiement suspendu au déblocage du garde-fou de taille).
 9 actifs (8 existants + CHFJPY) — voir docs/HYPOTHESES.md.
 """
 
+import logging
+
 import src.hypothesis2_strategy_v2 as _h2_mod
 from src.executor import HYPOTHESIS2_V2_SOURCE
 from src.hypothesis2_strategy_v2 import evaluate_entry
 from src.hypothesis_params import apply_overrides
 from src.technical_strategy_executor import run_technical_strategy_loop
+
+logger = logging.getLogger(__name__)
 
 HYPOTHESIS2_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD", "CHFJPY"]
 
@@ -77,8 +81,23 @@ def run_hypothesis2_loop(config, db_path: str, interval_seconds: int = 60, start
     ×4/×4 : HOUR (natif) + HOUR_4 (×4) + DAY (×4 supplémentaire,
     disponibilité vérifiée en direct le 29/08/2026) — remplace
     HOUR/HOUR_4 d'origine (qui étaient les TF de CONFIRMATION quand le
-    natif était M15)."""
-    apply_overrides(_h2_mod, "H2_v2", db_path, ["EMA_PERIOD", "RSI_THRESHOLD", "N_TF", "SCORE_THRESHOLD"])
+    natif était M15).
+
+    **Combo confirmé du 29/08/2026 (point 17, voir docs/DECISIONS.md)**
+    appliqué via `rule_changes` (`statut='applique'`, clé `H2_v2`) :
+    `EMA_PERIOD=20, RSI_THRESHOLD=55, N_TF=3, SCORE_THRESHOLD=1.0` — lu
+    UNIQUEMENT ici, au démarrage du process (invariant #6, jamais à
+    chaud). Le log qui suit relit les attributs RÉELLEMENT actifs sur
+    le module après application — une vérification, pas une simple
+    confirmation d'écriture en base."""
+    applied = apply_overrides(_h2_mod, "H2_v2", db_path, ["EMA_PERIOD", "RSI_THRESHOLD", "N_TF", "SCORE_THRESHOLD"])
+    logger.info(
+        "H2_v2 : paramètres RÉELLEMENT actifs après démarrage — "
+        "EMA_PERIOD=%s, RSI_THRESHOLD=%s, N_TF=%s, SCORE_THRESHOLD=%s "
+        "(overrides appliqués depuis rule_changes : %s)",
+        _h2_mod.EMA_PERIOD, _h2_mod.RSI_THRESHOLD, _h2_mod.N_TF, _h2_mod.SCORE_THRESHOLD,
+        sorted(applied.keys()) if applied else "AUCUN — valeurs codées en dur du module utilisées",
+    )
     run_technical_strategy_loop(
         config, db_path,
         source=HYPOTHESIS2_V2_SOURCE,
