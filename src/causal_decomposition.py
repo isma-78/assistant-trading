@@ -547,3 +547,90 @@ def classify_cost_vs_strategy(
     if r_theorique_moyen < 0:
         return "edge_theorique_negatif_question_de_lot_gate_de_puissance"
     return "rien_a_signaler"
+
+
+# ---------------------------------------------------------------------------
+# Point 5 (30/08/2026, voir docs/DECISIONS.md) : coût de financement RÉEL
+# (`src/financing_capture.py`/`financing_transactions`) intégré à
+# l'attribution — composant SÉPARÉ, jamais fondu dans `cout_entree`/
+# `cout_sortie` (des coûts d'EXÉCUTION, prix demandé vs prix rempli) ni
+# dans `derive_gestion` (une identité de cohérence, pas une mesure). Le
+# portage de capital (financement overnight) est une troisième famille de
+# coût, distincte par nature : elle ne dépend d'AUCUN prix d'exécution,
+# seulement du nombre de nuits réellement tenues.
+#
+# **Jamais de constante de remplacement écrite ici** — n=12 sur 2 nuits,
+# très en dessous du seuil de lisibilité n>=30 déjà fixé (point 5,
+# 29/08/2026) pour toute mesure de ce chantier. Cette fonction attribue
+# le coût RÉEL déjà capturé quand il existe pour la nuit exacte
+# concernée — elle n'invente, n'interpole, ni ne moyenne JAMAIS une nuit
+# non capturée (`None` explicite, jamais 0).
+#
+# **Hypothèse documentée, non vérifiable avec les données actuelles** :
+# la capture (`scripts/capture_financing.py`) interroge le compte H1
+# uniquement (`config.capital_api_key`, pas les identifiants dédiés
+# H2-H5) — le taux de swap Capital.com par instrument est supposé fixé
+# au niveau du broker, pas négocié par sous-compte, donc réutilisable
+# pour un trade de N'IMPORTE QUELLE hypothèse sur le même instrument.
+# Hypothèse raisonnable (le financement reflète un différentiel de taux
+# interbancaire réel, pas un tarif par client) mais jamais confirmée
+# indépendamment sur un second compte — à garder en tête si ce compte
+# venait à afficher un désaccord avec un futur relevé sur un autre compte.
+# ---------------------------------------------------------------------------
+
+def sum_real_financing_for_window(
+    financing_by_date: List[Tuple[str, float]], ouvert_at: str, ferme_at: str,
+) -> Tuple[Optional[float], int]:
+    """Calcul pur. `financing_by_date` : [(date_utc_transaction, size_eur), ...]
+    déjà filtré sur UN SEUL actif par l'appelant. Somme les débits DONT
+    la date (`date_utc[:10]`, comparaison lexicographique ISO — valide
+    ici, jamais d'heure à comparer) tombe dans `[ouvert_at[:10],
+    ferme_at[:10]]` inclus des deux côtés (une nuit capturée pendant le
+    jour d'ouverture ou de clôture compte réellement — le trade était
+    ouvert au moment du débit ~21h UTC).
+
+    Retourne `(None, 0)` si AUCUNE nuit de la fenêtre n'a de donnée
+    capturée — jamais `(0.0, 0)`, qui affirmerait à tort un coût nul
+    connu plutôt qu'un coût inconnu."""
+    start_date, end_date = ouvert_at[:10], ferme_at[:10]
+    matched = [size_eur for date_utc, size_eur in financing_by_date if start_date <= date_utc[:10] <= end_date]
+    if not matched:
+        return None, 0
+    return sum(matched), len(matched)
+
+
+def compute_trade_financing_cost(db_path: str, trade_id: int) -> Optional[Dict[str, object]]:
+    """Orchestration : lit le trade (doit être fermé, avoir un
+    `risque_eur` connu) et les transactions `financing_transactions` de
+    son actif, applique `sum_real_financing_for_window`. Retourne
+    `None` si le trade n'existe pas, n'est pas fermé, ou n'a pas de
+    `risque_eur` positif connu (jamais une division par zéro ni un
+    résultat partiel silencieux).
+
+    `cout_financement_r` : converti en unités de R via `risque_eur`
+    (la valeur EUR d'1R pour CE trade précis, déjà en base) — pour
+    rester directement comparable à `cout_entree`/`cout_sortie`, jamais
+    mélangé avec eux dans le même champ. Signe : un débit réel positif
+    (argent qui sort du compte) devient un coût POSITIF ici, même
+    convention que `cout_entree`/`cout_sortie` (positif = défavorable)."""
+    with connection_scope(db_path) as conn:
+        trade = conn.execute(
+            "SELECT actif, ouvert_at, ferme_at, risque_eur FROM trades WHERE id = ? AND statut = 'ferme'",
+            (trade_id,),
+        ).fetchone()
+        if trade is None or trade["risque_eur"] is None or trade["risque_eur"] <= 0 or trade["ferme_at"] is None:
+            return None
+        rows = conn.execute(
+            "SELECT date_utc, size_eur FROM financing_transactions WHERE instrument = ?",
+            (trade["actif"],),
+        ).fetchall()
+
+    financing_by_date = [(row["date_utc"], row["size_eur"]) for row in rows]
+    total_eur, n_nuits = sum_real_financing_for_window(financing_by_date, trade["ouvert_at"], trade["ferme_at"])
+    if total_eur is None:
+        return {"cout_financement_eur": None, "cout_financement_r": None, "n_nuits_connues": 0}
+    return {
+        "cout_financement_eur": total_eur,
+        "cout_financement_r": total_eur / trade["risque_eur"],
+        "n_nuits_connues": n_nuits,
+    }

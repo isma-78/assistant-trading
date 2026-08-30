@@ -15,6 +15,7 @@ from src.causal_decomposition import (
     aggregate_trade_decomposition,
     classify_cost_vs_strategy,
     compute_trade_causal_decomposition,
+    compute_trade_financing_cost,
     decompose_gestion_delay,
     decompose_trade_leg,
     duration_bucket,
@@ -23,6 +24,7 @@ from src.causal_decomposition import (
     outcome_label,
     persist_trade_causal_decomposition,
     session_bucket_from_ouvert_at,
+    sum_real_financing_for_window,
 )
 from src.db import connection_scope, init_db
 
@@ -610,3 +612,103 @@ def test_classify_favorable_cost_never_flagged_as_leak():
     # coûts négatifs (favorables, ex. trade 14240 du 28/08/2026) -> jamais
     # une "fuite" même si l'edge théorique est déjà négatif par ailleurs.
     assert classify_cost_vs_strategy(-0.10, -0.02, -0.01) == "edge_theorique_negatif_question_de_lot_gate_de_puissance"
+
+
+# ---------------------------------------------------------------------------
+# sum_real_financing_for_window / compute_trade_financing_cost (point 5, 30/08/2026)
+# ---------------------------------------------------------------------------
+
+def test_sum_real_financing_no_data_returns_none_not_zero():
+    assert sum_real_financing_for_window([], "2026-08-28T00:00:00Z", "2026-08-30T00:00:00Z") == (None, 0)
+
+
+def test_sum_real_financing_matches_dates_within_window_inclusive():
+    financing = [
+        ("2026-08-27T21:00:00.000", 0.10),  # avant l'ouverture -> exclu
+        ("2026-08-28T21:00:00.000", 0.23),  # jour d'ouverture -> inclus
+        ("2026-08-29T21:00:00.000", -0.21), # nuit intermediaire -> inclus
+        ("2026-08-30T21:00:00.000", 0.05),  # jour de cloture -> inclus
+        ("2026-08-31T21:00:00.000", 0.99),  # apres la cloture -> exclu
+    ]
+    total, n = sum_real_financing_for_window(financing, "2026-08-28T14:00:00Z", "2026-08-30T09:00:00Z")
+    assert n == 3
+    assert total == pytest.approx(0.23 - 0.21 + 0.05)
+
+
+def test_sum_real_financing_single_day_trade_matches_only_that_date():
+    financing = [("2026-08-28T21:00:00.000", 0.10), ("2026-08-29T21:00:00.000", 0.20)]
+    total, n = sum_real_financing_for_window(financing, "2026-08-28T08:00:00Z", "2026-08-28T18:00:00Z")
+    assert (total, n) == (0.10, 1)
+
+
+def _insert_trade_with_risque(conn, actif, ouvert_at, ferme_at, risque_eur, statut="ferme"):
+    return conn.execute(
+        "INSERT INTO trades (signal_id, source, actif, mode, direction, taille_initiale, "
+        "prix_entree_prevu, stop_loss_initial, stop_loss_courant, risque_eur, "
+        "pourcentage_risque_applique, ouvert_at, ferme_at, statut) "
+        "VALUES (NULL, 'hypothesis_v2', ?, 'demo', 'long', 0.01, 100.0, 99.0, 99.0, ?, 2.0, ?, ?, ?)",
+        (actif, risque_eur, ouvert_at, ferme_at, statut),
+    ).lastrowid
+
+
+def test_compute_trade_financing_cost_none_for_missing_trade(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    assert compute_trade_financing_cost(db_path, 999) is None
+
+
+def test_compute_trade_financing_cost_none_when_not_closed(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    with connection_scope(db_path) as conn:
+        trade_id = _insert_trade_with_risque(conn, "USDJPY", "2026-08-28T00:00:00Z", None, 10.0, statut="ouvert")
+    assert compute_trade_financing_cost(db_path, trade_id) is None
+
+
+def test_compute_trade_financing_cost_none_when_risque_eur_not_positive(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    with connection_scope(db_path) as conn:
+        trade_id = _insert_trade_with_risque(conn, "USDJPY", "2026-08-28T00:00:00Z", "2026-08-29T00:00:00Z", 0.0)
+    assert compute_trade_financing_cost(db_path, trade_id) is None
+
+
+def test_compute_trade_financing_cost_unknown_when_no_night_captured(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    with connection_scope(db_path) as conn:
+        trade_id = _insert_trade_with_risque(conn, "USDJPY", "2026-08-28T00:00:00Z", "2026-08-29T00:00:00Z", 10.0)
+    result = compute_trade_financing_cost(db_path, trade_id)
+    assert result == {"cout_financement_eur": None, "cout_financement_r": None, "n_nuits_connues": 0}
+
+
+def test_compute_trade_financing_cost_converts_to_r_via_risque_eur(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    with connection_scope(db_path) as conn:
+        trade_id = _insert_trade_with_risque(conn, "USDJPY", "2026-08-28T00:00:00Z", "2026-08-30T00:00:00Z", 10.0)
+        conn.execute(
+            "INSERT INTO financing_transactions (reference, instrument, size_eur, date_utc, captured_at) "
+            "VALUES ('ref-a', 'USDJPY', 0.23, '2026-08-28T21:02:07.525', '2026-08-29T00:00:00Z')"
+        )
+        conn.execute(
+            "INSERT INTO financing_transactions (reference, instrument, size_eur, date_utc, captured_at) "
+            "VALUES ('ref-b', 'USDJPY', -0.21, '2026-08-29T21:01:34.530', '2026-08-30T00:00:00Z')"
+        )
+    result = compute_trade_financing_cost(db_path, trade_id)
+    assert result["n_nuits_connues"] == 2
+    assert result["cout_financement_eur"] == pytest.approx(0.02)
+    assert result["cout_financement_r"] == pytest.approx(0.002)  # 0.02 / 10.0 risque_eur
+
+
+def test_compute_trade_financing_cost_ignores_other_instruments(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    with connection_scope(db_path) as conn:
+        trade_id = _insert_trade_with_risque(conn, "USDJPY", "2026-08-28T00:00:00Z", "2026-08-29T00:00:00Z", 10.0)
+        conn.execute(
+            "INSERT INTO financing_transactions (reference, instrument, size_eur, date_utc, captured_at) "
+            "VALUES ('ref-c', 'GBPUSD', -0.25, '2026-08-28T21:01:26.167', '2026-08-29T00:00:00Z')"
+        )
+    result = compute_trade_financing_cost(db_path, trade_id)
+    assert result == {"cout_financement_eur": None, "cout_financement_r": None, "n_nuits_connues": 0}
