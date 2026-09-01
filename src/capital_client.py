@@ -18,7 +18,7 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
 
@@ -60,6 +60,12 @@ class CapitalClient:
         self.base_url = base_url.rstrip("/")
         self._session = session or requests.Session()
         self._tokens: Optional[dict] = None
+        # Compte ciblé par le dernier `switch_account()` réussi (30/08/2026,
+        # voir docs/DECISIONS.md — incident réel du 31/08/2026, session
+        # invalidée ~35h après démarrage sans qu'aucun code ne le
+        # détecte). Permet à `_reauthenticate` de reconstituer le même
+        # contexte (login + compte actif) sans intervention de l'appelant.
+        self._account_id: Optional[str] = None
 
     def login(self) -> dict:
         resp = self._session.post(
@@ -110,7 +116,13 @@ class CapitalClient:
         `executor._apply_management_action`, 21/08/2026 : une lecture
         fraîche de l'état réel, jamais un texte d'erreur qui pourrait
         changer de format) — si `account_id` est déjà le compte actif
-        (`preferred: true`), aucun appel PUT n'est tenté."""
+        (`preferred: true`), aucun appel PUT n'est tenté.
+
+        Mémorise `account_id` (`self._account_id`), quelle que soit la
+        branche empruntée — permet à `_reauthenticate` de reconstituer
+        le même contexte de compte après une réauthentification
+        transparente (30/08/2026, voir docs/DECISIONS.md)."""
+        self._account_id = account_id
         accounts = self.get("/accounts").get("accounts", [])
         already_active = any(
             acc.get("accountId") == account_id and acc.get("preferred") for acc in accounts
@@ -148,37 +160,86 @@ class CapitalClient:
             # test réel encadré d'executor.py (voir docs/DECISIONS.md).
             raise CapitalApiError(f"{exc} — corps de la réponse : {resp.text}") from exc
 
+    @staticmethod
+    def _is_invalid_session_error(exc: "CapitalApiError") -> bool:
+        return "invalid.session.token" in str(exc)
+
+    def _reauthenticate(self) -> None:
+        """Reconnexion transparente après invalidation de session
+        (30/08/2026, voir docs/DECISIONS.md — incident réel du
+        31/08/2026 : `executor_loop`/`trend_executor`, partageant le
+        même compte principal, ont accumulé des milliers d'échecs
+        `error.invalid.session.token` consécutifs sur plus de 24h sans
+        qu'aucun code ne détecte ni ne corrige — la session avait été
+        invalidée côté broker (cause exacte non identifiée avec
+        certitude : TTL de session démo, ou une connexion externe
+        concurrente sur le même compte) et le process n'avait aucun
+        moyen de s'en remettre autrement qu'un redémarrage manuel).
+        Ré-appelle `login()` avec les identifiants déjà en mémoire, puis
+        recible le même compte via `switch_account()` si un compte avait
+        déjà été ciblé — jamais silencieux (log explicite), jamais
+        masqué : si la réauthentification elle-même échoue, l'exception
+        remonte normalement à l'appelant."""
+        logger.warning("Session invalide détectée (error.invalid.session.token) — réauthentification en cours")
+        account_id = self._account_id
+        self.login()
+        if account_id is not None:
+            self.switch_account(account_id)
+
+    def _request_with_reauth(self, make_request: Callable[[], dict]) -> dict:
+        """Exécute `make_request` ; sur `error.invalid.session.token`
+        UNIQUEMENT, réauthentifie puis retente EXACTEMENT UNE FOIS
+        (jamais une boucle — un second échec après réauthentification
+        remonte normalement, pas de masquage indéfini). Toute autre
+        erreur (429, validation, réseau...) n'est jamais interceptée
+        ici, propagée telle quelle comme avant ce correctif."""
+        try:
+            return make_request()
+        except CapitalApiError as exc:
+            if not self._is_invalid_session_error(exc):
+                raise
+            self._reauthenticate()
+            return make_request()
+
     def get(self, path: str, params: Optional[dict] = None) -> dict:
-        resp = self._session.get(f"{self.base_url}{path}", headers=self._headers(), params=params, timeout=10)
-        self._raise_for_status(resp)
-        return resp.json()
+        def _once() -> dict:
+            resp = self._session.get(f"{self.base_url}{path}", headers=self._headers(), params=params, timeout=10)
+            self._raise_for_status(resp)
+            return resp.json()
+        return self._request_with_reauth(_once)
 
     def post(self, path: str, body: dict) -> dict:
-        resp = self._session.post(
-            f"{self.base_url}{path}",
-            headers={**self._headers(), "Content-Type": "application/json"},
-            json=body, timeout=10,
-        )
-        self._raise_for_status(resp)
-        return resp.json()
+        def _once() -> dict:
+            resp = self._session.post(
+                f"{self.base_url}{path}",
+                headers={**self._headers(), "Content-Type": "application/json"},
+                json=body, timeout=10,
+            )
+            self._raise_for_status(resp)
+            return resp.json()
+        return self._request_with_reauth(_once)
 
     def put(self, path: str, body: dict) -> dict:
-        resp = self._session.put(
-            f"{self.base_url}{path}",
-            headers={**self._headers(), "Content-Type": "application/json"},
-            json=body, timeout=10,
-        )
-        self._raise_for_status(resp)
-        return resp.json()
+        def _once() -> dict:
+            resp = self._session.put(
+                f"{self.base_url}{path}",
+                headers={**self._headers(), "Content-Type": "application/json"},
+                json=body, timeout=10,
+            )
+            self._raise_for_status(resp)
+            return resp.json()
+        return self._request_with_reauth(_once)
 
     def delete(self, path: str, body: Optional[dict] = None) -> dict:
-        resp = self._session.delete(
-            f"{self.base_url}{path}",
-            headers={**self._headers(), "Content-Type": "application/json"},
-            json=body, timeout=10,
-        )
-        self._raise_for_status(resp)
-        return resp.json()
+        def _once() -> dict:
+            resp = self._session.delete(
+                f"{self.base_url}{path}",
+                headers={**self._headers(), "Content-Type": "application/json"},
+                json=body, timeout=10,
+            )
+            self._raise_for_status(resp)
+            return resp.json()
+        return self._request_with_reauth(_once)
 
     # --- Opérations métier de haut niveau, partagées entre market_data.py et executor.py ---
 

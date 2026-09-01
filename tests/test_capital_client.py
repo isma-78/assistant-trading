@@ -95,6 +95,139 @@ def test_http_error_includes_response_body_for_diagnosis():
         client.get("/accounts")
 
 
+# ---------------------------------------------------------------------------
+# Réauthentification transparente sur session invalidée (30/08/2026, voir
+# docs/DECISIONS.md — incident réel du 31/08/2026 : executor_loop/
+# trend_executor sont restés bloqués sur error.invalid.session.token
+# pendant plus de 24h, sans aucun mécanisme de récupération).
+# ---------------------------------------------------------------------------
+
+def _invalid_session_response():
+    resp = _fake_response(status_ok=False)
+    resp.text = '{"errorCode":"error.invalid.session.token"}'
+    return resp
+
+
+def test_get_reauthenticates_once_on_invalid_session_token_then_succeeds():
+    client, session = _client_with_session()
+    session.post.return_value = _fake_response(headers={"CST": "c1", "X-SECURITY-TOKEN": "s1"})
+    client.login()
+    session.post.reset_mock()
+
+    session.get.side_effect = [_invalid_session_response(), _fake_response(json_body={"ok": True})]
+    session.post.return_value = _fake_response(headers={"CST": "c2", "X-SECURITY-TOKEN": "s2"})
+
+    result = client.get("/accounts")
+
+    assert result == {"ok": True}
+    session.post.assert_called_once()  # un seul re-login déclenché
+    assert session.get.call_count == 2
+    # La seconde tentative utilise bien les NOUVEAUX tokens.
+    second_call_headers = session.get.call_args_list[1].kwargs["headers"]
+    assert second_call_headers["CST"] == "c2"
+
+
+def test_get_does_not_reauthenticate_on_unrelated_errors():
+    client, session = _logged_in_client()
+    error_response = _fake_response(status_ok=False)
+    error_response.text = '{"errorCode":"error.too-many.requests"}'
+    session.get.return_value = error_response
+
+    with pytest.raises(CapitalApiError, match="too-many.requests"):
+        client.get("/accounts")
+    session.post.assert_not_called()  # jamais de re-login sur une erreur non liee a la session
+
+
+def test_get_propagates_error_when_retry_after_reauth_also_fails():
+    client, session = _client_with_session()
+    session.post.return_value = _fake_response(headers={"CST": "c1", "X-SECURITY-TOKEN": "s1"})
+    client.login()
+    session.post.reset_mock()
+
+    session.get.return_value = _invalid_session_response()  # echoue a chaque tentative
+    session.post.return_value = _fake_response(headers={"CST": "c2", "X-SECURITY-TOKEN": "s2"})
+
+    with pytest.raises(CapitalApiError, match="invalid.session.token"):
+        client.get("/accounts")
+    session.post.assert_called_once()  # un seul essai de reauthentification, jamais une boucle
+    assert session.get.call_count == 2  # tentative initiale + une seule retentative
+
+
+def test_reauthenticate_reswitches_account_if_one_was_targeted():
+    client, session = _logged_in_client()
+    session.get.return_value = _fake_response(json_body={
+        "accounts": [{"accountId": "acc-1", "preferred": True}],
+    })
+    client.switch_account("acc-1")  # already_active -> aucun PUT, mais _account_id memorise
+    session.get.reset_mock()
+    session.post.reset_mock()
+
+    accounts_response = lambda: _fake_response(json_body={
+        "accounts": [{"accountId": "acc-1", "preferred": True}],
+    })
+    # Ordre reel : (1) appel original -> echec session invalide ; (2)
+    # switch_account() interne a _reauthenticate rappelle get("/accounts")
+    # pour verifier already_active ; (3) retentative de l'appel original.
+    session.get.side_effect = [_invalid_session_response(), accounts_response(), accounts_response()]
+    session.post.return_value = _fake_response(headers={"CST": "c2", "X-SECURITY-TOKEN": "s2"})
+
+    client.get("/accounts")
+
+    session.post.assert_called_once()  # re-login déclenché par la réauthentification
+
+
+def test_reauthenticate_skips_reswitch_when_no_account_ever_targeted():
+    client, session = _client_with_session()
+    session.post.return_value = _fake_response(headers={"CST": "c1", "X-SECURITY-TOKEN": "s1"})
+    client.login()
+    session.post.reset_mock()
+
+    session.get.side_effect = [_invalid_session_response(), _fake_response(json_body={"ok": True})]
+    session.post.return_value = _fake_response(headers={"CST": "c2", "X-SECURITY-TOKEN": "s2"})
+
+    result = client.get("/accounts")
+
+    assert result == {"ok": True}
+    session.post.assert_called_once()  # login() seul, jamais un PUT /session (switch_account jamais appele)
+    session.put.assert_not_called()
+
+
+def test_post_reauthenticates_on_invalid_session_token():
+    client, session = _logged_in_client()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(session, "post", MagicMock(side_effect=[
+            _invalid_session_response(),
+            _fake_response(headers={"CST": "c2", "X-SECURITY-TOKEN": "s2"}),
+            _fake_response(json_body={"ok": True}),
+        ]))
+        result = client.post("/positions", {"epic": "GOLD"})
+    assert result == {"ok": True}
+
+
+def test_put_reauthenticates_on_invalid_session_token():
+    client, session = _logged_in_client()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(session, "put", MagicMock(side_effect=[
+            _invalid_session_response(),
+            _fake_response(json_body={"ok": True}),
+        ]))
+        mp.setattr(session, "post", MagicMock(return_value=_fake_response(headers={"CST": "c2", "X-SECURITY-TOKEN": "s2"})))
+        result = client.put("/positions/deal-1", {"stopLevel": 100.0})
+    assert result == {"ok": True}
+
+
+def test_delete_reauthenticates_on_invalid_session_token():
+    client, session = _logged_in_client()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(session, "delete", MagicMock(side_effect=[
+            _invalid_session_response(),
+            _fake_response(json_body={"ok": True}),
+        ]))
+        mp.setattr(session, "post", MagicMock(return_value=_fake_response(headers={"CST": "c2", "X-SECURITY-TOKEN": "s2"})))
+        result = client.delete("/positions/deal-1")
+    assert result == {"ok": True}
+
+
 def _logged_in_client():
     client, session = _client_with_session()
     session.post.return_value = _fake_response(headers={"CST": "c", "X-SECURITY-TOKEN": "s"})
