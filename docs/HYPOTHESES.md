@@ -3978,7 +3978,16 @@ le split détruirait, décision explicite d'Ismaël).
   disponible — FIGÉ, pas un choix balayé (fallback mécanique, pas une
   variable de marché).
 - **Résolution** : MINUTE_15 (native, TF de confirmation = multiples
-  fixes ci-dessus).
+  fixes ci-dessus). **Amendée le 29/08/2026 (voir `docs/DECISIONS.md`,
+  63 lignes datées 15h35) : profondeur M15 réelle du broker confirmée à
+  2024-01-01 UNIFORME sur les 8 actifs (pas seulement CHFJPY comme
+  anticipé ci-dessous), insuffisante pour la découverte 2019-2022 —
+  résolution réellement déployée = HOUR native, TF de confirmation =
+  HOUR_4 + DAY (`src/hypothesis2_executor.py`, remappage préservant le
+  même facteur ×4/×4). Amendement antérieur à tout résultat de backtest
+  H2 (vérifié forensiquement le 02/09/2026, voir `docs/DECISIONS.md`) —
+  texte ci-dessous laissé tel quel pour l'historique, jamais réécrit
+  silencieusement.**
 - **Univers** : 8 actifs existants. **CHFJPY EXCLUE** (historique M15
   ne remonte qu'au 2024-01-01, composition découverte/confirmation
   doit rester identique — voir point 3 du prompt reçu, déjà constaté le
@@ -4024,7 +4033,12 @@ le split détruirait, décision explicite d'Ismaël).
   de la tendance.
 - **Stop** : au-delà du point de retracement, majoré de
   `stop_buffer_atr` × ATR(14) [FIGÉ].
-- **Résolution** : MINUTE_15 (convention H3 inchangée).
+- **Résolution** : MINUTE_15 (convention H3 inchangée). **Amendée le
+  29/08/2026, même amendement/même raison qu'H2 ci-dessus (commit
+  partagé `a00d7a0`, antérieur à tout résultat de backtest H3) —
+  résolution réellement déployée = HOUR
+  (`src/hypothesis3_executor.py`, défaut codé, aucun override actif en
+  base).**
 - **Univers** : 8 actifs existants. **CHFJPY EXCLUE** (même motif qu'H2).
 - **Mesure obligatoire (garde-fou point 7, biais de sélection)** :
   espérance calculée **par signal détecté** (tendance + condition de
@@ -4057,7 +4071,12 @@ le split détruirait, décision explicite d'Ismaël).
   l'instruction explicite).
 - **Stop** : au-delà du pivot ayant servi à la divergence, majoré de
   `stop_atr_mult` × ATR(14) [FIGÉ].
-- **Résolution** : MINUTE_15 (convention H4 inchangée).
+- **Résolution** : MINUTE_15 (convention H4 inchangée). **Amendée le
+  29/08/2026, même amendement/même raison qu'H2 ci-dessus (commit
+  partagé `a00d7a0`, antérieur à tout résultat de backtest H4) —
+  résolution réellement déployée = HOUR
+  (`src/hypothesis4_executor.py`, défaut codé, aucun override actif en
+  base).**
 - **Univers** : 8 actifs existants. **CHFJPY EXCLUE** (même motif qu'H2).
 - **Garde-fou anti-lookahead (obligatoire, point 7)** : un pivot n'est
   JAMAIS lu avant que `pivot_fractal_n` bougies suivantes existent dans
@@ -4103,7 +4122,12 @@ le split détruirait, décision explicite d'Ismaël).
   `stop_buffer_pct` × largeur de bande à l'intérieur du bord cassé.
 - **Sortie** : 100% trailing (Donchian(20), FIGÉ — aucune sortie
   partielle, décision explicite d'Ismaël, non balayée).
-- **Résolution** : MINUTE_15 (convention H5 inchangée).
+- **Résolution** : MINUTE_15 (convention H5 inchangée). **Amendée le
+  29/08/2026, même amendement/même raison qu'H2 ci-dessus (commit
+  partagé `a00d7a0`, antérieur à tout résultat de backtest H5) —
+  résolution réellement déployée = HOUR
+  (`src/hypothesis5_executor.py`, défaut codé, aucun override actif en
+  base).**
 - **Univers** : 8 actifs existants. **CHFJPY EXCLUE** (même motif qu'H2).
 - **Test d'information obligatoire AVANT toute construction de la
   logique d'entrée au-delà de la définition ci-dessus (point 7)** :

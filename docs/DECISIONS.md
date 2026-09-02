@@ -10663,3 +10663,180 @@ fidélité 39 paires (≥30), aucun verdict (bootstrap par blocs calendaires
 inapplicable, un seul mois calendaire) ; Mesures A/B, étape 3,
 attribution inchangées. Forward H2 : n=0 (voir point 4/6 ci-dessus,
 chiffre réactualisé dans cette session via `summarize_h2_forward`).
+
+## 2026-09-02 (suite) — Fermeture définitive de la fenêtre de confirmation 2023-2024.06
+
+Décision d'Ismaël, appliquée telle quelle. H2 est morte à la découverte
+(entrée du jour ci-dessus : 24/24 combos négatifs sur le moteur corrigé,
+court-circuit avant toute confirmation) et aucune autre hypothèse n'est
+en file pour cette fenêtre (H3/H4 hors périmètre du bug — voir
+ci-dessus ; H1/H5 jamais concernées). La garder "disponible pour un
+usage futur" ne servirait plus à rien et resterait une tentation ouverte
+à contourner sous pression plus tard.
+
+**La fenêtre de confirmation 2023-01-01 → 2024-06-14 est close
+DÉFINITIVEMENT, pour toute hypothèse, présente ou future, sans
+exception.** Elle n'a jamais été consommée : H2 n'a jamais atteint
+l'étape de confirmation (court-circuitée avant), donc le compteur
+cumulatif d'essais du projet reste à **29**, pas 30. Toute réouverture
+future de cette fenêtre exigerait une décision explicite et documentée
+d'Ismaël révoquant la présente clôture — jamais un contournement
+silencieux par un chantier ultérieur qui l'aurait simplement oubliée.
+
+## 2026-09-02 (suite 2) — Enquête forensique : le mismatch résolution déployée/pré-enregistrée de H2 est-il un p-hacking déguisé ?
+
+**Verdict en premier, tel que demandé : NON, le critère (d) ne se
+déclenche pas.** Aucun changement de résolution (H2 ni aucune autre
+hypothèse) ne suit une observation de résultat de backtest, même
+partielle. Le changement suit une contrainte de PROFONDEUR DE DONNÉE
+découverte par une sonde en lecture seule, jamais un résultat de
+performance. Détail complet ci-dessous, y compris la nuance sur le
+critère (c) littéral, qui ne s'applique pas non plus tel quel — un
+troisième cas de figure, distinct des deux prévus, s'est produit.
+
+### a. Chronologie exhaustive des changements du paramètre résolution de H2
+
+Reconstruite par `git log -p --follow` sur `src/hypothesis2_executor.py`
+(seul fichier portant `resolution=`/`extra_resolutions=` pour H2) :
+
+1. `ec09d4c`, 2026-08-29 13:21:19 +0200 — création de H2/L2 :
+   `resolution="MINUTE_15"`, `extra_resolutions=["HOUR", "HOUR_4"]`
+   (config du pré-enregistrement écrit, `docs/HYPOTHESES.md`).
+2. `cf8a8f7`, 2026-08-29 13:22:09 +0200 — pré-enregistrement écrit
+   consigné dans `docs/HYPOTHESES.md` (gel de la version texte), 53
+   secondes après (1).
+3. `4896074`, 2026-08-29 15:06:46 +0200 — "point D (info tests)" :
+   sonde en LECTURE SEULE de la profondeur réelle M15 chez le broker
+   (test d'intégrité des données, pas un backtest de stratégie),
+   découvre que la profondeur M15 s'arrête au 2024-01-01, UNIFORME sur
+   les 8 actifs (pas seulement CHFJPY comme anticipé au
+   pré-enregistrement) — bloquant pour la découverte 2019-2022 exigée.
+4. `65040f8`, 2026-08-29 15:35:17 +0200 — amendement documenté dans
+   `docs/DECISIONS.md` (63 lignes), AVANT tout changement de code :
+   décision d'Ismaël actée de basculer H2/H3/H4/H5 en HOUR.
+5. `a00d7a0`, 2026-08-29 15:42:53 +0200 — changement de code :
+   `resolution="HOUR"`, `extra_resolutions=["HOUR_4", "DAY"]` (H2
+   remappe ses 3 TF fixes pour préserver le même facteur ×4/×4 que M15
+   → H1 → H4). Aucun autre changement depuis.
+6. `b82d3cf`, 2026-08-29 23:16:37 +0200 — **PREMIER résultat de backtest
+   H2 jamais consigné dans l'historique du dépôt** ("H2/L2 CONFIRME
+   POSITIF", +0,2431R) — 7h34 APRÈS le changement de résolution (5),
+   déjà entièrement sur la config HOUR/HOUR_4/DAY.
+
+### b. Positionnement par rapport aux trois repères demandés
+
+- **Gel de la pré-enregistration écrite** ((2) ci-dessus, 13:22:09) :
+  le changement de résolution (5, 15:42:53) le suit de 2h20 — donc ne
+  le PRÉCÈDE PAS. Le critère (c) tel qu'écrit littéralement ("si TOUS
+  les changements précèdent le gel") ne s'applique donc PAS
+  formellement, contrairement à l'hypothèse implicite du prompt reçu.
+- **Confirmation +0,2431R** ((6), 23:16:37) : le changement de
+  résolution (5) la précède de 7h34. C'est la relation qui compte pour
+  le critère (d) — **aucun résultat de backtest H2, positif ou négatif,
+  n'existe dans l'historique du dépôt avant le changement de
+  résolution**. Recherche exhaustive : aucun commit entre (2) et (5) ne
+  publie un chiffre de backtest H2 (voir liste complète des 12 commits
+  de la fenêtre 13:21→15:42 ci-dessous) ; recherche complémentaire par
+  contenu (`git log -S "0,2431"`/`-S "0.2431"`) confirme que la
+  PREMIÈRE occurrence du chiffre dans tout l'historique est (6).
+- **Déploiement** (31/08 07h02 UTC selon le prompt reçu ; en réalité
+  30/08 07h02:15 UTC selon le code, écart déjà noté dans une entrée
+  précédente) : postérieur à tout ce qui précède, sans pertinence pour
+  la question du p-hacking (le déploiement suit la confirmation, pas
+  l'inverse).
+
+Commits entre (2) et (5) (13:22:09 → 15:42:53), aucun n'est un résultat
+de backtest : `ffdba1c`/`c1d2744` (implémentation H1/L1),
+`79cd8d1`/`0980dbd` (implémentation H3/L3), `fd9c586`/`4f8e090`
+(implémentation H5/L5), `636d6f1` (retry adaptatif stoploss),
+`4896074` (sonde profondeur M15, point 3 ci-dessus), `65040f8` (doc
+amendement, point 4 ci-dessus). Aucune trace non plus, côté VPS, d'une
+exécution de script d'évaluation non committée dans cette fenêtre
+(`logs/backtest_download.log`/`logs/backtest_replay.log` inspectés :
+plus anciens que 29/08 13h, aucune entrée dans cette fenêtre précise).
+
+### c/d. Application du critère — le troisième cas non prévu par le prompt
+
+Ni (c) ni (d) tel qu'écrits ne correspondent exactement : le changement
+suit le gel du texte (donc pas (c)), mais précède strictement toute
+observation de résultat de stratégie, backtest ou autre (donc (d) ne se
+déclenche pas non plus — (d) exige explicitement qu'un résultat de
+BACKTEST précède le changement, pas n'importe quelle observation).
+Ce qui a précédé le changement est une vérification de DISPONIBILITÉ DE
+DONNÉE BRUTE (la M15 existe-t-elle assez loin dans le passé chez le
+broker ?), pas une observation de PERFORMANCE DE STRATÉGIE (la
+stratégie gagne-t-elle ?) — l'invariant #10 protège contre le second cas
+(choisir/changer une variable après avoir vu si ça marche), pas contre
+le premier (vérifier qu'une donnée existe avant de calibrer quoi que ce
+soit dessus, ce qui est une précondition opérationnelle normale,
+identique à la vérification de profondeur HOUR faite le 28/08/2026 pour
+CHFJPY sur H1).
+
+**Conclusion, faits à l'appui : pas de p-hacking implicite. Le
++0,2431R original (déjà invalidé par ailleurs pour la raison du
+lookahead, voir entrée du 02/09/2026 plus haut) n'est pas de surcroît
+entaché par ce second risque distinct.** Cette conclusion est fondée
+sur l'historique Git complet du dépôt (aucune branche ni commit amend
+détecté qui aurait pu masquer un essai antérieur) ; elle ne peut
+techniquement pas couvrir un essai qui aurait été exécuté sans jamais
+être committé ET sans laisser de trace de log — jugé hautement
+improbable ici vu la discipline de commit du projet à cette période
+(un commit toutes les 10-40 minutes sur cette même journée), mais
+signalé pour complétude plutôt que passé sous silence.
+
+### e. Audit du même mismatch pour H1, H3, H4, H5 (tous paramètres)
+
+**Résolution — même mismatch texte/code trouvé pour H3, H4, H5, PAS
+pour H1, avec la MÊME cause et la MÊME chronologie que H2 (un seul
+commit partagé, `a00d7a0`, "H2/H3/H4/H5 basculent en HOUR") :**
+- **H1/L1** : pré-enregistrement = HOUR, déployé = HOUR
+  (`src/hypothesis1_strategy_v2.py`, jamais concerné par l'amendement —
+  H1 était déjà en HOUR avant même la création de H2-H5). **Aucun
+  mismatch.**
+- **H3/L3, H4/L4, H5/L5** : pré-enregistrement écrit = MINUTE_15 (non
+  corrigé depuis), déployé = HOUR par défaut
+  (`get_resolution_override(db_path, "H{3,4,5}_v2", "entree", "HOUR")`
+  dans `src/hypothesis{3,4,5}_executor.py`, commentaire inline citant
+  explicitement l'amendement du 29/08/2026 et sa raison). **Même
+  mismatch texte/code que H2, mais PAS un problème distinct à
+  ré-enquêter** : c'est littéralement le même amendement, au même
+  commit, à la même seconde, pour la même raison de profondeur de
+  donnée — déjà couvert intégralement par l'analyse a/b/c/d ci-dessus
+  (aucun résultat de backtest H3/H4/H5 non plus n'existe avant
+  `a00d7a0` — les implémentations H3/L3 et H5/L5 dans la fenêtre 13h-15h
+  sont des commits de CODE de stratégie, pas des résultats de
+  calibration).
+- **Override actif en base** : `rule_changes` interrogée sur le VPS
+  (`SELECT ... WHERE variable LIKE '%resolution%' AND statut='applique'`)
+  — **aucune ligne**. Le moteur d'ajustement continu (`evolution_engine`,
+  cron quotidien 05h00 UTC) n'a jamais modifié la résolution d'aucune
+  hypothèse : la résolution réellement utilisée en direct est
+  exactement le défaut codé en dur (HOUR), pas une valeur mouvante.
+
+**Constantes FIGÉES et variables AJUSTÉES (au-delà de la résolution)** :
+vérification par grep de chaque fichier `hypothesis{1,3,4,5}_strategy_v2.py`
+contre sa section du pré-enregistrement (`docs/HYPOTHESES.md`,
+"refonte complète H1-H5" du 29/08/2026) — ADX(14)/ATR(14)/
+slope_lookback=5 pour H1, ATR(14)/liste `OVERRIDABLE` pour H3, RSI(14)
+pour H4, Bollinger(20,2σ)/Donchian(20) pour H5 : **tous conformes au
+texte, aucun écart trouvé**. Limite honnête : cette vérification porte
+sur les constantes FIGÉES et les noms/bornes structurelles des
+variables ajustées (ce qui aurait la même nature de risque que le cas
+résolution — une redéfinition silencieuse de ce qui est balayé) ; elle
+ne constitue PAS un audit exhaustif de chaque valeur numérique de
+grille ni du combo précis actuellement en production pour H1/H3/H4/H5
+(lequel a été sélectionné par confirmation, non ré-vérifié ici) — à
+traiter séparément si un doute spécifique se présente sur l'une de ces
+hypothèses.
+
+### Remédiation appliquée — correction de la dérive documentaire dans `docs/HYPOTHESES.md`
+
+Puisque le résultat de l'enquête est "dérive documentaire bénigne,
+changement légitime jamais reporté dans le texte" (l'esprit du critère
+(c), même si sa lettre ne correspondait pas exactement à la
+chronologie) : le texte du pré-enregistrement du 29/08/2026 pour
+H2/H3/H4/H5 est corrigé pour indiquer la résolution réellement
+déployée (HOUR native, HOUR_4/DAY pour H2 uniquement), avec une note
+explicite renvoyant à l'amendement du 29/08/2026 et à la présente
+entrée — jamais une réécriture silencieuse de ce qui était écrit à
+l'origine, l'ancien texte reste lisible en historique Git.
