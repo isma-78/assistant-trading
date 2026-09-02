@@ -1,16 +1,30 @@
 """Tests de h2_forward_tracking.py (point 3, 30/08/2026, voir docs/DECISIONS.md)."""
 
+import math
+
 import pytest
 
 from src.db import connection_scope, init_db
 from src.h2_forward_tracking import (
+    EFFECT_SIZE_MILESTONES,
     H2_CONFIRMED_R,
+    H2_CONFIRMED_SIGMA,
     H2_FORWARD_CUTOFF,
     MILESTONE_LOWER_BOUND_POSITIVE_N,
     MIN_N_FOR_NEGATIVE_ALERT,
+    Z_95_ONE_SIDED,
     h2_forward_trades,
     summarize_h2_forward,
 )
+
+
+def test_effect_size_milestones_match_lower_bound_formula():
+    # Meme derivation que les jalons n=53/121 (arrondi au plus proche, pas
+    # un plafond - convention issue de docs/Prompt_Apres_Lookahead_31-08.md
+    # point 4c, coincide avec un plafond pour n=53/121 mais pas ici).
+    for effect_size, expected_n in EFFECT_SIZE_MILESTONES.items():
+        computed_n = round((Z_95_ONE_SIDED * H2_CONFIRMED_SIGMA / effect_size) ** 2)
+        assert computed_n == expected_n, (effect_size, computed_n, expected_n)
 
 
 def _insert_trade(conn, source, actif, r_multiple_total, ouvert_at, statut="ferme"):

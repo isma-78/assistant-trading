@@ -62,6 +62,31 @@ MILESTONE_80_PERCENT_POWER_N = 121
 MIN_N_FOR_NEGATIVE_ALERT = 30
 Z_95_ONE_SIDED = 1.6449  # m=1 : un seul suivi forward pré-engagé sur H2, aucune comparaison multiple ici
 
+# Jalons par TAILLE D'EFFET VRAIE HYPOTHÉTIQUE (02/09/2026, voir
+# docs/Prompt_Apres_Lookahead_31-08.md point 4c et docs/DECISIONS.md,
+# "suite du chantier post-lookahead") — les jalons ci-dessus (n=53/121)
+# supposent que l'effet vrai reste +0,2431R, or ce chiffre vient du
+# backtest confirmé DÉSORMAIS INVALIDE (bug de lookahead, point 1). Ces
+# jalons-ci ne font PAS cette hypothèse : ils répondent à "si l'effet vrai
+# est E, à quel n la borne basse à 95% (m=1) dépasse zéro ?" pour
+# plusieurs valeurs plausibles de E, du même calcul que ci-dessus
+# ((z95 × σ / E)², σ=H2_CONFIRMED_SIGMA=1,075307R, seule constante
+# réutilisée du backtest invalide — un écart-type n'est pas un signe
+# d'edge, sa contamination par le lookahead est nettement moins probable
+# qu'une moyenne gonflée par un biais optimiste unidirectionnel).
+# Arrondi au plus proche (pas un plafond) — coïncide avec un plafond
+# pour n=53/121 ci-dessus mais pas pour ces 4 valeurs, voir
+# tests/test_h2_forward_tracking.py::test_effect_size_milestones_match_lower_bound_formula.
+# Cadence de référence : ~25 trades/mois sur les 9 actifs H2
+# (HYPOTHESIS2_ASSETS), légèrement au-dessus du 22/mois historique
+# (389 trades/17,5 mois) depuis l'ajout de CHFJPY.
+EFFECT_SIZE_MILESTONES: Dict[float, int] = {
+    0.20: 78,    # ≈ 3 mois
+    0.15: 139,   # ≈ 5,6 mois
+    0.10: 313,   # ≈ 12,5 mois
+    0.05: 1251,  # ≈ 50 mois — hors de portée en délai utile
+}
+
 
 def h2_forward_trades(db_path: str, cutoff: str = H2_FORWARD_CUTOFF) -> List[Dict[str, object]]:
     """Trades `hypothesis2_v2` réellement fermés depuis `cutoff`

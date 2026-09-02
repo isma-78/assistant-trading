@@ -10229,3 +10229,43 @@ collecte de données même après clôture recherche, mais sous une forme
 allégée qui n'a jamais été validée ni invalidée par aucun backtest propre.
 Ne pas confondre "ce qui tourne en direct aujourd'hui" avec "ce que le
 verdict de recherche a mesuré" — ce sont deux configurations différentes.
+
+### Point 4 — La fenêtre forward de H2 est le vrai actif du projet
+
+**4a (frontière explicite)** : déjà satisfait, aucune action requise.
+`src/h2_forward_tracking.py::H2_FORWARD_CUTOFF = "2026-08-30T07:02:15+00:00"`
+existe depuis le 30/08/2026 et filtre déjà `h2_forward_trades`/
+`summarize_h2_forward` — tout trade H2 antérieur à ce redémarrage corrigé
+est structurellement exclu de toute statistique forward, à chaque appel,
+pas seulement documenté. C'est une frontière encodée (filtre SQL sur
+`ouvert_at >= cutoff`), pas une ligne de marqueur séparée en base — jugé
+équivalent et suffisant : ajouter une table de marqueurs dédiée pour ce
+seul usage aurait été une migration de schéma non justifiée par un besoin
+fonctionnel supplémentaire.
+
+**4b (pré-enregistrement du test forward)** : déjà satisfait, aucune
+action requise. `h2_forward_tracking.py` complet (jalons, alerte
+négative à n≥30, verdict verrouillé à `"aucun_verdict_avant_n53"` avant
+n=53) a été écrit le 30/08/2026, avant tout regard sur la donnée
+forward — c'est la définition même du pré-enregistrement demandé ici.
+
+**4c (jalons par taille d'effet vraie)** : FAIT aujourd'hui —
+`EFFECT_SIZE_MILESTONES` ajouté à `h2_forward_tracking.py` (tests :
+`test_effect_size_milestones_match_lower_bound_formula`, 12/12 tests du
+module verts). Les jalons n=53/121 déjà en place supposent que l'effet
+vrai de H2 reste +0,2431R — hypothèse optimiste, ce chiffre vient
+justement du backtest désormais invalide. Ces 4 nouveaux jalons répondent
+à la question sans faire cette hypothèse, pour 4 tailles d'effet
+plausibles (même σ=1,075307R, seule constante réutilisée — un
+écart-type n'est pas indicatif d'edge, sa contamination par le lookahead
+est bien moins plausible qu'un biais optimiste sur la moyenne) :
+- effet vrai 0,20R → n=78 (~3 mois à ~25 trades/mois sur les 9 actifs H2)
+- effet vrai 0,15R → n=139 (~5,6 mois)
+- effet vrai 0,10R → n=313 (~12,5 mois)
+- effet vrai 0,05R → n=1251 (~50 mois, hors de portée en délai utile)
+
+**À dire franchement, sans enjolivement** : si l'effet réel de H2 après
+correction est sous 0,10R, la voie forward seule ne conclura pas dans un
+délai utile (>1 an). C'est précisément pourquoi l'essai de confirmation
+unique du point 2/3 (2023-2024.06, moteur corrigé) vaut d'être dépensé —
+lui seul peut trancher plus vite qu'un an si l'effet réel est modeste.
