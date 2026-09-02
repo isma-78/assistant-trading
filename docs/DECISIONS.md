@@ -10840,3 +10840,106 @@ déployée (HOUR native, HOUR_4/DAY pour H2 uniquement), avec une note
 explicite renvoyant à l'amendement du 29/08/2026 et à la présente
 entrée — jamais une réécriture silencieuse de ce qui était écrit à
 l'origine, l'ancien texte reste lisible en historique Git.
+
+## 2026-09-02 (suite 3) — Audit complet des valeurs de production H1/H3/H4/H5 : chaque variable AJUSTÉE, ligne par ligne
+
+Méthode identique à l'audit résolution H2 (entrée précédente) : pour
+chaque variable `OVERRIDABLE` de chaque hypothèse, comparaison de la
+valeur RÉELLEMENT ACTIVE (override en base `rule_changes` si
+`statut='applique'`, sinon valeur codée en dur dans le fichier
+`_v2.py` sur le commit actuellement déployé) à ce que documente
+`docs/DECISIONS.md` comme résultat de calibration le cas échéant, avec
+reconstruction chronologique `git log -p`/`git show` si un écart existe.
+
+**Étape préalable — overrides actifs en base (`rule_changes`, VPS)** :
+requête complète, aucun filtre par hypothèse : **4 lignes au total,
+TOUTES sur `H2_v2` (EMA_PERIOD/RSI_THRESHOLD/N_TF/SCORE_THRESHOLD,
+appliquées 2026-08-30T00:00:00Z — le combo H2 aujourd'hui invalidé).
+ZÉRO ligne pour H1/H3/H4/H5, sur aucune variable.** Le moteur
+d'ajustement continu (`evolution_engine`, cron quotidien) n'a donc
+jamais touché H1/H3/H4/H5 depuis le déploiement — leur valeur active
+est, pour les 4, exactement leur valeur codée en dur, sans exception.
+
+**Étape 2 — ces valeurs codées ont-elles jamais été modifiées après le
+premier commit de chaque fichier ?** `git log --follow` sur les 4
+fichiers stratégie :
+- `hypothesis1_strategy_v2.py` : **UN SEUL commit dans toute l'histoire**
+  (`ffdba1c`, 29/08/2026 13:31:50) — `MA_PERIOD=200`,
+  `ADX_THRESHOLD=25.0`, `K_ATR=2.0` n'ont jamais été touchés depuis
+  l'écriture initiale du fichier, point final.
+- `hypothesis3_strategy_v2.py`, `hypothesis4_strategy_v2.py`,
+  `hypothesis5_strategy_v2.py` : 2 commits chacun — création (13:42:42
+  / 13:06:50 / 13:52:22) puis `e169166` (18:04:26, "corrige le bug de
+  grille avant H2-H5, point 16"). Diff de `e169166` sur ces 3 fichiers
+  vérifié ligne à ligne : **ajoute uniquement une constante
+  `MIN_LOOKBACK_FOR_GRID` (50/100/155 respectivement) — ne touche NI
+  `RETRACEMENT_RATIO`/`CONFIRMATION_BARS`/`STOP_BUFFER_ATR` (H3), NI
+  `PIVOT_FRACTAL_N`/`MAX_PIVOT_DISTANCE_BARS`/`STOP_ATR_MULT` (H4), NI
+  `COMPRESSION_PERCENTILE`/`COMPRESSION_DURATION`/`STOP_BUFFER_PCT`
+  (H5)**. Ces 9 valeurs sont donc elles aussi restées à leur valeur du
+  commit de création, jamais modifiées depuis.
+
+**Étape 3 — position de ces commits de création par rapport à tout
+résultat de grille** : les 4 commits de création (13:06-13:52) précèdent
+TOUS les résultats de calibration connus pour ces hypothèses :
+- H1/L1 clôturée négative point 14-15, entrée "2026-08-29 (suite 11)" —
+  36/48 combos évalués, tous négatifs [-0,2594R ; -0,1081R], AUCUN
+  vainqueur retenu.
+- H3/L3 et H4/L4 : clôturées via le raccourci du point 14 (même règle
+  qu'H1 — aucune moyenne brute positive sur la grille), entrée
+  "2026-08-29 (suite 21)", commit `b82d3cf` 23:16:37 — AUCUN vainqueur
+  retenu pour aucune des deux.
+- H5/L5 : clôturée via le test d'information obligatoire (corrélation
+  sens de cassure / R final indiscernable de zéro), même entrée
+  "suite 21" — AUCUN vainqueur retenu, calibration/gate/confirmation
+  jamais lancées, conformément à sa propre clause de pré-enregistrement.
+
+**Aucune des 4 valeurs codées n'a donc jamais pu être "choisie après
+avoir vu un résultat" : elles datent toutes de 4 à 10 heures AVANT le
+premier résultat de grille de leur propre hypothèse, et n'ont plus
+bougé depuis.**
+
+### Verdict par hypothèse
+
+- **H1/L1** : `MA_PERIOD=200`, `ADX_THRESHOLD=25.0`, `K_ATR=2.0`.
+  **CLEAN.** Valeur de création jamais modifiée, antérieure de ~2h à la
+  clôture négative documentée, aucun override en base. Pas un
+  "vainqueur" — H1 n'en a pas — un placeholder pré-résultat qui tourne
+  en démo pour la seule collecte forward, conformément au point 9 du
+  pré-enregistrement. Grille elle-même (`{100,150,200,250}` ×
+  `{20,25,30}` × `{1.5,2.0,2.5,3.0}` = 48, dont 36 réellement évaluées
+  après le bug de lookback point 16) conforme mot pour mot à
+  `docs/HYPOTHESES.md`.
+- **H3/L3** : `RETRACEMENT_RATIO=0.5`, `CONFIRMATION_BARS=2`,
+  `STOP_BUFFER_ATR=0.5`. **CLEAN.** Même raisonnement, création
+  13:42:42, close négative (raccourci point 14) à 23:16:37, aucune
+  modification entre-temps, aucun override en base. Grille
+  (`{0.382,0.5,0.618}` × `{1,2,3}` × `{0.5,1.0}` = 18) conforme au
+  texte.
+- **H4/L4** : `PIVOT_FRACTAL_N=3`, `MAX_PIVOT_DISTANCE_BARS=40`,
+  `STOP_ATR_MULT=1.5`. **CLEAN.** Même raisonnement, création 13:06:50,
+  close négative (raccourci point 14) à 23:16:37, aucune modification
+  entre-temps, aucun override en base. Grille (`{2,3,4}` × `{20,40,60}`
+  × `{1.0,1.5,2.0}` = 27) conforme au texte.
+- **H5/L5** : `COMPRESSION_PERCENTILE=20`, `COMPRESSION_DURATION=10`,
+  `STOP_BUFFER_PCT=0.25`. **CLEAN.** Même raisonnement, création
+  13:52:22, close via test d'information à 23:16:37, aucune
+  modification entre-temps, aucun override en base. Grille
+  (`{10,20,30}` × `{5,10,15}` × `{0.0,0.25,0.5}` = 27) conforme au
+  texte.
+
+**Aucun verdict (d) sur cet audit.** Les 4 hypothèses tournent
+exactement sur leur configuration de création, jamais retouchée,
+antérieure à tout résultat — pas de p-hacking, pas de dérive
+silencieuse. **Aucune correction de `docs/HYPOTHESES.md` nécessaire** :
+contrairement au cas H2 (résolution), le texte du pré-enregistrement ne
+prétend nulle part qu'une valeur précise de la grille est "la" valeur
+déployée pour H1/H3/H4/H5 — il liste des grilles candidates, jamais un
+vainqueur pour ces quatre — donc aucune affirmation écrite n'entre en
+contradiction avec le déployé.
+
+**Limite honnête inchangée** : cet audit couvre les 12 variables
+`OVERRIDABLE` (3 par hypothèse × 4) et les bornes de grille associées.
+Il ne couvre pas une vérification indépendante de la logique
+d'implémentation elle-même (`evaluate_entry`, calcul des indicateurs)
+au-delà des constantes déjà vérifiées FIGÉES dans l'entrée précédente.
