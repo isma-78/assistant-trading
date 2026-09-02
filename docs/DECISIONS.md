@@ -10166,3 +10166,66 @@ exigence de couverture totale — même traitement que
   nouveau compte. 2FA activée en compensation. Risque résiduel documenté
   en détail dans `CLAUDE.md` (le fichier `.session` donne accès à
   l'intégralité du compte personnel, pas seulement à Station X).
+
+## 2026-09-02 — Suite du chantier post-lookahead (docs/Prompt_Apres_Lookahead_31-08.md)
+
+### Point 1 — Quelles hypothèses sont réellement touchées par le bug de `_advance_confirming_pointer` ?
+
+Analyse code à l'appui (`src/backtest_engine.py::replay_hypothesis`, docstring
+et corps de boucle) : le pointeur bogué est traversé par DEUX mécanismes
+distincts, tous deux appelés depuis la même fonction —
+`confirming_bars`/`require_regime_confirmation` (confirmation croisée
+US30/US100) ET `extra_resolution_bars` (résolutions supplémentaires du même
+actif, H2 uniquement). Les deux utilisent `_advance_confirming_pointer`,
+donc les deux étaient exposés au lookahead avant le correctif du
+30/08/2026.
+
+- **H2** : `src/hypothesis2_executor.py:117` — `extra_resolutions=
+  ["HOUR_4", "DAY"]`. Déjà établi (commit c753ce5) : **TOUCHÉE**, résultat
+  CONFIRMÉ invalide.
+- **H3** : conçue dès l'origine avec confirmation croisée US30/US100
+  partagée avec H4 (`docs/HYPOTHESES.md` lignes 1431, 1594, 1718, 1756,
+  2494 — "H3 (Donchian breakout + confirmation croisée US30/US100)"). La
+  clôture négative "H3/L3 CLOS au raccourci point 14" (`docs/DECISIONS.md`
+  ligne ~873, 29/08/2026) a été mesurée avec ce mécanisme actif
+  (`require_regime_confirmation=True`, voir aussi
+  `scripts/_h3_hour4_holdout_gross.py:55`,
+  `scripts/_h3_hour4_holdout_test.py:43`,
+  `scripts/_measure_h3_hour4_sigma.py:49`). **TOUCHÉE — tout son résultat
+  est invalide**, y compris le raw mean négatif : ce n'est pas parce que
+  le verdict est négatif que le lookahead ne l'a pas affecté (l'argument
+  "le lookahead ne peut qu'améliorer" ne s'applique qu'aux hypothèses
+  mono-résolution qui n'ont jamais touché ce pointeur — H3 l'a touché,
+  point final). Nécessite recalibration au point 3.
+- **H4** : même mécanisme, partagé et compté une seule fois avec H3
+  (`docs/HYPOTHESES.md` ligne 1594, 1598, 1718). "H4/L4 CLOS au raccourci
+  point 14" (`docs/DECISIONS.md` ligne ~882) mesuré dans les mêmes
+  conditions. **TOUCHÉE**, même statut que H3. Nécessite recalibration au
+  point 3.
+- **H1** : exécutée via `src/trend_strategy.py`/`trend_executor.py`
+  (Flux B), mono-résolution HOUR pure (MA200 + Donchian(20)), aucune
+  trace de `require_regime_confirmation`/`extra_resolutions` dans ce
+  module. Vérifié par grep négatif. Clôture "négatif bien puissant".
+  **NON TOUCHÉE** — verdict négatif VALIDE, ne pas retoucher.
+- **H5** : `docs/HYPOTHESES.md` ligne 2513 — "régime structurel + RSI(14)/50,
+  pas de confirmation croisée", explicite dans sa propre définition.
+  Vérifié par grep négatif sur `require_regime_confirmation`/
+  `extra_resolutions` dans `hypothesis5_strategy_v2.py`/
+  `hypothesis5_executor.py` : aucune occurrence. Clôture "au test
+  d'information". **NON TOUCHÉE** — verdict VALIDE, ne pas retoucher.
+
+**Verdict du point 1** : 3 hypothèses à recalibrer (H2, H3, H4), 2 dont le
+verdict négatif est déjà définitif et ne demande aucune action (H1, H5).
+
+**Point de vigilance découvert en cours de route, distinct du point 1 mais
+consigné ici pour ne pas le perdre** : les exécuteurs LIVE actuels de H3/H4
+(`src/hypothesis3_executor.py:104`, `src/hypothesis4_executor.py:104`)
+tournent avec `require_regime_confirmation=False` — c'est-à-dire une
+configuration SIMPLIFIÉE, différente de celle qui a produit leur verdict
+de recherche (`True`). Cohérent avec la règle du point 7 du prompt ("les 5
+hypothèses tradent sur les 9 actifs, sans exception, quel que soit leur
+statut de recherche") : H3/H4 continuent de tourner en direct pour la
+collecte de données même après clôture recherche, mais sous une forme
+allégée qui n'a jamais été validée ni invalidée par aucun backtest propre.
+Ne pas confondre "ce qui tourne en direct aujourd'hui" avec "ce que le
+verdict de recherche a mesuré" — ce sont deux configurations différentes.
