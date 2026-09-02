@@ -10425,3 +10425,241 @@ pour H2/H3/H4, PUIS dépenser l'essai de confirmation unique sur
 n'est pas fait, la borne du point 6 ci-dessus (suspension si aucun
 candidat qualifié ET forward H2 négatif à n≥30) reste en attente de son
 premier terme.
+
+
+## 2026-09-02 — Session dédiée et supervisée : recalibration H2/H3/H4 au moteur corrigé (point 3 du chantier précédent, VPS)
+
+Exécutée depuis le VPS (`assistant@163.172.189.239`), pas depuis le
+poste local, sur demande explicite d'Ismaël — la donnée en cache et le
+compte Capital.com partagé avec les 6 process live y vivent tous les
+deux. VPS mis à jour depuis `9024fff` jusqu'à `26f11f3` (4 commits du
+chantier précédent, pull sans redémarrage des 6 process — code déjà
+chargé en mémoire non affecté). Suite verte confirmée après pull :
+1221/1221.
+
+### Point 0 — Inventaire `data/historical/` avant tout téléchargement
+
+35 fichiers, 359M, déjà en cache sur le VPS pour les 9 actifs (8
+historiques + CHFJPY) à HOUR/HOUR_4/DAY/MINUTE_15 — couverture
+2017-05/07 → 2026-08-28/30 sur HOUR/HOUR_4/DAY pour les 8 premiers
+actifs (largement suffisant pour la découverte 2019-2022 et la
+confirmation 2023-2024.06). **Seul manquant réel : `CHFJPY_DAY.json`,
+absent du cache** — téléchargé (1 seul appel API, 854 bougies, jusqu'à
+2023-12-08 — voir plus bas pourquoi cette date compte). Aucun autre
+téléchargement n'a été nécessaire : tout le reste de la recalibration a
+tourné en lecture pure du cache, zéro appel réseau supplémentaire.
+
+### Point 1 — Coordination avec les 6 exécuteurs
+
+Logs `logs/hypothesis*_executor.log` trouvés **périmés** (dernière
+écriture 25/08/2026) : les 6 process actuels (relancés le 01/09/2026
+19:55 UTC, tmux) écrivent sur un pty tmux, pas sur ces fichiers —
+mesure de référence prise sur `tmux capture-pane` à la place. Baseline
+avant téléchargement : 66-74 occurrences de "429" sur les 3000
+dernières lignes de scrollback de CHAQUE exécuteur (H2/H3/H4/H5) — donc
+un phénomène **systémique, partagé entre process**, pas concentré sur
+H2 comme le diagnostic initial du point 5 (chantier précédent) le
+suggérait à partir des seuls logs H2. Point de vigilance noté, hors
+périmètre de cette session (le point 5 du chantier précédent a corrigé
+la cause spécifique à H2 — le retry manquant sur ses 2 appels
+supplémentaires — pas la contention globale du compte, qui reste un
+sujet à part entière). Téléchargement CHFJPY/DAY effectué en un seul
+appel (854 bougies < seuil de pagination 1000, donc pas de boucle) ;
+delta de 429 observé sur le scrollback H2 (+2) et H3 (+11) dans la
+minute suivante — cohérent avec le bruit de fond déjà mesuré en
+baseline, pas attribuable de façon fiable à cet unique appel. Aucun
+autre téléchargement prévu dans cette session (voir point 0) : la règle
+d'arrêt du point 1c (abandon immédiat si 429 côté exécuteurs) n'a donc
+plus eu à s'appliquer après cette étape.
+
+### Correction du périmètre établi au point 1 du chantier précédent — H3 et H4 ne sont PAS concernés par cette recalibration
+
+Le point 1 du chantier précédent (`docs/DECISIONS.md`, entrée du
+02/09/2026 "point 1 - determine hypotheses affected") concluait que
+H2/H3/H4 étaient tous invalides via la confirmation croisée boguée. En
+préparant l'exécution de cette session, lecture du code réellement
+déployé aujourd'hui (`src/hypothesis3_executor.py`,
+`src/hypothesis4_executor.py`, en-têtes de docstring) montre que **H3
+et H4 ont chacun subi une REFONTE COMPLÈTE le 29/08/2026** ("REFONTE
+L3"/"REFONTE L4", pré-enregistrement du même jour dans
+`docs/HYPOTHESES.md`), AVANT même la découverte du bug de lookahead
+(30/08/2026) :
+- **H3 (L3, `hypothesis3_strategy_v2.py`)** : ancien déclencheur
+  MA200+Donchian ARCHIVÉ, remplacé par un pullback en tendance
+  réutilisant le régime structurel interne d'`ict_strategy` (même
+  actif, mono-résolution). `require_regime_confirmation=False`,
+  explicitement "changé depuis l'ancien H3" (voir docstring, ligne
+  ~17).
+- **H4 (L4, `hypothesis4_strategy_v2.py`)** : ancien déclencheur
+  retour-à-la-moyenne/Bollinger ARCHIVÉ, remplacé par une divergence
+  RSI/OBV sur pivots fractals causaux. `require_regime_confirmation=False`
+  également, "contrairement à l'ancien H4".
+
+`backtest_engine.replay_hypothesis` ne déclenche JAMAIS
+`_advance_confirming_pointer` (la fonction buguée puis corrigée) tant
+que `require_regime_confirmation` est faux ET `extra_resolution_bars`
+est vide — les deux conditions sont fausses pour L3 et L4, quelle que
+soit la date à laquelle leur calibration a tourné. **Conclusion : les
+stratégies H3/H4 ACTUELLEMENT DÉPLOYÉES n'ont jamais été exposées au
+bug de lookahead, ni avant ni après le correctif — rien à recalibrer
+sous ce chantier.** Les anciennes versions H3/H4 (celles qui, elles,
+utilisaient la confirmation croisée US30/US100 et ÉTAIENT concernées
+par le bug) sont archivées (`archive/hypothesis3_strategy.py`,
+`archive/mean_reversion_strategy.py`), mortes, ne tournent plus nulle
+part — recalibrer du code qui ne sera plus jamais exécuté aurait
+consommé du temps de calcul et, pire, potentiellement une part du
+budget invariant #10, pour aucun bénéfice opérationnel.
+
+Point distinct, non traité ici (hors périmètre du bug de lookahead) :
+L3/L4 ont leur propre pré-enregistrement du 29/08/2026 et leurs propres
+garde-fous de calibration/confirmation (points F/G/H pour L3, garde-fou
+OBV pour L4) — statut de calibration de CES versions non vérifié dans
+cette session, à traiter séparément si besoin.
+
+**Conséquence directe et non négociable sur le compteur d'essais** :
+puisque seule H2 a effectivement besoin d'une confirmation sur
+2023-2024.06 dans cette session, **un seul essai de confirmation est
+dépensé** (pas deux ni trois) — la lecture "une entrée... UNE SEULE
+FOIS de plus" du chantier précédent (singulier) était donc littéralement
+correcte sans même avoir besoin de trancher l'ambiguïté anticipée :
+m passe de 29 à 30 (z=2,9352), pas à 31.
+
+### Découverte supplémentaire — H2 déployée ne correspond PAS à son propre pré-enregistrement
+
+En préparant la grille de recalibration, lecture de
+`docs/HYPOTHESES.md` §"H2 / L2 — Confluence multi-TF"
+(pré-enregistrement du 29/08/2026) face au code réellement déployé
+(`src/hypothesis2_executor.py`) révèle un écart non documenté ailleurs :
+
+| | Pré-enregistré (`docs/HYPOTHESES.md`) | Déployé (`src/hypothesis2_executor.py`) |
+|---|---|---|
+| Résolution native | MINUTE_15 | HOUR (`resolution="HOUR"`, ligne 105) |
+| Résolutions de confirmation | H1 (M15×4) + H4 (M15×16), ré-échantillonnées depuis M15 | HOUR_4 + DAY, téléchargées indépendamment (`extra_resolutions=["HOUR_4","DAY"]`, ligne 117) |
+| Univers | 8 actifs, **CHFJPY EXCLUE** (M15 CHFJPY ne remonte qu'au 2024-01-01) | 9 actifs, CHFJPY INCLUSE (`HYPOTHESIS2_ASSETS`, ligne 48) |
+
+Le combo confirmé puis invalidé (EMA=20/RSI=55/N_TF=3/SCORE=1.0,
++0,2431R) a tourné sur la configuration DÉPLOYÉE (HOUR/HOUR_4/DAY, 9
+actifs), pas sur celle écrite dans le pré-enregistrement — la
+confluence "M15+H1+H4" décrite en prose dans le docstring de
+`hypothesis2_strategy_v2.py` (ligne ~16, "extra_resolutions=["HOUR",
+"HOUR_4"]") est elle-même incohérente avec le code qu'elle décrit (texte
+non mis à jour après un changement ultérieur — deuxième occurrence de
+ce type de dérive documentaire trouvée dans ce fichier, voir aussi la
+docstring de tête déjà obsolète notée par le chantier précédent).
+
+**Décision prise pour cette session, à valider explicitement par
+Ismaël** : recalibrer sur la configuration RÉELLEMENT DÉPLOYÉE
+(HOUR/HOUR_4/DAY), pas sur celle du pré-enregistrement littéral —
+c'est cette configuration qui a produit le verdict invalidé, c'est
+elle qui tourne en direct aujourd'hui, et re-tester une config jamais
+implémentée n'aurait répondu à aucune question opérationnelle réelle.
+Les VALEURS de la grille (`ema_period`, `rsi_threshold`, `n_tf`,
+`score_threshold`, m=24) restent reprises telles quelles du
+pré-enregistrement — ce sont des bornes de variables, indépendantes de
+la résolution utilisée. **CHFJPY exclue de cette recalibration**, mais
+pour une raison vérifiée indépendamment plutôt que celle écrite dans le
+pré-enregistrement : `CHFJPY_DAY.json` (résolution réellement
+nécessaire côté déployé) ne remonte qu'au 2023-12-08 sur ce compte
+démo, cassant la même exigence de composition identique
+découverte/confirmation que le pré-enregistrement protégeait déjà pour
+une raison différente (M15). Cet écart de configuration
+pré-enregistrement/déployé est signalé ici pour action côté
+gouvernance du projet — il dépasse le périmètre du bug de lookahead et
+n'est pas résolu unilatéralement par cette session (invariant #10 : la
+CORRECTION d'un pré-enregistrement après lecture du code n'est pas
+équivalente à une nouvelle variable choisie après avoir regardé la
+donnée, mais reste un changement de méthodologie qui mérite une
+décision explicite, pas un silence).
+
+### Point 2 — Recalibration H2 au moteur corrigé, grille pré-enregistrée m=24, fenêtre TRAIN 2019-01-01 → 2020-12-31
+
+Script `scripts/_recalibrate_h2_lookahead_fix.py` (nouveau, ne persiste
+rien en base, lecture pure du cache, aucun appel réseau). Grille reprise
+telle quelle de `docs/HYPOTHESES.md` §H2/L2 : `ema_period` ∈ {20,50,100}
+× `rsi_threshold` ∈ {50,55} × `n_tf` ∈ {2,3} × `score_threshold` ∈
+{0,6667, 1,0}, m=24. 8 actifs (CHFJPY exclue, voir ci-dessus), résolution
+HOUR native + HOUR_4/DAY extras (config réellement déployée). Moteur
+corrigé (`c753ce5`), `own_bar_duration_seconds=3600`,
+`extra_resolution_seconds={HOUR_4:14400, DAY:86400}`, `lookback=220`.
+
+**Résultat, sans ambiguïté** : **les 24 combos sur 24 ont une moyenne R
+BRUTE strictement négative** sur TRAIN, de -0,0486R (EMA=50/RSI=55/
+N_TF=3/SCORE=1,0, n=555) à -0,2710R (EMA=100/RSI=50/N_TF=2/SCORE=0,6667,
+n=1750) — tous largement au-dessus du plancher n≥200 (549 à 1750 trades
+par combo). Aucune moyenne brute positive nulle part dans la grille.
+Détail complet des 24 lignes conservé dans la sortie du script (non
+reproduit ici, reproductible à l'identique — script déterministe, aucun
+aléa).
+
+**COURT-CIRCUIT APPLIQUÉ (règle du chantier précédent, point 3)** :
+aucune moyenne brute positive → CV imbriquée/gate de puissance NON
+exécutés (rien à sélectionner), **H2 CLOSE côté recherche, verdict
+NÉGATIF**, sans avoir besoin d'aucune correction statistique
+supplémentaire — le signal est négatif avant même la question de
+significativité.
+
+### Point 3 — Confirmation 2023-2024.06 : NON DÉCLENCHÉE, essai NON dépensé
+
+Puisque H2 ne franchit pas le court-circuit du point 2 (aucune moyenne
+brute positive), l'étape HOLDOUT (2021-2022) et l'étape CONFIRMATION
+(2023-01-01 → 2024-06-14) prévues par le protocole n'ont jamais été
+exécutées — le script s'arrête explicitement avant, par construction
+(`return` immédiat après le court-circuit, vérifié dans la sortie :
+aucune ligne "ETAPE 2"/"ETAPE 3" imprimée).
+
+**Le compteur cumulatif d'essais reste à 29, PAS 30** : la fenêtre
+2023-01-01 → 2024-06-14 n'a été touchée par AUCUN calcul dans cette
+session (ni par H2, dont le verdict tombe avant, ni par H3/H4, hors
+périmètre — voir ci-dessus). Lecture stricte du chantier précédent
+("après CET ESSAI, la fenêtre est close définitivement, quel que soit
+le résultat") : l'essai n'ayant pas eu lieu, il n'y a rien à clore. **La
+fenêtre 2023-2024.06 reste formellement disponible pour un futur usage
+autorisé unique**, sous la même règle qu'avant cette session — décision
+de la clore quand même dès maintenant (par précaution, pour ne plus y
+revenir) laissée explicitement à Ismaël plutôt que tranchée
+unilatéralement ici.
+
+### Point 4/6 — Règle d'arrêt : NON DÉCLENCHÉE, condition insuffisamment remplie
+
+Règle du chantier précédent : suspension du programme de recherche par
+hypothèses SEULEMENT SI (a) aucune des trois (H2/H3/H4) ne qualifie ET
+(b) le forward de H2 est négatif à n≥30.
+- (a) est vraie pour H2 (verdict négatif net, voir point 2) ; sans objet
+  pour H3/H4 (jamais concernées par ce bug, statut de calibration
+  propre à L3/L4, non évalué ici — ne pas les compter comme
+  "disqualifiées" par CE chantier, ce serait inexact).
+- (b) est **FAUSSE au 02/09/2026** : `summarize_h2_forward` (cutoff réel
+  du code = 2026-08-30T07:02:15Z, pas le 31/08 mentionné dans le
+  prompt reçu — écart mineur de date, code fait foi) retourne **n=0**,
+  très en-dessous de n≥30 — aucun verdict forward possible à ce stade
+  (`verdict='aucun_verdict_avant_n53'`). Zéro trade H2 fermé depuis le
+  30/08/2026, y compris après le correctif de réauthentification du
+  01/09/2026 (`9024fff`) et le correctif 429 du point 5 (`9733cb6`,
+  pas encore déployé en direct — voir remarque ci-dessous).
+
+**Conclusion : la règle d'arrêt ne s'applique PAS aujourd'hui** — la
+condition (a) est remplie pour H2 seul, mais (b) ne l'est pas (donnée
+insuffisante, pas négative). Aucune suspension prononcée. Ce qui
+continue, sans changement : les 5 hypothèses tradent en démo sur leurs
+univers respectifs, la fenêtre forward H2 accumule (actuellement à
+zéro, à surveiller), le centre de gravité du projet reste la fidélité
+du simulateur / attribution / coûts réels (compteurs inchangés, voir
+ci-dessous) plutôt qu'une sixième hypothèse.
+
+**Remarque opérationnelle notée en passant, hors périmètre d'action de
+cette session** : le correctif 429 de H2 (`9733cb6`, chantier
+précédent) est présent dans le dépôt du VPS depuis le `git pull`
+d'aujourd'hui mais n'a pas été déployé en direct (aucun redémarrage
+d'exécuteur autorisé dans cette session, conformément à l'exclusion
+explicite). Le process `hypothesis2_executor` en cours d'exécution
+tourne donc toujours sur l'ancien code sans retry sur les 2 appels
+supplémentaires. À faire au prochain redémarrage supervisé.
+
+### Point 7 (suite) — Compteurs de suivi parallèle, inchangés depuis le 02/09/2026 matin
+
+Aucune nouvelle mesure prise dans cette session sur ces compteurs (hors
+périmètre) — repris tels quels de l'entrée précédente du même jour :
+fidélité 39 paires (≥30), aucun verdict (bootstrap par blocs calendaires
+inapplicable, un seul mois calendaire) ; Mesures A/B, étape 3,
+attribution inchangées. Forward H2 : n=0 (voir point 4/6 ci-dessus,
+chiffre réactualisé dans cette session via `summarize_h2_forward`).
