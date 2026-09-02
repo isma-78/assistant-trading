@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.capital_client import CapitalApiError
 from src.config import ConfigError
 from src.db import connection_scope, get_connection, init_db
 from src.market_data import Candle
@@ -150,6 +151,49 @@ def test_generate_and_queue_signal_extra_resolutions_fetched_and_forwarded(tmp_p
     assert calls[0].kwargs["resolution"] == "MINUTE_15"
     assert calls[1] == (("EURUSD",), {"resolution": "HOUR", "max_bars": EXTRA_RESOLUTION_CANDLE_COUNT})
     assert calls[2] == (("EURUSD",), {"resolution": "HOUR_4", "max_bars": EXTRA_RESOLUTION_CANDLE_COUNT})
+
+
+def test_generate_and_queue_signal_survives_transient_429_on_native_resolution(tmp_path, monkeypatch):
+    # Point 5 (02/09/2026, voir docs/DECISIONS.md, "429 concentres sur H2") :
+    # un seul 429 transitoire sur l'appel natif ne doit plus faire
+    # remonter l'exception (retry_with_backoff l'absorbe) - sans quoi le
+    # cycle entier de la boucle appelante etait saute pour TOUS les
+    # actifs suivants, pas seulement celui-ci.
+    monkeypatch.setattr("src.retry.time.sleep", lambda *_: None)
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.side_effect = [CapitalApiError("429"), {"prices": []}]
+    _generate_and_queue_signal(
+        db_path, client, "EURUSD",
+        source="hypothesis3", resolution="MINUTE_15", entry_fn=_no_entry_fn,
+        channel="test_channel", hypothesis_label="Hypothèse #3",
+    )
+    assert client.get_prices.call_count == 2
+
+
+def test_generate_and_queue_signal_survives_transient_429_on_extra_resolution(tmp_path, monkeypatch):
+    # Meme protection sur les appels extra_resolutions (H2/L2) — c'est
+    # precisement la ou la concentration de 429 a ete observee (H2 fait
+    # 3x plus d'appels par actif par cycle que les autres hypotheses).
+    monkeypatch.setattr("src.retry.time.sleep", lambda *_: None)
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_prices.side_effect = [
+        {"prices": []},  # natif MINUTE_15, ok
+        CapitalApiError("429"),  # extra HOUR_4, echoue une fois
+        {"prices": []},  # extra HOUR_4, retry ok
+    ]
+    captured = []
+    _generate_and_queue_signal(
+        db_path, client, "EURUSD",
+        source="hypothesis2_v2", resolution="MINUTE_15", entry_fn=_multi_resolution_entry_fn_factory(captured),
+        channel="hypothesis2_channel", hypothesis_label="Hypothèse #2",
+        extra_resolutions=["HOUR_4"],
+    )
+    assert client.get_prices.call_count == 3
+    assert len(captured) == 1  # le signal a bien ete evalue malgre le 429 transitoire
 
 
 def test_generate_and_queue_signal_drops_in_progress_candle_on_extra_resolutions(tmp_path):

@@ -242,7 +242,27 @@ def _generate_and_queue_signal(
         if is_expensive_hour(asset, current_hour, expensive_hours_by_asset):
             return
 
-    candles = get_candles(client, asset, resolution=resolution, count=CANDLE_COUNT)
+    # Chaque `get_candles` protégé par `retry_with_backoff` (02/09/2026,
+    # point 5, voir docs/DECISIONS.md — "429 concentrés sur H2") : H2 est
+    # la SEULE hypothèse à faire 3 appels réseau par actif par cycle (1
+    # natif + 2 `extra_resolutions`, HOUR_4/DAY) contre 1 pour H1/H3/H4/H5
+    # — sur 9 actifs, ça fait jusqu'à 27 appels rapprochés par cycle, prés
+    # du seuil de 429 mesuré empiriquement (~16 requêtes rapprochées, voir
+    # scripts/download_historical_data.py). Avant ce correctif, un seul
+    # 429 sur N'IMPORTE LEQUEL des 3 appels d'UN SEUL actif remontait
+    # jusqu'au `except Exception` du `while True` appelant (aucun
+    # try/except ici) et sautait le cycle ENTIER — pas seulement cet
+    # actif : tous les actifs suivants dans `assets` ET la gestion des
+    # positions ouvertes de ce tour (`reconcile_ghost_positions`/
+    # `check_pending_fills`/`manage_open_trades`) étaient reportés au
+    # cycle suivant. Lecture pure (jamais un ordre), donc sûre à retenter
+    # (voir docs/DECISIONS.md, retry.py — jamais utilisé sur un envoi
+    # d'ordre). Ne change rien pour H1/H3/H4/H5 (1 seul appel, déjà
+    # rarement 429, mais gagnent la même protection sans coût).
+    candles = retry_with_backoff(
+        lambda: get_candles(client, asset, resolution=resolution, count=CANDLE_COUNT),
+        exceptions=(CapitalApiError, requests.exceptions.RequestException),
+    )
     if extra_resolutions:
         # `drop_incomplete_last_candle` (30/08/2026, voir docs/DECISIONS.md,
         # audit lookahead multi-timeframe H2) : le broker renvoie
@@ -256,7 +276,12 @@ def _generate_and_queue_signal(
         # aux 5 hypothèses depuis l'origine — hors périmètre de cet audit.
         extra_candles = [
             drop_incomplete_last_candle(
-                get_candles(client, asset, resolution=extra_resolution, count=EXTRA_RESOLUTION_CANDLE_COUNT),
+                retry_with_backoff(
+                    lambda extra_resolution=extra_resolution: get_candles(
+                        client, asset, resolution=extra_resolution, count=EXTRA_RESOLUTION_CANDLE_COUNT,
+                    ),
+                    exceptions=(CapitalApiError, requests.exceptions.RequestException),
+                ),
                 extra_resolution,
             )
             for extra_resolution in extra_resolutions

@@ -10269,3 +10269,55 @@ correction est sous 0,10R, la voie forward seule ne conclura pas dans un
 délai utile (>1 an). C'est précisément pourquoi l'essai de confirmation
 unique du point 2/3 (2023-2024.06, moteur corrigé) vaut d'être dépensé —
 lui seul peut trancher plus vite qu'un an si l'effet réel est modeste.
+
+### Point 5 — 429 concentrés sur H2 : cause racine trouvée et corrigée, taux résiduel PAS mesurable depuis ce poste
+
+**Cause racine, code à l'appui** (`src/technical_strategy_executor.py::
+_generate_and_queue_signal`) : H2 est la SEULE hypothèse à faire 3 appels
+réseau par actif par cycle (`get_candles` natif MINUTE_15 + 2
+`extra_resolutions` HOUR_4/DAY) contre 1 seul pour H1/H3/H4/H5. Sur les 9
+actifs de `HYPOTHESIS2_ASSETS`, ça fait jusqu'à 27 appels rapprochés par
+cycle (~60s), contre 9 pour les autres hypothèses — proche du seuil de
+429 mesuré empiriquement à ~16 requêtes rapprochées
+(`scripts/download_historical_data.py`, `THROTTLE_SECONDS`). AUCUN de ces
+3 appels n'était protégé par `retry_with_backoff` (contrairement à la
+sonde de connectivité générale, déjà protégée depuis le 24/08/2026) —
+avant ce correctif, un seul 429 sur N'IMPORTE LEQUEL des 3 appels d'UN
+SEUL actif remontait, sans `try/except` local, jusqu'au `except Exception`
+du `while True` de `run_technical_strategy_loop`, et sautait le cycle
+ENTIER : pas seulement l'actif en échec, mais TOUS les actifs suivants
+dans la liste ET la gestion des positions ouvertes de ce tour
+(`reconcile_ghost_positions`/`check_pending_fills`/`manage_open_trades`),
+reportée au cycle suivant. EURUSD/GBPUSD (4e/5e sur 9 dans
+`HYPOTHESIS2_ASSETS`, après GOLD/US100/US30 = 9 appels déjà passés) sont
+statistiquement les premiers actifs à cumuler assez d'appels rapprochés
+pour franchir le seuil — explique la concentration observée sans avoir
+besoin d'invoquer une particularité de ces deux paires.
+
+**Correctif appliqué** : les 3 `get_candles` (natif + chaque
+`extra_resolution`) sont désormais chacun enveloppés dans
+`retry_with_backoff` (mêmes `exceptions`/attempts/délais que la sonde de
+connectivité existante) — lecture pure, jamais un ordre, donc sûr à
+retenter (même règle que documentée dans `retry.py`). H1/H3/H4/H5
+gagnent la même protection sans coût (1 seul appel, déjà rarement 429).
+2 nouveaux tests (`test_generate_and_queue_signal_survives_transient_
+429_on_native_resolution`, `..._on_extra_resolution`,
+`tests/test_technical_strategy_executor.py`) vérifient qu'un 429
+transitoire unique n'interrompt plus l'évaluation. Suite complète :
+1221/1221 tests verts (était 1219 avant ce point).
+
+**Ce qui N'EST PAS mesuré ici, honnêtement** : "quantifie le taux de
+perte réelle (signaux définitivement perdus, pas seulement retardés)"
+demandé au point 5 exige les logs de production (VPS
+`assistant@163.172.189.239`, `logs/`) — inaccessibles depuis ce poste de
+développement dans cette session. Le nombre "14 occurrences en 13
+minutes" cité dans le prompt d'origine vient de cette même source, non
+re-vérifiable ici. Ce qui EST établi analytiquement : avec
+`retry_with_backoff` (jusqu'à 3 tentatives, pauses 1s/2s), un 429
+transitoire n'aboutit à une perte DÉFINITIVE de signal que si les 3
+tentatives échouent toutes dans la fenêtre de ~3s — un scénario
+nettement moins probable qu'un simple 429 isolé, mais pas nul (rate-limit
+prolongé, panne réseau soutenue). **Divergence live/backtest résiduelle
+CONNUE et NON ÉLIMINÉE, à consigner explicitement** : le taux de perte
+définitive résiduel après ce correctif reste à mesurer sur les prochains
+jours de logs live (VPS) — pas de chiffre inventé ici faute de donnée.
