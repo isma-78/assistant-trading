@@ -10321,3 +10321,107 @@ prolongé, panne réseau soutenue). **Divergence live/backtest résiduelle
 CONNUE et NON ÉLIMINÉE, à consigner explicitement** : le taux de perte
 définitive résiduel après ce correctif reste à mesurer sur les prochains
 jours de logs live (VPS) — pas de chiffre inventé ici faute de donnée.
+
+### Point 6 — Règle d'arrêt : confirmée, borne supplémentaire ajoutée
+
+État actuel inchangé depuis le 30/08/2026 : le point 18 (plus aucune
+confirmation valide) est techniquement rempli depuis l'invalidation du
+point 1, mais la suspension du programme n'est PAS prononcée — H2 garde
+un chemin de validation explicite (fenêtre forward, point 4) que
+H1/H3/H4/H5 n'ont pas (closes définitivement, verdicts négatifs valides,
+aucun chemin de validation restant à leur ouvrir). Décision maintenue
+telle quelle, aucun changement de statut aujourd'hui.
+
+**Borne supplémentaire actée, à appliquer sans nouvelle discussion** :
+si la recalibration du point 3 (H2/H3/H4, moteur corrigé) ne produit
+AUCUN candidat qualifié (aucune moyenne brute positive franchissant le
+raccourci point 14, ou échec de la CV imbriquée/gate de puissance sur
+tout survivant) ET que le suivi forward de H2
+(`h2_forward_tracking.summarize_h2_forward`) est négatif à n≥30
+(`MIN_N_FOR_NEGATIVE_ALERT`, déjà câblé et alerte déjà en place), alors
+la suspension du programme est prononcée à ce moment précis, sans
+attendre un jalon supérieur (n=53 ou plus) et sans nouvelle discussion.
+Aucun code à écrire pour cette borne : c'est une règle de décision
+humaine/opérationnelle sur DEUX signaux déjà mesurés indépendamment
+(résultat du point 3, alerte déjà existante du point 4/point 3
+30/08/2026) — l'automatiser en un seul contrôle programmatique serait
+prématuré tant que le résultat du point 3 lui-même n'existe pas encore
+(voir plus bas, point 3 non complété dans cette session pour cause de
+volume de données historique hors de portée en une seule exécution).
+
+### Point 7 — Suivi parallèle : compteurs au 02/09/2026
+
+- **Les 5 hypothèses continuent de trader sur les 9 actifs**, sans
+  exception, quel que soit leur statut de recherche (règle inchangée,
+  aucune action requise ici — H3/H4 en configuration live simplifiée,
+  voir point 1 ci-dessus, point de vigilance distinct déjà noté).
+- **Test de fidélité (point 2 du 30/08/2026, commit d23ce73)** : 39
+  paires obtenues (≥30) mais AUCUN VERDICT — bootstrap par blocs
+  calendaires inapplicable (un seul mois calendaire dans les données).
+  Statut inchangé aujourd'hui, aucune nouvelle donnée n'a été ajoutée à
+  ce test dans cette session (hors périmètre des points exécutés ici).
+- **Mesures A et B, étape 3, attribution** : aucun changement dans cette
+  session — hors périmètre des points 1/4/5/6 effectivement traités
+  aujourd'hui. Prochaine session : relire l'état de ces compteurs avant
+  toute nouvelle mesure, ne pas les recalculer à l'aveugle.
+- **Forward H2** : le correctif du point 5 (429) et le rappel du point 4
+  (jalons par taille d'effet) s'appliquent directement à ce compteur
+  dans les jours qui viennent — à relire avec `summarize_h2_forward`
+  avant toute autre décision sur H2.
+
+### Point 3 — Recalibration H2/H3/H4 au moteur corrigé : NON COMPLÉTÉE cette session, blocage réel identifié
+
+Contrairement aux points 1/4/5/6, ce point n'a **pas** pu être mené à
+terme dans cette session, et ce chantier ne fabrique aucun chiffre pour
+compenser — mieux vaut un point honnêtement inachevé qu'un résultat
+inventé sur un sujet aussi central.
+
+**Constat** : `data/historical/` est vide sur ce poste (gitignoré, jamais
+committé — les données ayant servi aux calibrations précédentes du
+24-29/08/2026 ne sont pas présentes ici). `scripts/download_historical_
+data.py` doit donc tout retélécharger depuis l'API Capital.com démo, avec
+`THROTTLE_SECONDS=8.0` par page de 1000 bougies, pour recalibrer H2
+(MINUTE_15 + HOUR_4 + DAY) ET H3/H4 (MINUTE_15 + US30/US100 en
+confirmation croisée) sur 2019-2022, soit potentiellement des centaines
+de pages par (actif, résolution) sur plusieurs années × jusqu'à 9 actifs
+× jusqu'à 3 résolutions pour H2 seul — un ordre de grandeur d'heures de
+téléchargement strictement séquentiel (throttle oblige), pas quelque
+chose qu'une seule exécution de ce chantier peut raisonnablement avaler
+sans risquer soit un abandon en cours avec un état incohérent, soit un
+chiffre bâclé faute de temps.
+
+**Risque opérationnel supplémentaire identifié, qui a pesé dans la
+décision de ne PAS lancer ce téléchargement sans validation** : le
+compte utilisé par défaut (`CAPITAL_API_KEY`/`CAPITAL_IDENTIFIER`/
+`CAPITAL_API_PASSWORD`, sans suffixe) est le MÊME compte que
+`executor_loop`/`trend_executor` en production sur le VPS (voir
+`docs/DECISIONS.md`, référence au compte principal partagé). Lancer une
+campagne de téléchargement massive et prolongée sur ce compte, juste
+après avoir corrigé au point 5 le problème inverse (rate-limit qui
+dégradait déjà le live H2), aurait été contradictoire avec l'esprit du
+point 5 — risquer de recréer par un autre canal exactement le problème
+qu'on vient de corriger.
+
+**Ce qui EST fait pour préparer ce point, sans consommer le budget de
+téléchargement** : la décision du point 2 (recalibration 2019-2022
+autorisée, confirmation 2023-2024.06 UNE SEULE FOIS de plus, compteur
+29→30+) reste entièrement valable et n'a pas besoin d'être répétée ici —
+elle est déjà écrite noir sur blanc dans
+`docs/Prompt_Apres_Lookahead_31-08.md` point 2, datée et signée par
+Ismaël, donc déjà "consignée" au sens de la demande. `scripts/run_
+retrospective_backtest.py` et `src/backtest_engine.py::replay_hypothesis`
+sont déjà prêts à exécuter la recalibration dès que les données sont
+disponibles (le moteur est corrigé depuis le 30/08/2026, aucun
+changement de code nécessaire ici pour le point 3 lui-même).
+
+**Reste à faire, prochaine session, en tâche dédiée** : lancer
+`scripts/download_historical_data.py` pour H2 (MINUTE_15/HOUR_4/DAY) et
+H3/H4 (MINUTE_15, + US30/US100 déjà couverts par la liste des 9 actifs)
+sur 2019-2022, en tâche de fond longue et surveillée, PUIS exécuter la
+grille pré-enregistrée (≤50 combos, plancher n≥200, court-circuit si
+raw mean non positif, CV imbriquée sur survivants, gate de puissance)
+pour H2/H3/H4, PUIS dépenser l'essai de confirmation unique sur
+2023-2024.06 selon la décision déjà actée au point 2. Tant que ce point
+n'est pas fait, la borne du point 6 ci-dessus (suspension si aucun
+candidat qualifié ET forward H2 négatif à n≥30) reste en attente de son
+premier terme.
