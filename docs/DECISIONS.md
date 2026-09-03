@@ -11075,3 +11075,98 @@ défaillance API non absorbée par retry en ce moment. Ne préjuge pas de
 ce qui se passerait après une levée (contention systémique du compte
 toujours présente, voir tableau 429 ci-dessus), mais l'état immédiat
 observé n'est pas rouge.
+
+## 2026-09-03 (suite) — Levée du coupe-circuit par Ismaël (`/reprendre`) : le trou de 34h41 dans le forward H2 et les jalons recalculés
+
+Ismaël a envoyé `/reprendre` via le bot Telegram. Confirmé en base
+(`circuit_breaker_events`, id=3) : `cleared_at = 2026-09-03T05:06:02.228998+00:00`,
+`cleared_by = "ismael"`.
+
+### Fenêtre exacte de coupure
+
+- **Déclenchement** : 2026-08-31T18:24:07.954361 UTC (`triggered_at`,
+  déjà daté dans l'entrée du 28/08/2026 sur l'incident de
+  réauthentification).
+- **Levée** : 2026-09-03T05:06:02.228998 UTC.
+- **Durée** : **58h41min54s (≈ 2,446 jours)**, aucune minute de moins —
+  calcul par soustraction directe des deux horodatages, pas
+  d'arrondi optimiste.
+
+### Donnée non corrompue, simplement absente
+
+Requête directe (`trades` VPS, `ouvert_at` entre les deux bornes
+exactes ci-dessus, tous `source` confondus) : **zéro ligne**. Confirmé
+indépendamment de la lecture des logs — aucune hypothèse (H1-H5) ni
+Station X n'a ouvert la moindre position sur toute la fenêtre, sans
+exception. Ce n'est pas un trou de mesure ou un biais de sélection à
+corriger statistiquement : c'est un intervalle sans événement, à
+traiter exactement comme un marché fermé — la fenêtre forward H2
+(ouverte depuis le 30/08/2026 07h02 UTC) doit être lue comme
+"accumulation active du 30/08 07h02 au 31/08 18h24, PAUSE du 31/08
+18h24 au 03/09 05h06, reprise de l'accumulation à partir du 03/09
+05h06" — jamais comme une fenêtre continue de ~3,2 jours qui aurait dû
+produire des trades et n'en a pas produit.
+
+### Jalons forward recalculés — décalage additif, pas un raccourci
+
+Cadence de référence inchangée (~25 trades/mois sur 9 actifs,
+`H2_CONFIRMED_SIGMA=1,075307`, voir `src/h2_forward_tracking.py`). Les
+jalons eux-mêmes (n=78/139/313/1251 pour effet vrai 0,20/0,15/0,10/0,05R)
+**ne changent pas** — ce sont des seuils de nombre de trades, indépendants
+du calendrier. Ce qui change, c'est la date calendaire estimée pour les
+atteindre : décalée de **+58h42 (+2,45 jours)** par rapport à une
+projection continue depuis le 30/08/2026 07h02 UTC, jamais raccourcie.
+
+| Jalon (n, effet vrai) | Date estimée AVANT ce trou | Date estimée APRÈS (ce trou ajouté) |
+|---|---|---|
+| n=78 (0,20R, ≈3 mois) | ≈2026-11-29 | ≈2026-12-02 |
+| n=139 (0,15R, ≈5,6 mois) | ≈2027-02-16 | ≈2027-02-19 |
+| n=313 (0,10R, ≈12,5 mois) | ≈2027-09-14 | ≈2027-09-17 |
+| n=1251 (0,05R, ≈50 mois) | ≈2030-10-30 | ≈2030-11-01 |
+
+Dates approximatives (mois = 30,44 jours, cadence supposée constante
+après reprise — aucune garantie, seuil MINIMUM de décalage : toute
+coupure future s'ajouterait de la même façon, jamais en soustraction).
+Si la contention systémique de 429 (déjà documentée, hors périmètre de
+ce chantier) cause une cadence réelle inférieure à ~25/mois après
+reprise, ces dates s'allongeraient encore davantage — ce tableau n'est
+pas une promesse de délai, seulement la correction du trou déjà connu.
+
+### Point 3 (compteurs de fond) — valeurs exactes, pas une estimation
+
+- **Forward H2** : `summarize_h2_forward()` réexécuté à l'instant
+  (VPS, 03/09/2026 ~05h10 UTC) : **n=0, moyenne=None, borne
+  basse=None, verdict="aucun_verdict_avant_n53"**. Cohérent avec le
+  trou ci-dessus (coupure du 31/08 18h24 au 03/09 05h06 = quasiment
+  toute la vie de la fenêtre forward, ouverte le 30/08 07h02).
+- **Test de fidélité du simulateur** : **39/30 paires, AUCUN VERDICT**
+  (bootstrap par blocs calendaires inapplicable, un seul mois
+  calendaire dans les données) — dernier calcul réel : commit
+  `d23ce73`, 30/08/2026. **Non recalculé dans cette session** :
+  `scripts/_compare_live_vs_backtest_window.py` (le script utilisé
+  alors) lève désormais `ModuleNotFoundError: No module named
+  'src.hypothesis2_strategy'` — import cassé par la refonte H1-H5 du
+  29/08/2026 (module renommé `hypothesis2_strategy_v2`), jamais mis à
+  jour depuis. Réparer ce script serait une modification de code hors
+  du mandat de ce chantier ("aucune correction de code de stratégie...
+  aucun nouvel indicateur") — signalé ici comme dette technique plutôt
+  que masqué ou "estimé".
+- **Mesures A/B (taux de remplissage, épisodes)** : dernières valeurs
+  documentées (28-29/08/2026) : Mesure A confirmée disponible via
+  `src/fill_rate_analysis.py`/`src/episode_counter.py`, dernier
+  échantillon significatif rapporté = n=28 sous le seuil de 30 (pas de
+  verdict rendu, entrée du 28/08/2026). **Non recalculé dans cette
+  session** — hors périmètre, pas de nouvelle donnée live depuis
+  (coupure de 34h41 pendant la période qui aurait dû faire progresser
+  ce compteur).
+- **Attribution par trade** : dernière valeur documentée (commit
+  associé à l'entrée du 29/08/2026, "suite 22") : **54 décomposés /
+  10 448 fermés (0,5%), 53 valides**. **Non recalculé dans cette
+  session**, même raison — cité avec sa date d'origine plutôt que
+  présenté comme un chiffre du jour.
+
+Aucun de ces quatre compteurs (fidélité/A-B/attribution) n'a été
+retouché ou réestimé dans ce chantier — valeurs exactes reprises de
+leur dernière source datée, pas une moyenne ni une extrapolation. Seul
+le forward H2 a été réexécuté en direct, parce que c'est l'objet même
+de ce chantier.
