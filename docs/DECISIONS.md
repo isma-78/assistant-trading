@@ -11546,3 +11546,85 @@ futur déclenchement, ils ne suppriment pas la cause elle-même
   conformément au mandat — reste la décision d'Ismaël.
 - 1224/1224 tests verts, 6 process redémarrés proprement un par un,
   aucun changement de plafond de risque à chaud.
+
+## 2026-09-03 (suite 6) — Levée du coupe-circuit id=4 par Ismaël : reprise vérifiée, aucun redémarrage
+
+Ismaël a levé le coupe-circuit id=4 via `/reprendre`. Cette session
+n'a rien redémarré (mandat explicite) — seulement vérifié.
+
+### Point 1 — Levée confirmée, fenêtre d'observation active 40 minutes
+
+`circuit_breaker_events` id=4 : `cleared_at =
+2026-09-03T18:51:10.902141Z`, `cleared_by = "ismael"`.
+
+Boucle de surveillance dédiée (poll 60s, arrêt immédiat prévu en cas de
+re-déclenchement), 18h51:47 → 19h31:48 UTC (40 minutes pleines) :
+
+- **Aucun re-déclenchement** (`RETRIP=0`) : zéro coupe-circuit actif
+  en fin de fenêtre.
+- **Aucun ReadTimeout supplémentaire sur aucun des 6 process** pendant
+  toute la fenêtre — comptage identique avant/après pour chacun
+  (`executor_loop` 28→28, `trend_executor` 20→20, `hypothesis2` 0→0,
+  `hypothesis3` 16→16, `hypothesis4` 20→20, `hypothesis5` 16→16). La
+  cause de fond (latence Capital.com démo) ne s'est pas manifestée
+  pendant cette fenêtre précise — silence, pas une preuve qu'elle a
+  disparu définitivement (voir entrée précédente, non traitée par ce
+  chantier).
+- **11 trades ouverts pendant la fenêtre** : 8× `hypothesis2_v2`
+  (BTCUSD/ETHUSD/USDJPY/CHFJPY, les premiers dans la minute suivant la
+  levée — signaux en attente exécutés normalement), 1×
+  `hypothesis_v2` (H1, US100). **H3/H4/H5 : aucun trade dans cette
+  fenêtre** (pas anormal — cadence de signal plus faible sur cette
+  période, compteurs de streak API à 0 pour les deux, aucune erreur).
+
+### Station X — infrastructure confirmée saine, mais AUCUNE confirmation de bout en bout possible (donnée absente, pas un échec)
+
+**Fait, pas une supposition** : demande explicite de vérifier que
+Station X "trade bien en premier". **Aucun trade Station X (ni aucun
+signal Station X) n'a été généré pendant les 40 minutes de la
+fenêtre.** Dernier signal Station X, tous statuts confondus :
+2026-09-03T15:24:23 UTC (GOLD, rejeté par le coupe-circuit alors actif)
+— **3h27 avant la levée**, cohérent avec la cadence déjà observée du
+canal (~2h15 entre les deux derniers signaux avant l'incident, 13h09 →
+15h24) : ce n'est pas surprenant que rien ne soit arrivé en seulement
+40 minutes.
+
+**Conséquence honnête** : l'infrastructure qui bloquait Station X est
+confirmée réparée (coupe-circuit levé, sonde de connectivité Station X
+à 0 ReadTimeout sur toute la fenêtre, streak à 0), mais **la chaîne
+complète signal→ordre pour Station X spécifiquement n'a pas pu être
+re-confirmée en conditions réelles dans cette fenêtre**, faute de
+nouveau signal à observer — pas un échec, une absence de donnée. À
+reconfirmer au prochain signal Station X réel (GOLD ou autre actif).
+
+### Point 2 — Le correctif de notification n'a pas été exercé naturellement
+
+Aucun re-déclenchement du coupe-circuit pendant cette fenêtre ⇒ le
+chemin de code corrigé (`_send_notification_with_retry`, appelé
+uniquement sur un NOUVEAU déclenchement `record_trigger`) **n'a pas
+été sollicité par un incident réel** — seulement par l'envoi de test
+manuel de l'entrée précédente. Conformément à l'instruction reçue en
+cas d'absence d'occasion naturelle : **ce point reste à confirmer au
+prochain déclenchement réel du coupe-circuit**, pas déclaré clos ici.
+
+### Point 3 — Compteurs de fond, valeurs exactes
+
+- **Forward H2** : `summarize_h2_forward()` réexécuté en direct
+  (19h31 UTC) : **n=0** (les 8 trades H2 ouverts pendant la fenêtre
+  sont encore `ouvert`, aucune clôture pour l'instant — n compte les
+  trades FERMÉS uniquement).
+- **Fidélité, Mesures A/B, attribution** : **inchangées**, mêmes
+  valeurs exactes que l'entrée du 03/09/2026 (suite 2) — 39/30 paires
+  sans verdict (script de recalcul toujours cassé, non réparé, hors
+  mandat) ; Mesures A/B et attribution citées à leur dernière date
+  réelle (28-29/08/2026), non retouchées dans ce chantier non plus.
+
+### Bilan
+
+Reprise confirmée saine côté infrastructure et côté H1/H2 (trades
+réels observés). H3/H4/H5 silencieux mais sains (pas d'erreur).
+Station X : infrastructure réparée, confirmation de bout en bout
+encore en attente d'un signal réel. Correctif de notification : testé
+manuellement avec succès, pas encore exercé par un incident naturel.
+Aucun redémarrage, aucun changement de code, aucune nouvelle
+hypothèse.
