@@ -11628,3 +11628,27 @@ encore en attente d'un signal réel. Correctif de notification : testé
 manuellement avec succès, pas encore exercé par un incident naturel.
 Aucun redémarrage, aucun changement de code, aucune nouvelle
 hypothèse.
+
+## 2026-09-03 (suite 7) — Point d'étape : ni signal Station X ni nouveau déclenchement de breaker en 3h, surveillance passive uniquement
+
+Sur demande explicite d'Ismaël, surveillance passive des deux
+événements encore en attente (prochain signal Station X, prochain
+déclenchement de coupe-circuit quel qu'il soit) — **aucun signal ni
+déclenchement provoqué**, seulement observé.
+
+Fenêtre 2026-09-03T20:02:07Z → 23:02:11Z (3h pleines, poll 60s) :
+**ni l'un ni l'autre événement ne s'est produit.**
+
+**Compteur d'attente, valeurs exactes à 23h02:31 UTC** :
+- Station X : dernier signal `id=17680` à 2026-09-03T15:24:23Z —
+  **7h38 sans nouveau signal**, au-delà de la cadence normale observée
+  (~2h15 entre les deux précédents). Fait consigné, pas d'inquiétude
+  affirmée : source discrétionnaire (trader humain), un silence de
+  quelques heures n'est pas en soi anormal, mais dépasse la référence
+  connue — à noter si le silence se prolonge davantage.
+- Coupe-circuit : dernier événement toujours `id=4`, levé à
+  2026-09-03T18:51:10Z — **4h11 sans nouveau déclenchement**, streaks
+  API à 0 sur les 6 process (mis à jour dans la dernière minute).
+
+Aucune action prise. Surveillance relancée pour une nouvelle fenêtre
+(voir suite).
