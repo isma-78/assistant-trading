@@ -11170,3 +11170,45 @@ retouché ou réestimé dans ce chantier — valeurs exactes reprises de
 leur dernière source datée, pas une moyenne ni une extrapolation. Seul
 le forward H2 a été réexécuté en direct, parce que c'est l'objet même
 de ce chantier.
+
+## 2026-09-03 (suite 2) — Point 1 : fenêtre d'observation post-`/reprendre` (40 min), aucun re-déclenchement, premières positions réelles depuis 34h41
+
+Boucle de surveillance dédiée exécutée côté VPS (poll toutes les 60s
+sur `circuit_breaker_events`, arrêt immédiat en cas de re-déclenchement
+— aucune surveillance passive), 05h07:17 → 05h47:17 UTC (40 minutes
+pleines, dans la fourchette 30-60 min demandée).
+
+- **Confirmation base** : `circuit_breaker_events` id=3, `cleared_at =
+  2026-09-03T05:06:02.228998Z`, `cleared_by = "ismael"` — cohérent avec
+  l'entrée précédente.
+- **Aucun re-déclenchement sur toute la fenêtre** (`RETRIP=0`) :
+  requête finale sur les coupe-circuits actifs (`cleared_at IS NULL`)
+  → **zéro ligne**, aucun coupe-circuit global ni par actif actif à
+  05h47 UTC.
+- **Premières ouvertures de position réelles depuis 34h41** : 4 trades
+  ouverts pendant la fenêtre, tous démo, aucune anomalie de risque
+  relevée à l'ouverture :
+
+  | Source | Actif | Direction | Ouvert à (UTC) |
+  |---|---|---|---|
+  | `hypothesis2_v2` | USDJPY | short | 05:06:46 |
+  | `hypothesis2_v2` | CHFJPY | short | 05:06:48 |
+  | `hypothesis2_v2` | USDJPY | short | 05:07:53 |
+  | `hypothesis3_v2` | US100 | short | 05:20:34 |
+
+  Les 3 premiers arrivent dans la minute suivant la levée — cohérent
+  avec des signaux déjà détectés mais rejetés par le coupe-circuit
+  pendant la coupure, exécutés dès son ouverture (rien d'anormal, pas
+  un afflux suspect).
+- **429 avant/après la fenêtre** (comptage brut sur les 3000 dernières
+  lignes de scrollback tmux, mesure imprécise par construction — la
+  fenêtre glissante se déplace avec le volume, pas un delta propre) :
+  `trend_executor` 66→75, `hypothesis2_executor` 237→240,
+  `hypothesis3_executor` 102→102, `hypothesis4_executor` 73→78,
+  `hypothesis5_executor` 59→63, `executor` 0→0. Aucune explosion,
+  contention systémique de fond stable, déjà connue et hors périmètre
+  de ce chantier.
+
+**Verdict point 1 : reprise confirmée saine.** Coupe-circuit levé,
+stable sur 40 minutes d'observation active, positions réelles ouvertes
+avec succès sur 2 hypothèses différentes (H2, H3), aucune anomalie.
