@@ -11474,4 +11474,75 @@ production du VPS (`bot_token`/`chat_id` réels), résultat consigné
 ci-dessous.
 
 ### Suite (redéploiement, redémarrage, test réel) — voir entrée suivante
-avec succès sur 2 hypothèses différentes (H2, H3), aucune anomalie.
+
+## 2026-09-03 (suite 5) — Déploiement des deux correctifs, redémarrage supervisé des 6 process, test réel de notification confirmé
+
+Commit `39c4bf1` (correctifs + tests + entrée précédente), 1224/1224
+tests verts en local ET sur le VPS après `git pull --ff-only`. Diff
+`risk_engine.py`/`go_nogo.py`/`capital_manager.py` toujours vide depuis
+la baseline d'avant-hier — invariant #6 respecté, ces deux correctifs
+sont strictement de la plomberie (retry, notification), aucun réglage
+de risque touché.
+
+### Test réel de la notification (point 3, exigence explicite : "teste
+que la notification part réellement")
+
+Avant tout redémarrage, appel direct de `_send_notification_with_retry`
+sur le VPS avec les identifiants Telegram RÉELS de production
+(`config.telegram_bot_token`/`telegram_chat_id`, jamais lus en clair
+dans cette session — chargés par `load_config()`), message clairement
+étiqueté comme test : **`DELIVERED: True`** — confirmation Telegram
+API reçue (`body["ok"]`). Le mécanisme fonctionne réellement, pas
+seulement en test mocké.
+
+### Redémarrage supervisé, un par un (point 4)
+
+Même discipline que le 02-03/09/2026 : arrêt propre (`Ctrl-C`,
+`KeyboardInterrupt` capturée proprement par chaque boucle, aucun `kill
+-9`), redémarrage dans le même pane `tmux`, vérification individuelle
+avant de passer au suivant.
+
+| Process | Ancien PID | Nouveau PID | Démarré à (UTC) |
+|---|---|---|---|
+| `executor` (Station X) | 3527111 | 3810356 | 16:58:09 |
+| `trend_executor` (H1) | 3527923 | 3810669 | 16:58:47 |
+| `hypothesis2_executor` | 3528661 | 3810802 | 16:59:04 |
+| `hypothesis3_executor` | 3529398 | 3810942 | 16:59:22 |
+| `hypothesis4_executor` | 3530065 | 3811084 | 16:59:39 |
+| `hypothesis5_executor` | 3530782 | 3811210 | 16:59:55 |
+
+Les 6 arrêts ont produit une trace propre (`KeyboardInterrupt`, jamais
+une exception non gérée), les 6 démarrages ont produit leur ligne de
+log de démarrage attendue sans rejet inattendu. `hypothesis2_executor`
+confirme ses paramètres réellement actifs au démarrage
+(`EMA_PERIOD=20, RSI_THRESHOLD=55.0, N_TF=3, SCORE_THRESHOLD=1.0` —
+identiques à avant, aucune dérive). Les 6 process, toujours actifs au
+moment d'écrire, continuent de rejeter les signaux entrants avec
+`coupe-circuit actif (global:api_errors)` — **attendu et normal** :
+seul `/reprendre` lève le coupe-circuit id=4, ce chantier ne l'a pas
+fait, conformément au mandat.
+
+**Point d'attention noté en passant, pas creusé (hors mandat)** : la
+sonde de connectivité de Station X a de nouveau montré un
+`ReadTimeout` juste avant ce redémarrage (visible dans le scrollback
+capturé), confirmant que la cause de fond (latence/contention
+Capital.com démo) est toujours active au moment d'écrire — les deux
+correctifs de cette session réduisent l'IMPACT et la VISIBILITÉ d'un
+futur déclenchement, ils ne suppriment pas la cause elle-même
+(décision explicite du point 2 : ne pas y toucher sans plus de recul).
+
+### Bilan de ce chantier
+
+- Cause du re-déclenchement : trouvée et distincte de celle d'hier
+  (ReadTimeout sur la sonde Station X, pas un 429 H2).
+- Correctif 1 (retry manquant, `executor.py`) : appliqué, testé.
+- Correctif 2 (notification silencieusement perdue, `circuit_breaker_
+  store.py`) : appliqué, testé en unitaire ET en conditions réelles
+  (Telegram confirmé).
+- Seuil `API_ERROR_STREAK_THRESHOLD` : documenté, **inchangé**, décision
+  justifiée par les faits (2 pannes réelles distinctes en 15 jours, pas
+  un seuil trop sensible).
+- Coupe-circuit id=4 : **toujours actif**, non levé par cette session,
+  conformément au mandat — reste la décision d'Ismaël.
+- 1224/1224 tests verts, 6 process redémarrés proprement un par un,
+  aucun changement de plafond de risque à chaud.
