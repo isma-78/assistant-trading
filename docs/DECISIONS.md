@@ -11212,3 +11212,123 @@ pleines, dans la fourchette 30-60 min demandée).
 **Verdict point 1 : reprise confirmée saine.** Coupe-circuit levé,
 stable sur 40 minutes d'observation active, positions réelles ouvertes
 avec succès sur 2 hypothèses différentes (H2, H3), aucune anomalie.
+
+## 2026-09-03 (suite 3) — Diagnostic "Station X ne se traduit pas en ordres" : cause immédiate trouvée (PAS une régression), mais découverte critique non demandée — le coupe-circuit global a re-déclenché à 12h44 UTC, toujours actif
+
+### Point 1 — Traitement précédent de Station X, recherché dans git log/DECISIONS.md
+
+Deux incidents Station X réels et distincts trouvés dans l'historique,
+**tous deux toujours corrigés dans le code actuel, aucune régression** :
+- `442ad2c` (16/08/2026) : résolution du canal par id numérique au lieu
+  d'un `@username` placeholder jamais résolu — `telegram_listener.py`
+  accepte toujours les deux formes. Preuve que le correctif tient :
+  des signaux `source='-1002481537588'` (l'id numérique du canal)
+  arrivent en continu jusqu'à aujourd'hui (dernier : 2026-09-03T15:24
+  UTC) — le listener capte bien le canal.
+- `241c827` : fuite de scope, `executor_loop` (Station X) gérait aussi
+  des trades H3 par erreur (`exclude_sources` incomplet). Toujours
+  présent : `run_executor_loop`/`manage_open_trades` acceptent
+  `include_sources`/`exclude_sources`, vérifié dans le code actuel
+  (`src/executor.py:1249-1295`).
+
+**Aucun de ces deux correctifs n'explique le problème actuel** — ni l'un
+ni l'autre n'a été touché depuis, et les symptômes ne correspondent pas
+(canal bien capté, pas de contamination inter-sources observée).
+
+### Point 2 — Chaîne signal → validation → go/no-go → ordre : où ça bloque, avec la preuve
+
+Remontée de la chaîne sur les signaux Station X récents (source
+`-1002481537588`, requête directe `signals`/`risk_decisions` sur le
+VPS, pas une supposition) :
+
+- **Ingestion/parsing : OK.** Chaque message Telegram Station X produit
+  bien une ligne `signals` avec `actif`/`sens`/`entree_min`/`entree_max`/
+  `stop_loss`/`confiance=1.0` correctement extraits (ex. id 17680,
+  GOLD short, entrée 4505.0, stop 4508.0, 2026-09-03T15:24:23 UTC).
+  Un second message par signal produit une ligne sœur
+  `raison_rejet='extraction_incomplete'` (message partiel/préliminaire
+  du canal, confiance=0.0) — comportement normal, pas le blocage.
+- **Validation déterministe → go/no-go : bloque ici, cause précise
+  trouvée.** `risk_decisions` pour CHAQUE signal Station X bien formé
+  récent (17680, 17506, 17504, 16550, 16442...) : `approved=0`,
+  `reason='circuit_breaker_blocked'`, `detail='Actif/global bloqué par
+  un coupe-circuit : global:api_errors'`. **Le signal ne va jamais
+  jusqu'à la tentative d'ordre** — bloqué à l'étape go/no-go par le
+  coupe-circuit global, avant même `risk_engine`/tentative broker.
+- **`signals.raison_rejet` vide pour ces cas n'est PAS un bug distinct** :
+  `executor.py` écrit la raison dans `risk_decisions.detail` pour les
+  rejets go/no-go (coupe-circuit, gate de confiance, plafond de
+  cluster), et seulement dans `signals.raison_rejet` pour les rejets au
+  stade parsing (`extraction_incomplete`). Deux colonnes, deux étages,
+  cohérent avec le code — pas une perte d'information, juste dans une
+  autre table.
+
+### Depuis quand, et est-ce le MÊME coupe-circuit que celui levé ce matin ?
+
+**NON — ce n'est PAS la même cause, comme demandé de le dire clairement
+si c'était le cas.** `circuit_breaker_events` :
+
+| id | déclenché | levé | par |
+|---|---|---|---|
+| 3 | 2026-08-31T18:24:07 UTC | 2026-09-03T05:06:02 UTC | ismael (`/reprendre`) |
+| **4** | **2026-09-03T12:44:55 UTC** | **(toujours vide)** | — |
+
+**Un NOUVEAU déclenchement (id=4) a eu lieu à 12h44:55 UTC aujourd'hui,
+7h38 après la levée du matin, et reste actif au moment d'écrire cette
+entrée (16h30 UTC — 3h45 de blocage total, en cours).** C'est un
+coupe-circuit `scope=global` : il bloque TOUTES les sources
+également (H1-H5 ET Station X), pas seulement Station X — Station X
+donne juste l'impression d'être seule concernée parce que ses signaux
+sont plus fréquents et réguliers (GOLD toutes les ~1-2h) que les
+signaux internes des 5 hypothèses sur cette fenêtre.
+
+**Signal : `api_error_streak:*` (les 6 process) est retombé à 0,
+actualisé dans la dernière minute** — comme ce matin, la RÉCURRENCE
+d'erreurs API qui a causé le déclenchement s'est déjà résorbée
+d'elle-même (retry fonctionne), mais le coupe-circuit lui-même reste
+actif tant que personne ne l'a levé (même conception "reprise
+manuelle délibérée", pas d'auto-guérison, voir entrée du 28/08/2026).
+6 process toujours en cours, aucun crash, aucun redémarrage nécessaire
+ni fait.
+
+### Point 3 — Correction : PAS D'ACTION AUTOMATIQUE, décision remontée à Ismaël
+
+Conforme au mandat ("ne corrige rien à l'aveugle si la cause n'est pas
+claire", et "aucune modification de la logique de décision") : la cause
+immédiate EST claire (coupe-circuit global, pas un bug), mais ce n'est
+pas un bug de code à corriger — c'est le fail-safe qui fonctionne comme
+prévu face à une nouvelle salve d'erreurs API. La correction est un
+geste humain délibéré (`/reprendre` Telegram), pas un correctif de
+code, et n'a **pas été fait par cette session**, pour deux raisons :
+1. Même principe que ce matin : décision de reprise de trading, hors
+   mandat d'un chantier de diagnostic.
+2. **Élément nouveau qui mérite l'attention d'Ismaël avant de relever
+   une deuxième fois aujourd'hui** : ce coupe-circuit vient de re-
+   déclencher moins de 8h après sa dernière levée. Si le schéma se
+   répète (nouvelle salve d'erreurs → nouveau déclenchement → nouvelle
+   levée manuelle → répète), le vrai problème n'est pas "un incident
+   isolé" mais une fréquence de re-déclenchement qui mériterait un
+   chantier séparé et dédié (pourquoi le seuil d'erreurs consécutives
+   est-il encore franchi si souvent, malgré le correctif 429 de H2 du
+   02/09 ; faut-il un mécanisme d'alerte proactif plutôt qu'une
+   découverte a posteriori comme celle-ci, trouvée uniquement parce que
+   ce chantier cherchait autre chose).
+
+**Aucune correction de code appliquée dans ce chantier** — la seule
+piste de bug potentiel identifiée pendant l'investigation
+(`annulation_motif` vide sur d'anciens trades Station X annulés, ex.
+id 14323/14322/14218/14216, 27-28/08/2026) est un fil distinct, plus
+ancien, sans rapport avec le blocage actuel — noté ici pour mémoire,
+non creusé (hors périmètre de ce diagnostic, qui portait sur "signal
+→ ordre", pas sur "ordre → annulation").
+
+### CE QUI RESTE OUVERT
+
+- Le coupe-circuit `global:api_errors` (id=4) reste actif — Station X
+  (et H1-H5) resteront bloqués tant qu'il ne sera pas levé.
+- La récurrence (2 déclenchements en <48h) n'est pas expliquée par ce
+  chantier — signalée, pas diagnostiquée en profondeur.
+- Point 4 (vérification post-correctif par fenêtre d'observation) **non
+  applicable** : aucun correctif de code n'a été appliqué, rien à
+  vérifier de ce type ici.
+avec succès sur 2 hypothèses différentes (H2, H3), aucune anomalie.
