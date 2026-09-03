@@ -2243,6 +2243,49 @@ def test_manage_open_trades_triggers_trade_analysis_on_full_close(tmp_path):
     mock_notify.assert_called_once()
 
 
+def test_manage_open_trades_retries_get_candles_on_transient_api_error(tmp_path, monkeypatch):
+    # 03/09/2026 (voir docs/DECISIONS.md) : seul appel get_candles du
+    # projet resté sans retry_with_backoff, découvert en diagnostiquant
+    # pourquoi le coupe-circuit api_errors re-déclenchait malgré le
+    # correctif H2 du 02/09 (qui ne couvrait pas ce point d'appel,
+    # partagé par les 6 process). Une erreur transitoire unique sur
+    # client.get_prices ne doit plus faire échouer la gestion du trade.
+    monkeypatch.setattr("src.retry.time.sleep", lambda *_: None)
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)
+
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-xyz', 'station_x', 'GOLD', 'demo', 'short', 0.01, 100.0, 101.0, 101.0, 10.0, 2.0, "
+            "'2026-08-16T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 101.0, "offer": 101.2, "marketStatus": "TRADEABLE"}}
+    client.get_prices.side_effect = [CapitalApiError("timeout transitoire"), {"prices": []}]
+
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="stationx")
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("GOLD", "stationx"): envelope_manager}, envelope_ids={("GOLD", "stationx"): envelope_id},
+    )
+
+    # La gestion a bien abouti (stop touché -> clôture), pas sautée par
+    # l'erreur transitoire : preuve que le retry a absorbé l'échec.
+    client.close_position.assert_called_once()
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT statut FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["statut"] == "ferme"
+    finally:
+        conn.close()
+
+
 # --- coupe-circuits / exposition simultanée (§2.7, §2.3) -----------------
 
 def test_open_signal_rejected_when_asset_blocked_by_circuit_breaker(tmp_path):

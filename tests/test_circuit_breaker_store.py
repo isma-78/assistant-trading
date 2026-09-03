@@ -263,6 +263,41 @@ def test_record_api_result_triggers_global_pause_at_threshold(mock_notify, tmp_p
     mock_notify.assert_called_once()
 
 
+@patch("src.circuit_breaker_store.time.sleep")
+@patch("src.circuit_breaker_store.send_notification", side_effect=[False, False, True])
+def test_record_trigger_retries_notification_until_success(mock_notify, mock_sleep, tmp_path):
+    # 03/09/2026 (voir docs/DECISIONS.md) : `send_notification` ne lève
+    # jamais, renvoie False sur tout échec réseau/Telegram — sans retry
+    # ici, un déclenchement de coupe-circuit GLOBAL pouvait rester
+    # invisible sans aucune trace (cause du "vu par hasard" du
+    # 03/09/2026). Un échec transitoire (2 premiers essais) ne doit plus
+    # empêcher la notification de finir par partir.
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    record_api_result(db_path, "executor", success=False, bot_token="t", chat_id="c")
+    record_api_result(db_path, "executor", success=False, bot_token="t", chat_id="c")
+    record_api_result(db_path, "executor", success=False, bot_token="t", chat_id="c")
+    assert get_active_global_block(db_path) == "api_errors"
+    assert mock_notify.call_count == 3
+
+
+@patch("src.circuit_breaker_store.time.sleep")
+@patch("src.circuit_breaker_store.send_notification", return_value=False)
+def test_record_trigger_gives_up_after_max_attempts_but_never_raises(mock_notify, mock_sleep, tmp_path):
+    # Si Telegram est injoignable pendant les 3 tentatives, le
+    # déclenchement doit rester enregistré en base (pas perdu) et ne
+    # jamais lever — seul un log ERROR fait foi de l'échec de
+    # notification (vérifié indirectement : le breaker est bien actif
+    # malgré 3 échecs de notification consécutifs).
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    record_api_result(db_path, "executor", success=False, bot_token="t", chat_id="c")
+    record_api_result(db_path, "executor", success=False, bot_token="t", chat_id="c")
+    record_api_result(db_path, "executor", success=False, bot_token="t", chat_id="c")
+    assert get_active_global_block(db_path) == "api_errors"
+    assert mock_notify.call_count == 3
+
+
 @patch("src.circuit_breaker_store.send_notification", return_value=True)
 def test_breadth_pause_triggers_at_five_distinct_assets(mock_notify, tmp_path):
     db_path = str(tmp_path / "t.db")

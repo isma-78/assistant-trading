@@ -22,6 +22,7 @@ s'appliquent aux DEUX sources d'un même actif à la fois.
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
@@ -222,11 +223,41 @@ def record_trigger(
     logger.warning("Coupe-circuit déclenché : scope=%s actif=%s source=%s type=%s — %s", scope, actif, source, breaker_type, note)
     if bot_token and chat_id:
         label = f"{actif} ({source})" if actif else "GLOBAL"
-        send_notification(
-            bot_token, chat_id,
-            f"\U0001F6D1 Coupe-circuit déclenché — {label}\nType : {breaker_type}\n{note}",
-        )
+        message = f"\U0001F6D1 Coupe-circuit déclenché — {label}\nType : {breaker_type}\n{note}"
+        _send_notification_with_retry(bot_token, chat_id, message, event_id)
     return event_id
+
+
+# `send_notification` (audit_notifier.py) ne lève jamais — renvoie
+# False sur tout échec réseau/Telegram (voir sa docstring). Avant ce
+# correctif (03/09/2026, voir docs/DECISIONS.md — coupe-circuit
+# api_errors re-déclenché à 12h44 UTC "vu par hasard"), un seul appel
+# raté à `send_notification` ici rendait un déclenchement GLOBAL
+# totalement invisible, sans aucune trace dans les logs — la cause
+# exacte du problème que ce correctif corrige. 3 tentatives (même
+# discipline que `retry_with_backoff`, mais boucle dédiée : la fonction
+# retourne un booléen, jamais une exception, donc `retry_with_backoff`
+# ne s'applique pas telle quelle) ; `logger.error` si les 3 échouent —
+# visible dans le scrollback du process même si Telegram est injoignable,
+# jamais une perte d'information silencieuse.
+def _send_notification_with_retry(
+    bot_token: str, chat_id: str, message: str, event_id: int, attempts: int = 3, delay_seconds: float = 2.0,
+) -> bool:
+    for attempt in range(attempts):
+        if send_notification(bot_token, chat_id, message):
+            return True
+        if attempt < attempts - 1:
+            logger.warning(
+                "Notification Telegram (coupe-circuit event_id=%s) échouée, tentative %d/%d — nouvel essai dans %.0fs",
+                event_id, attempt + 1, attempts, delay_seconds,
+            )
+            time.sleep(delay_seconds)
+    logger.error(
+        "Notification Telegram (coupe-circuit event_id=%s) ÉCHOUÉE après %d tentatives — "
+        "déclenchement invisible côté Telegram, seul ce log en fait foi.",
+        event_id, attempts,
+    )
+    return False
 
 
 def clear_breaker(db_path: str, actif: Optional[str], cleared_by: str) -> int:

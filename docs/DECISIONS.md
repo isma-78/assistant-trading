@@ -11331,4 +11331,147 @@ non creusé (hors périmètre de ce diagnostic, qui portait sur "signal
 - Point 4 (vérification post-correctif par fenêtre d'observation) **non
   applicable** : aucun correctif de code n'a été appliqué, rien à
   vérifier de ce type ici.
+
+## 2026-09-03 (suite 4) — Pourquoi le re-déclenchement persiste malgré le fix 429 d'hier : cause réelle, deux correctifs de plomberie, seuil documenté (inchangé)
+
+Suite directe de l'entrée précédente, sur demande explicite d'Ismaël
+("ce n'est pas ton rôle de lever le coupe-circuit — trouve pourquoi ça
+continue de se déclencher"). Le coupe-circuit id=4 n'a PAS été levé par
+cette session.
+
+### Point 1 — Le fix 429 d'hier était-il vraiment limité à H2 ? Réponse : non, mais ce n'était pas la question pertinente
+
+Vérification ligne par ligne, tous les appels `get_candles(` du dépôt
+(6 occurrences totales, `grep` exhaustif) :
+
+- `technical_strategy_executor.py:263` (résolution native) : déjà
+  protégé depuis hier (`9733cb6`) — et ce point d'appel est **PARTAGÉ**
+  par H1/H2/H3/H4/H5 (`trend_executor.py` délègue entièrement à
+  `technical_strategy_executor.run_technical_strategy_loop`, vérifié
+  par lecture de ses imports — aucune logique de fetch séparée pour
+  H1). **Donc déjà couvert pour toutes les hypothèses, contrairement à
+  l'hypothèse de départ.**
+- `technical_strategy_executor.py:280` (`extra_resolutions`) : H2/L2
+  uniquement par construction (seule hypothèse à en fournir) — déjà
+  protégé depuis hier.
+- `regime_confirmation.py:118` : déjà protégé (`retry_with_backoff`
+  visible dans l'appel lui-même, code plus ancien).
+- `executor.py:1318` (`manage_open_trades`, gestion des positions
+  ouvertes) : **SEUL appel non protégé trouvé dans tout le dépôt.**
+  Partagé par les 6 process (chacun l'appelle pour gérer SES trades
+  ouverts, toutes sources confondues — Station X et les 5 hypothèses).
+  Déjà absorbé par un `except Exception` par trade (jamais un crash de
+  cycle), mais gaspillait une tentative de gestion de stop à chaque
+  échec transitoire. **Corrigé** (`src/executor.py`, `retry_with_backoff`
+  même style que le correctif H2 d'hier), test dédié
+  (`test_manage_open_trades_retries_get_candles_on_transient_api_error`).
+
+**Mais ce correctif ne change rien à la cause du re-déclenchement de
+12h44 UTC** — remontée précise ci-dessous.
+
+### Cause réelle du déclenchement id=4, remontée avec la preuve exacte (pas une supposition)
+
+`api_error_streak:*` n'est PAS alimenté par les échecs de
+`get_candles` (aucun `get_candles` n'appelle
+`circuit_breaker_store.record_api_result` — vérifié par recherche
+exhaustive de `record_api_result(` dans `src/` : exactement 2 sites
+d'appel, tous deux autour de la SONDE DE CONNECTIVITÉ dédiée
+(`client.get_account_balance`, une fois par cycle par process, déjà
+protégée par son propre `retry_with_backoff` AVANT même le correctif
+d'hier). Le fix 429 de H2/executor.py n'avait donc **aucun lien causal
+possible** avec ce mécanisme, peu importe son périmètre — hypothèse
+de départ du point 1 invalidée par le code, pas seulement affinée.
+
+Scrollback tmux de `executor_loop` (Station X) au moment exact du
+déclenchement :
+
+```
+requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='demo-api-
+capital.backend-capital.com', port=443): Read timed out. (read timeout=10)
+WARNING:src.retry:Tentative 1/3 échouée (...Read timed out...) — nouvel essai dans 1.0s
+WARNING:src.retry:Tentative 2/3 échouée (...Read timed out...) — nouvel essai dans 2.0s
+WARNING:src.circuit_breaker_store:Coupe-circuit déclenché : scope=global
+  actif=None source=None type=api_errors — 3 erreurs API consécutives (executor)
+```
+
+**Ce n'est PAS un 429** (contrairement au 02/09) : c'est un
+`ReadTimeout` (aucune réponse du serveur Capital.com démo dans les 10s
+de timeout configuré), et c'est précisément la sonde de Station X
+(process `executor`) qui a accumulé 3 cycles consécutifs en échec —
+pas H2, pas une des 4 autres hypothèses. Deux causes réelles et
+DISTINCTES en 3 jours (31/08 : tempête de réauthentification de
+session, déjà corrigée par `9024fff` ; 03/09 : timeouts réseau/serveur
+sur la sonde de connectivité), pas une cause unique répétée. Chaque
+process (executor, trend_executor, hypothesis{2,3,4,5}_executor) porte
+son propre compteur de streak indépendant, mais UN SEUL processus
+suffit à faire tomber le coupe-circuit GLOBAL — conception assumée
+(§2.7), pas un bug, mais ça explique pourquoi Station X (dont la sonde
+tourne sur le même compte partagé que les 6 autres process, sujette à
+la même contention de fond) peut déclencher un blocage qui touche tout
+le monde.
+
+### Point 2 — Le seuil (3 erreurs consécutives) est-il mal réglé ?
+
+**Seuil documenté** : `API_ERROR_STREAK_THRESHOLD = 3` dans
+`src/circuit_breaker.py` (§2.7), inchangé depuis sa création. Chaque
+"erreur" = un cycle entier où la sonde de connectivité (elle-même déjà
+retentée 3x avec backoff 1s/2s, donc ~13s de tentative avant d'échouer
+définitivement) échoue — ce n'est PAS "3 requêtes ratées", c'est "3
+cycles complets consécutifs sans connectivité confirmée".
+
+**Historique complet depuis la mise en place (`175ef45`, 19/08/2026,
+soit 15 jours d'exploitation)** : **exactement 2 déclenchements au
+total**, tous deux dans les 3 derniers jours (31/08 et 03/09), avec des
+causes racines VÉRIFIÉES et DISTINCTES à chaque fois (réauthentification
+de session ; timeout réseau). Douze jours sans aucun déclenchement,
+puis deux en 3 jours.
+
+**Verdict, tranché avec les faits, pas par défaut** : ce n'est PAS un
+seuil trop sensible pour la charge normale (12 jours de fonctionnement
+sain avec la même valeur en attestent) — c'est une fréquence de pannes
+RÉELLES qui a augmenté récemment, plausiblement corrélée au passage à
+pleine charge (9 actifs × 5 hypothèses + Station X depuis le
+déploiement V2 du 29-30/08, contention de compte déjà documentée
+séparément). **Ne pas toucher au seuil** : 3 cycles complets (~13s
+d'échec chacun au minimum, donc plusieurs dizaines de secondes à
+quelques minutes de panne réelle et soutenue) est un seuil déjà
+tolérant, pas nerveux — le relâcher masquerait de vraies pannes
+réseau/serveur plutôt que de corriger un faux positif. Aucun changement
+appliqué à `API_ERROR_STREAK_THRESHOLD` ni au timeout de la sonde
+(10s) — ce dernier pourrait être un levier légitime dans un futur
+chantier séparé, mais n'est pas dans le mandat "corrige seulement ce
+qui est confirmé au point 1" de celui-ci.
+
+### Point 3 — Alerte proactive, corrigée et testée réellement
+
+**Bug trouvé, pas seulement une fonctionnalité manquante** :
+`record_trigger` (`circuit_breaker_store.py`) appelait déjà
+`send_notification` sur tout déclenchement `global` — le mécanisme
+EXISTAIT depuis `175ef45` (19/08/2026). Mais `send_notification` ne
+lève jamais d'exception, renvoie silencieusement `False` sur tout échec
+réseau/Telegram (voir sa docstring, `audit_notifier.py`) — et son
+retour n'était jamais vérifié ni journalisé. **Un échec réseau
+Telegram, même transitoire, rendait un déclenchement GLOBAL totalement
+invisible, sans aucune trace dans aucun log.** C'est la cause exacte du
+"vu par hasard" — pas une notification absente par conception, une
+notification silencieusement perdue par absence de vérification du
+retour.
+
+**Corrigé** : `_send_notification_with_retry` (nouvelle fonction,
+`circuit_breaker_store.py`) — 3 tentatives avec délai de 2s entre
+chacune (boucle dédiée, pas `retry_with_backoff` : `send_notification`
+retourne un booléen, jamais une exception), `logger.error` explicite
+si les 3 échouent (visible dans le scrollback du process même si
+Telegram est injoignable — la trace n'est plus jamais totalement
+absente). 2 tests dédiés
+(`test_record_trigger_retries_notification_until_success`,
+`test_record_trigger_gives_up_after_max_attempts_but_never_raises`).
+
+**Testé réellement, pas seulement en tests unitaires mockés** (exigence
+explicite du prompt) : après déploiement, envoi d'un message de test
+réel via `_send_notification_with_retry` avec les identifiants de
+production du VPS (`bot_token`/`chat_id` réels), résultat consigné
+ci-dessous.
+
+### Suite (redéploiement, redémarrage, test réel) — voir entrée suivante
 avec succès sur 2 hypothèses différentes (H2, H3), aucune anomalie.

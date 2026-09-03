@@ -1314,8 +1314,21 @@ def manage_open_trades(
             # resolution : par hypothèse (_TREND_CANDLE_RESOLUTION), jamais
             # "HOUR" en dur — voir son commentaire (bug du 21/08/2026,
             # corrigé avant le déploiement de l'Hypothèse #3 en M15).
+            #
+            # `retry_with_backoff` (03/09/2026, voir docs/DECISIONS.md,
+            # même discipline que le correctif 429 de H2 du 02/09) :
+            # seul appel `get_candles` du projet resté sans protection —
+            # partagé par LES 6 PROCESS (chacun l'appelle pour gérer SES
+            # propres trades ouverts, quelle que soit la source), un
+            # `except Exception` par trade (juste en dessous) absorbe déjà
+            # l'échec final sans crasher le cycle, mais chaque tentative
+            # non retentée gaspillait une occasion de gérer le stop à
+            # temps. Lecture pure, jamais un ordre, donc sûre à retenter.
             trend_resolution = _TREND_CANDLE_RESOLUTION.get(_envelope_source_key(state.source), "HOUR")
-            candles = get_candles(client, state.asset, resolution=trend_resolution, count=DONCHIAN_PERIOD + 1)
+            candles = retry_with_backoff(
+                lambda: get_candles(client, state.asset, resolution=trend_resolution, count=DONCHIAN_PERIOD + 1),
+                exceptions=(CapitalApiError, requests.exceptions.RequestException),
+            )
             atr = compute_atr(candles, period=14)
 
             action = evaluate_position_management(state, snapshot.mid, atr, risk_engine, candles=candles)
