@@ -10943,3 +10943,135 @@ contradiction avec le déployé.
 Il ne couvre pas une vérification indépendante de la logique
 d'implémentation elle-même (`evaluate_entry`, calcul des indicateurs)
 au-delà des constantes déjà vérifiées FIGÉES dans l'entrée précédente.
+
+## 2026-09-03 — Redémarrage supervisé des 6 exécuteurs (point 2) + découverte critique : coupe-circuit global `api_errors` jamais levé depuis 34h+
+
+Session interrompue par une limite de session Claude Code pendant la
+fenêtre d'observation (`status: failed`, `rate_limit`, ~23h30 le
+02/09/2026) ; redémarrage et observation initiale déjà faits avant
+l'interruption, complétés et consignés ici après reprise le
+03/09/2026.
+
+### a/b — État avant et séquence de redémarrage
+
+Six process vérifiés avant toute action (PID, heure de démarrage,
+uptime). Redémarrage un par un confirmé par les nouveaux PID/heures de
+démarrage (tmux, pas systemd — sessions `executor_loop`,
+`trend_executor`, `hypothesis{2,3,4,5}_executor`) :
+
+| Process | Nouveau PID | Démarré à (02/09/2026) |
+|---|---|---|
+| `executor` | 3527111 | 20:26:17 |
+| `trend_executor` | 3527923 | 20:28:17 |
+| `hypothesis2_executor` | 3528661 | 20:29:58 |
+| `hypothesis3_executor` | 3529398 | 20:31:38 |
+| `hypothesis4_executor` | 3530065 | 20:33:03 |
+| `hypothesis5_executor` | 3530782 | 20:34:37 |
+
+Espacement 1m25-2min entre chaque redémarrage, jamais deux process
+arrêtés simultanément — conforme à la demande. Aucun des 6 n'a
+planté depuis : uptime continu >8h au moment de la vérification
+(03/09/2026 ~05h00 UTC).
+
+### c — Plafonds de risque : identiques, vérifié par diff
+
+`git diff 9024fff..3eded87 -- src/risk_engine.py src/go_nogo.py
+src/capital_manager.py` : **diff vide, aucune ligne changée** dans les
+3 modules critiques depuis avant tout ce chantier. Le seul changement
+de code déployé par ce redémarrage est le correctif 429 de H2
+(`9733cb6`, `src/technical_strategy_executor.py`), qui ne touche
+aucune logique de risque. Invariant #6 respecté. `CAPITAL_ENVIRONMENT`
+toujours absente de `.env` sur le VPS → défaut `demo` inchangé,
+invariant sur le passage au réel non affecté.
+
+### d — Aucun verdict (d) en attente
+
+L'audit du point 1 (entrée précédente) n'a produit aucun verdict (d) —
+les 4 hypothèses étaient déjà CLEAN. Rien à signaler séparément ici de
+ce point de vue.
+
+### e — Échantillon 429 avant/après
+
+**Limite honnête** : la fenêtre d'observation initiale (tmux
+scrollback "avant") a été perdue avec l'échec de la session (limite de
+débit Claude Code) avant d'être consignée ici — reconstruction a
+posteriori impossible (scrollback tmux ~2000-3000 lignes, largement
+tourné depuis). Échantillon pris le 03/09/2026 ~05h00 UTC, >8h après le
+dernier redémarrage (fenêtre d'observation largement dépassée, pour ce
+qu'elle vaut sans point de comparaison "avant") :
+
+| Process | 429 / lignes de scrollback échantillonnées |
+|---|---|
+| `executor` | 0/24 |
+| `trend_executor` | 63/257 |
+| `hypothesis2_executor` | 251/1896 |
+| `hypothesis3_executor` | 102/1986 |
+| `hypothesis4_executor` | 71/442 |
+| `hypothesis5_executor` | 57/233 |
+
+H2 reste le plus haut en compte BRUT (cohérent avec son volume
+d'appels 3x supérieur, déjà documenté), mais son taux (~13%) n'est ni
+un outlier ni pire que H4/H5/trend_executor (~16-25%) — le
+correctif du point 5 visait l'IMPACT d'un 429 (cycle entier interrompu),
+pas leur fréquence (contention systémique du compte, hors périmètre,
+déjà signalée le 02/09/2026). Inspection qualitative de
+`hypothesis2_executor` : chaque 429 rencontré déclenche bien un
+`WARNING:src.retry:Tentative 1/3 échouée ... nouvel essai dans 1.0s`
+suivi d'un signal généré normalement — comportement attendu du
+correctif, pas de cycle interrompu observé dans l'échantillon.
+`api_error_streak:*` (voir section suivante) confirme à **0 pour les 6
+process** au moment de l'échantillon — aucune défaillance API
+consécutive non absorbée par retry en ce moment précis.
+
+### DÉCOUVERTE NON DEMANDÉE MAIS CRITIQUE — le coupe-circuit global reste levé... non, DÉCLENCHÉ, depuis 34h+, ce redémarrage NE L'A PAS résolu
+
+En inspectant le scrollback de `hypothesis2_executor` pour l'échantillon
+429 ci-dessus, découverte de lignes répétées :
+`INFO:src.executor:Signal <id> rejeté : coupe-circuit actif
+(global:api_errors)` — **tout signal, sur tout process, est rejeté en
+ce moment même.**
+
+Requête `circuit_breaker_events` (VPS) :
+
+| id | scope | breaker_type | triggered_at | cleared_at |
+|---|---|---|---|---|
+| 3 | global | api_errors | 2026-08-31T18:24:07 UTC | *(vide)* |
+
+**Ce coupe-circuit n'a JAMAIS été levé depuis son déclenchement, il y a
+maintenant plus de 34h (vérifié 2026-09-03T04:59 UTC).** C'est le même
+incident diagnostiqué et corrigé à la racine par le chantier du
+01/09/2026 (`9024fff`, réauthentification transparente sur session
+Capital.com invalidée) — mais **corriger la cause n'a jamais levé le
+coupe-circuit lui-même**, par conception (`§2.7`, "aucun mécanisme
+d'auto-guérison, reprise manuelle délibérée" — voir entrée du
+28/08/2026). Un redémarrage de process ne le lève pas non plus : l'état
+est persisté en base (`circuit_breaker_events`), pas en mémoire.
+**Conséquence directe : AUCUNE des 5 hypothèses ni Station X n'a pu
+ouvrir la moindre nouvelle position depuis le 31/08/2026 18h24 UTC,
+et c'est TOUJOURS le cas au moment d'écrire cette entrée** — y compris
+pendant toute la fenêtre de suivi forward de H2 (ouverte depuis le
+30/08 07h02 UTC) : le n=0 du forward H2 constaté dans les entrées
+précédentes n'est peut-être pas (uniquement) un manque d'edge, mais
+englobe cette période de blocage total. Point à garder en tête pour
+toute lecture future du forward H2.
+
+**Levée : geste humain délibéré, jamais pris par cette session.** Le
+mécanisme prévu est la commande Telegram `/reprendre` du bot de
+contrôle (`src/control_bot.py`, `clear_breaker(db_path, arg,
+triggered_by)`), envoyée par Ismaël — jamais un appel direct en base
+par un agent, précisément pour garder un geste humain conscient avant
+de rouvrir les entrées après un fail-safe. **Non fait ici, sciemment,
+malgré la possibilité technique** : c'est une décision de reprise de
+trading en direct (même démo), pas une décision de documentation ou
+d'infrastructure — hors du mandat de ce chantier ("aucune correction de
+code de stratégie", et par extension aucune décision de reprise de
+trading).
+
+**Élément favorable pour la décision d'Ismaël, factuel, non une
+recommandation** : `system_state` (`api_error_streak:*`) montre les 6
+compteurs de séquence d'échecs consécutifs à **0**, mis à jour dans la
+dernière minute avant l'échantillon — aucun des 6 process n'accumule de
+défaillance API non absorbée par retry en ce moment. Ne préjuge pas de
+ce qui se passerait après une levée (contention systémique du compte
+toujours présente, voir tableau 429 ci-dessus), mais l'état immédiat
+observé n'est pas rouge.
