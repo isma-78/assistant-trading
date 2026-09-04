@@ -11652,3 +11652,23 @@ Fenêtre 2026-09-03T20:02:07Z → 23:02:11Z (3h pleines, poll 60s) :
 
 Aucune action prise. Surveillance relancée pour une nouvelle fenêtre
 (voir suite).
+
+## 2026-09-04 — Point d'étape 2 : toujours rien, compteurs à jour, un verrou SQLite transitoire sans conséquence
+
+Fenêtre 2026-09-03T23:04:30Z → 2026-09-04T02:04:34Z (3h, poll 60s),
+toujours passive : **ni signal Station X ni déclenchement de
+coupe-circuit**.
+
+- Station X : dernier signal toujours `id=17680` (15:24:23Z) —
+  **10h40 sans nouveau signal**, désormais en pleine nuit UTC
+  (02h04) ; plausiblement des heures d'inactivité normales pour une
+  source discrétionnaire humaine plutôt qu'un problème — pas de
+  conclusion tirée, juste le compteur.
+- Coupe-circuit : `id=4` toujours seul dernier événement, **7h13**
+  sans nouveau déclenchement depuis la levée.
+- Incident mineur sans conséquence : une requête de sondage a
+  rencontré `database is locked` une fois sur ~180 cycles (contention
+  transitoire normale avec 6 process écrivains) — la boucle a continué
+  sans interruption, aucune action requise.
+
+Surveillance relancée à nouveau.
