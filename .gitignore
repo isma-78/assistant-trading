@@ -10,6 +10,8 @@ data/*.db
 data/*.db-journal
 data/backups/
 data/historical/
+data/capital_history_raw/
+data/reconciled_trades_*.csv
 
 # Python
 __pycache__/

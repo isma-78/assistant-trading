@@ -671,6 +671,126 @@ def test_open_signal_placement_failure_marks_preinserted_trade_annule(tmp_path):
         conn.close()
 
 
+def test_open_signal_retries_placement_once_on_disclosed_stop_boundary(tmp_path):
+    # Régression (audit du 24/09/2026, voir docs/DECISIONS.md) : le seuil
+    # de distance de stop garanti est une BANDE DYNAMIQUE (déjà documentée
+    # pour update_position_stop le 28-29/08/2026), jamais fiable depuis le
+    # seul instantané statique de dealingRules lu par
+    # _compute_guaranteed_stop_adjustment — cause racine confirmée de la
+    # concentration des échecs stop_refuse/autre_echec_placement sur
+    # GOLD/BTCUSD/ETHUSD. Avant le correctif, ce rejet finissait
+    # directement en 'annule' sans jamais retenter avec la valeur EXACTE
+    # divulguée par le broker (comme update_position_stop le fait déjà) ;
+    # ce test échoue sur le code d'avant (statut='annule', un seul appel à
+    # place_limit_order) et passe après (statut='ouvert', deux appels,
+    # taille recalculée pour le stop élargi).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)  # GOLD, short, entrée=100, stop=101
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"},
+        "dealingRules": {"minGuaranteedStopDistance": {"value": 1.2, "unit": "POINTS"}},
+    }
+    client.place_limit_order.side_effect = [
+        CapitalApiError('400 Client Error — corps de la réponse : {"errorCode":"error.invalid.stoploss.minvalue: 2.0"}'),
+        {"deal_id": "deal-retry-ok"},
+    ]
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result == "deal-retry-ok"
+    assert client.place_limit_order.call_count == 2
+    first_call_kwargs = client.place_limit_order.call_args_list[0].kwargs
+    second_call_kwargs = client.place_limit_order.call_args_list[1].kwargs
+    assert first_call_kwargs["stop_distance"] == pytest.approx(1.212)  # 1.2*1.01, plafond statique initial
+    assert second_call_kwargs["stop_distance"] == pytest.approx(2.0)  # valeur EXACTE divulguée par le broker
+    assert second_call_kwargs["size"] < first_call_kwargs["size"]  # stop plus large -> taille recalculée à la baisse
+
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT * FROM trades").fetchone()
+        assert trade["statut"] == "en_attente"
+        assert trade["deal_id"] == "deal-retry-ok"
+        assert trade["annulation_motif"] is None
+        assert trade["stop_elargi"] == 1
+        assert trade["stop_loss_courant"] == pytest.approx(102.0)  # 100 (entrée) + 2.0 (short, élargi)
+        assert trade["taille_initiale"] == pytest.approx(second_call_kwargs["size"])
+    finally:
+        conn.close()
+
+
+def test_open_signal_placement_retry_skipped_when_stop_not_guaranteed(tmp_path):
+    # Le réessai ne doit JAMAIS se déclencher hors stop garanti (aucun
+    # stopDistance n'a alors été transmis — un invalid.stoploss serait sans
+    # rapport avec ce qu'on a envoyé) : comportement inchangé, un seul
+    # appel, échec classé normalement.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.side_effect = CapitalApiError(
+        '400 Client Error — corps de la réponse : {"errorCode":"error.invalid.stoploss.minvalue: 2.0"}'
+    )
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result is None
+    assert client.place_limit_order.call_count == 1
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT * FROM trades").fetchone()
+        assert trade["statut"] == "annule"
+        assert trade["annulation_motif"] == "stop_refuse"
+    finally:
+        conn.close()
+
+
+def test_open_signal_placement_retry_gives_up_when_boundary_not_wider(tmp_path):
+    # Une valeur divulguée plus petite ou égale à ce qui a déjà été tenté
+    # n'expliquerait pas ce rejet précis — jamais retentée à l'aveugle,
+    # jamais interprétée comme une distance sans certitude (incertitude
+    # documentée sur l'unité divulguée pour ce champ précis).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)  # GOLD, short, entrée=100, stop=101
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"},
+        "dealingRules": {"minGuaranteedStopDistance": {"value": 1.2, "unit": "POINTS"}},
+    }
+    client.place_limit_order.side_effect = CapitalApiError(
+        '400 Client Error — corps de la réponse : {"errorCode":"error.invalid.stoploss.minvalue: 1.0"}'
+    )
+
+    envelope_manager = CapitalManager(initial_balance=500.0)
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result is None
+    assert client.place_limit_order.call_count == 1
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT * FROM trades").fetchone()
+        assert trade["statut"] == "annule"
+    finally:
+        conn.close()
+
+
 def test_open_signal_placement_failure_classifies_rate_limit_429(tmp_path):
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
@@ -1842,6 +1962,107 @@ def test_manage_open_trades_multi_leg_close_uses_weighted_r_and_notifies(tmp_pat
     assert "+2.00R" in partial_message
     assert "stop au breakeven" in close_message
     assert "+1.00R" in close_message
+
+
+def test_manage_open_trades_tp1_pushes_breakeven_stop_to_broker(tmp_path):
+    # Régression (audit du 24/09/2026, voir docs/DECISIONS.md) : TP1 touché
+    # mettait à jour trades.stop_loss_courant en base MAIS n'appelait
+    # jamais client.update_position_stop() — le stop réel chez Capital.com
+    # restait à son niveau d'origine (101.0), pas au breakeven (100.0). Une
+    # position ainsi divergente qui se fait fermer côté broker sur son
+    # ANCIEN stop devient une position fantôme (statut='ferme_non_reconcilie',
+    # jamais un prix imputé) au lieu d'une clôture normale — signature
+    # observée en production : 105 positions fantômes sur la génération
+    # « refonte », chacune arrêtée à EXACTEMENT un palier 'tp1' sans second
+    # palier. Ce test échoue sur le code d'avant le correctif (update_position_stop
+    # jamais appelé) et passe après (appelé avec le prix de breakeven).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path)  # short, entrée=100, stop=101, tp1=98, tp2=96
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-tp1-push', 'station_x', 'GOLD', 'demo', 'short', 1.0, "
+            "100.0, 101.0, 101.0, 10.0, 2.0, '2026-08-16T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    client = MagicMock()
+    client.get_prices.return_value = {"prices": []}
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 98.0, "offer": 98.0, "marketStatus": "TRADEABLE"}}
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="stationx")
+
+    # Cycle unique : prix à 98 -> TP1 touché, clôture 50%, stop à pousser au breakeven (100.0).
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("GOLD", "stationx"): envelope_manager},
+        envelope_ids={("GOLD", "stationx"): envelope_id},
+    )
+
+    client.update_position_stop.assert_called_once_with(
+        "deal-tp1-push", 100.0, guaranteed_stop=False, direction="short", current_stop_level=101.0,
+    )
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT statut, stop_loss_courant FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["statut"] == "ouvert"  # reliquat 50% encore ouvert, pas encore fermé
+        assert trade["stop_loss_courant"] == 100.0
+    finally:
+        conn.close()
+
+
+def test_manage_open_trades_tp1_breakeven_stop_capped_at_guaranteed_minimum(tmp_path):
+    # Même bug que ci-dessus, sur un trade à stop garanti (GOLD/BTC/ETH en
+    # production) : le breakeven post-TP1 doit être plafonné au minimum
+    # garanti du broker exactement comme le trailing Flux B (même fonction
+    # partagée, _push_stop_to_broker) — jamais un élargissement net par
+    # rapport au stop actuellement en place (invariant #3).
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, actif="GOLD", sens="short", entree=100.0, stop=101.0, tp1=98.0, tp2=96.0)
+    with connection_scope(db_path) as conn:
+        trade_id = conn.execute(
+            "INSERT INTO trades (signal_id, deal_id, source, actif, mode, direction, taille_initiale, "
+            "prix_entree_reel, guaranteed_stop, stop_loss_initial, stop_loss_courant, risque_eur, "
+            "pourcentage_risque_applique, ouvert_at, statut) "
+            "VALUES (?, 'deal-tp1-gs', 'station_x', 'GOLD', 'demo', 'short', 1.0, "
+            "100.0, 1, 101.0, 101.0, 10.0, 2.0, '2026-08-16T00:00:00Z', 'ouvert')",
+            (signal_row["id"],),
+        ).lastrowid
+
+    client = MagicMock()
+    client.get_prices.return_value = {"prices": []}
+    client.get_market_snapshot.return_value = {
+        "snapshot": {"bid": 98.0, "offer": 98.0, "marketStatus": "TRADEABLE"},
+        "dealingRules": {"minGuaranteedStopDistance": {"value": 2.5, "unit": "POINTS"}},
+    }
+    envelope_id, envelope_manager = load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="stationx")
+
+    # Breakeven brut (100.0) n'est qu'à 2.0 du prix courant (98.0) — sous le
+    # minimum garanti de 2.5*1.01=2.525 : plafonné à 98.0+2.525=100.525.
+    # Toujours un RESSERREMENT net par rapport au stop actuel (101.0, short
+    # => plus petit = plus serré) : accepté, jamais un élargissement
+    # (invariant #3) — ni égal au breakeven brut, ni égal au stop d'origine.
+    manage_open_trades(
+        db_path, client, make_engine(),
+        envelope_managers={("GOLD", "stationx"): envelope_manager},
+        envelope_ids={("GOLD", "stationx"): envelope_id},
+    )
+
+    client.update_position_stop.assert_called_once()
+    call_args = client.update_position_stop.call_args
+    assert call_args.args[0] == "deal-tp1-gs"
+    pushed_stop = call_args.args[1]
+    assert pushed_stop < 101.0  # jamais élargi par rapport au stop actuel
+    assert pushed_stop == pytest.approx(100.525)  # 98.0 + 2.5*1.01, plafonné, pas le breakeven brut (100.0)
+    conn = get_connection(db_path)
+    try:
+        trade = conn.execute("SELECT stop_loss_courant FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        assert trade["stop_loss_courant"] == pytest.approx(100.525)
+    finally:
+        conn.close()
 
 
 def test_manage_open_trades_flux_b_trailing_forwards_guaranteed_stop(tmp_path):

@@ -34,6 +34,28 @@ logger = logging.getLogger(__name__)
 _CLOSE_CONFIRM_MAX_ATTEMPTS = 4
 _CLOSE_CONFIRM_RETRY_DELAY_SECONDS = 1.0
 
+# `error.invalid.stoploss.(minvalue|maxvalue)` (28-29/08/2026, voir
+# docs/DECISIONS.md) : le seuil de distance de stop valide chez ce broker
+# est une BANDE DYNAMIQUE (ni minStepDistance ni %StopOrProfitDistance ne
+# l'expliquent), jamais une constante pré-validable — le message d'erreur
+# DIVULGUE la valeur limite exacte au moment du rejet. Extrait à ce niveau
+# module (24/09/2026, voir docs/DECISIONS.md, audit du 24/09/2026) : cette
+# analyse était dupliquée nulle part avant ce jour, mais DEVAIT être
+# réutilisable par un second appelant (executor.py, retry au PLACEMENT
+# d'un ordre limite, jamais construit avant faute de ce partage — voir
+# `_STOPLOSS_BOUNDARY_RE`, jusque-là un attribut privé de CapitalClient
+# utilisé uniquement par update_position_stop).
+_STOPLOSS_BOUNDARY_RE = re.compile(r"error\.invalid\.stoploss\.(minvalue|maxvalue):\s*([0-9.]+)")
+
+
+def parse_stoploss_boundary(error_text: str) -> Optional[float]:
+    """Extrait la valeur limite divulguée par le broker dans un message
+    d'erreur `error.invalid.stoploss.(minvalue|maxvalue)`, ou None si le
+    texte ne correspond pas à ce motif précis (jamais une valeur devinée
+    ou une formule locale — voir le commentaire du module ci-dessus)."""
+    match = _STOPLOSS_BOUNDARY_RE.search(error_text)
+    return float(match.group(2)) if match else None
+
 
 def _parse_broker_datetime(value: str) -> datetime:
     """Parse un horodatage ISO 8601, broker (souvent sans fuseau — traité
@@ -430,8 +452,6 @@ class CapitalClient:
         except ValueError:
             return False
 
-    _STOPLOSS_BOUNDARY_RE = re.compile(r"error\.invalid\.stoploss\.(minvalue|maxvalue):\s*([0-9.]+)")
-
     def update_position_stop(
         self, deal_id: str, new_stop_level: float, guaranteed_stop: bool = False,
         direction: Optional[str] = None, current_stop_level: Optional[float] = None,
@@ -478,18 +498,17 @@ class CapitalClient:
         try:
             return self._put_stop(deal_id, new_stop_level, guaranteed_stop)
         except CapitalApiError as exc:
-            match = self._STOPLOSS_BOUNDARY_RE.search(str(exc))
-            if match is None:
+            boundary = parse_stoploss_boundary(str(exc))
+            if boundary is None:
                 raise
-            boundary = float(match.group(2))
             if current_stop_level is not None and direction is not None:
                 if direction == "long" and boundary < current_stop_level:
                     raise
                 if direction == "short" and boundary > current_stop_level:
                     raise
             logger.warning(
-                "Stop rejeté par le broker pour la position %s : demandé=%s, %s — réessai adapté avec la valeur divulguée %s",
-                deal_id, new_stop_level, match.group(0), boundary,
+                "Stop rejeté par le broker pour la position %s : demandé=%s, valeur divulguée=%s — réessai adapté",
+                deal_id, new_stop_level, boundary,
             )
             return self._put_stop(deal_id, boundary, guaranteed_stop)
 

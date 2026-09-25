@@ -11680,3 +11680,257 @@ Fenêtre 02h06:32 → 05h06:36 UTC, 3e fenêtre consécutive sans
 veille (toujours en pleine nuit UTC), coupe-circuit stable à 10h15
 depuis la levée, aucune anomalie relevée cette fois. Surveillance
 relancée.
+
+## 2026-09-24 — Volet A (réparation) : deux bugs distincts isolés et corrigés, code écrit et testé, PAS DÉPLOYÉ
+
+Suite à l'audit du 24/09/2026 (`docs/Audit_Bilan_H1-H5_24-09-2026.md`),
+mission en trois volets (A : réparation, B : récupération d'historique,
+C : boucle d'évolution) demandée par Ismaël. Ce point couvre le Volet A
+uniquement. Code écrit, testé, **non commité, non déployé** — en attente
+de validation explicite d'Ismaël en fenêtre supervisée, conformément au
+mandat.
+
+### Bug 1 — `stop_refuse`/`autre_echec_placement` concentré sur GOLD/BTCUSD/ETHUSD
+
+**Cause isolée avec preuve code** : `executor.py::_compute_guaranteed_stop_adjustment`
+ne connaît le minimum de stop garanti que via un **instantané statique**
+de `dealingRules` (un seul `GET /markets/{epic}` par tentative). Or ce
+seuil est une **bande dynamique**, déjà documentée le 28-29/08/2026 pour
+l'opération de mise à jour de stop (`capital_client.py::update_position_stop`,
+5563 échecs `error.invalid.stoploss.(minvalue|maxvalue)` mesurés en
+production sur CETTE opération précise) — mais ce correctif (réessai
+unique avec la valeur EXACTE divulguée par le broker dans le message
+d'erreur) n'avait **jamais été porté au PLACEMENT initial de l'ordre**
+(`executor.py::open_signal`, appel à `client.place_limit_order`). Preuve
+par les données : `stop_refuse` (958 annulations au total) coïncide à
+100% avec les instruments dont `adjustment.guaranteed_required=True`
+(GOLD 657, BTCUSD 160, ETHUSD 102, GBPUSD 34, US100 5) — jamais un autre
+actif, cohérent avec un seuil de stop garanti périmé au moment de
+l'ouverture, pas avec un problème de logique de stratégie.
+
+**Fix** : `open_signal` réessaie désormais UNE FOIS le placement, avec la
+distance EXACTE divulguée par `error.invalid.stoploss.minvalue: X`
+(`capital_client.parse_stoploss_boundary`, extrait du code déjà écrit
+pour `update_position_stop`, jamais dupliqué), en recalculant la taille
+via `decide_entry()` (jamais un second calcul de risque local — invariant
+#2) pour préserver le même budget de risque en euros sur le stop élargi.
+Garde-fous : (a) ne se déclenche JAMAIS hors stop garanti (aucun
+`stopDistance` n'a alors été transmis, un `invalid.stoploss` serait sans
+rapport) ; (b) n'accepte la valeur divulguée que si elle est strictement
+PLUS LARGE que ce qui a déjà été tenté (sinon elle n'expliquerait pas ce
+rejet précis — jamais interprétée à l'aveugle, l'unité exacte du champ
+divulgué pour un rejet au PLACEMENT — distance, jamais niveau absolu —
+n'étant pas formellement confirmée par la documentation Capital.com, voir
+« Reste à vérifier » ci-dessous) ; (c) un seul réessai, jamais une boucle.
+Ne s'applique qu'à des ordres **pas encore ouverts** (aucune position
+existante) : invariant #3 (jamais élargir un stop déjà posé) sans objet
+ici, aucun changement à `update_position_stop` sur ce point.
+
+**Preuve de test** : 3 tests ajoutés à `tests/test_executor.py` —
+`test_open_signal_retries_placement_once_on_disclosed_stop_boundary`
+(échoue sur le code d'avant : `result is None`, 1 seul appel à
+`place_limit_order` ; passe après : 2 appels, taille recalculée à la
+baisse, `stop_elargi=1`), `test_open_signal_placement_retry_skipped_when_stop_not_guaranteed`
+(comportement inchangé hors stop garanti), `test_open_signal_placement_retry_gives_up_when_boundary_not_wider`
+(garde-fou (b), jamais de réessai à l'aveugle). Vérifié explicitement
+contre le code pré-correctif via `git stash` — les 3 tests échouent tous
+sur `8b99d9e`, passent tous après le correctif.
+
+**Dry-run sur l'historique** : les 958 annulations `stop_refuse`
+correspondent TOUTES à des tentatives où `adjustment.guaranteed_required`
+aurait été vrai (100% de recoupement par actif, voir ci-dessus) — le
+correctif est donc structurellement ÉLIGIBLE sur l'intégralité de ce lot.
+**Reste à vérifier** (impossible à rejouer depuis les données existantes,
+qui ne contiennent jamais la valeur exacte divulguée par le broker à
+l'époque) : (1) que le SUCCÈS du réessai (pas seulement son
+déclenchement) se confirme en conditions réelles, (2) que l'unité de la
+valeur divulguée pour un rejet au PLACEMENT (distance envoyée via
+`stopDistance`) soit bien une DISTANCE et non un niveau absolu comme pour
+`update_position_stop` (qui envoie `stopLevel`) — jamais vérifié
+empiriquement, à confirmer en fenêtre supervisée AVANT tout déploiement
+non supervisé.
+
+### Bug 2 — le stop au breakeven après TP1 n'était jamais transmis au broker
+
+**Cause isolée avec preuve code** : `_evaluate_position_management`
+retourne `CLOSE_PARTIAL_TP1` avec `new_stop_price=state.entry_price`
+(§2.10, « stop déplacé au breakeven »). Mais dans
+`_apply_management_action`, la branche « Clôtures » qui traite ce champ
+se contentait d'un `UPDATE trades SET stop_loss_courant = ?` **en base
+locale uniquement** — contrairement à la branche `UPDATE_TRAILING_STOP`
+(trailing Donchian, Flux B) qui, elle, appelait bien
+`client.update_position_stop()`. Le stop réellement posé chez
+Capital.com restait donc à son niveau D'ORIGINE après TP1, alors que le
+système croyait l'avoir déplacé au breakeven — divergence jamais
+détectée avant cet audit. Preuve par les données : les 45 trades qui
+touchent TP1 (tous statuts, toutes générations) s'arrêtent TOUS à
+EXACTEMENT un seul palier (`tp1`, fraction 0.5) dans `trade_partials` —
+jamais de second palier (`tp2`/`sl`) enregistré ensuite pour aucun
+d'entre eux avant de devenir position fantôme
+(`GHOST_TRADE_STATUS`/`ferme_non_reconcilie`) ou de rester bloqué
+`ouvert` — signature exacte d'un stop qui n'a jamais été correctement
+suivi côté broker après ce point.
+
+**Fix** : extraction de la logique de plafonnement (déjà existante,
+partagée avec le trailing) dans une fonction unique
+`_push_stop_to_broker()` — appelée par LES DEUX branches
+(`UPDATE_TRAILING_STOP` ET la clôture partielle TP1), jamais dupliquée
+deux fois (même leçon déjà tirée pour `_envelope_source_key`, voir
+entrée du 21/08/2026). Le stop demandé au broker est plafonné au minimum
+garanti si besoin, revalidé comme un RESSERREMENT net par
+`risk_engine.evaluate_stop_update` avant tout envoi (invariant #3
+inchangé — aucune modification de la logique de non-élargissement
+elle-même, seulement de l'endroit où elle s'applique).
+
+**Preuve de test** : 2 tests ajoutés —
+`test_manage_open_trades_tp1_pushes_breakeven_stop_to_broker` (échoue
+sur le code d'avant : `update_position_stop` appelé 0 fois ; passe
+après : appelé une fois avec le prix de breakeven exact),
+`test_manage_open_trades_tp1_breakeven_stop_capped_at_guaranteed_minimum`
+(le plafonnement au minimum garanti s'applique aussi depuis ce nouveau
+point d'appel, jamais un élargissement net par rapport au stop actuel).
+Vérifié contre le code pré-correctif via `git stash` — les 2 tests
+échouent sur `8b99d9e`, passent après.
+
+**Dry-run sur l'historique** : les 45 trades identifiés ci-dessus
+(query : `trade_partials` avec exactement 1 ligne, fraction=0.5, sur un
+trade `ouvert`/`ferme_non_reconcilie`) sont TOUS structurellement
+éligibles — le correctif aurait transmis un stop réel au broker pour
+chacun d'eux au moment de leur TP1. Impossible de savoir rétroactivement
+si cela aurait changé leur issue finale (dépend du mouvement de prix
+réel après TP1, jamais capturé pour les positions devenues fantômes).
+
+### Vérification transverse (A3, invariant #3)
+
+Aucun des deux correctifs ne modifie la logique de refus d'élargissement
+elle-même (`risk_engine.evaluate_stop_update`, `update_position_stop`'s
+comparaison au `current_stop_level` divulgué) — le Bug 1 agit avant
+qu'une position n'existe (rien à élargir au sens de l'invariant), le
+Bug 2 réutilise tel quel le garde-fou déjà validé pour le trailing.
+Suite complète : 1229 tests passent (1226 avant ce lot + 3 nouveaux sur
+le Bug 1, dont 2 pour le Bug 2 déjà comptés), couverture 100% inchangée
+sur `risk_engine`/`capital_manager`/`go_nogo`/`validator`.
+
+### Troisième anomalie trouvée en cours de route, NON corrigée — décision d'Ismaël requise avant tout code
+
+**`place_limit_order` (`capital_client.py`) n'attache AUCUN stop du tout
+(ni `stopLevel`, ni `stopDistance`) pour tout instrument où
+`_compute_guaranteed_stop_adjustment` ne trouve pas de
+`minGuaranteedStopDistance`** (`guaranteed_stop=False` →
+`if guaranteed_stop: body["stopDistance"]=...`, jamais de branche `else`
+qui poserait un `stopLevel` simple). `check_pending_fills` (détection de
+remplissage) n'attache rien non plus après coup. Concrètement : pour
+toute paire (actif, hypothèse) qui n'exige pas de stop garanti — la
+majorité de la liste blanche hors GOLD/BTCUSD/ETHUSD/GBPUSD/US100 —
+**la position ouverte chez Capital.com n'a AUCUN stop-loss posé côté
+broker**, du remplissage jusqu'à TP1 (ou jusqu'à ce que le trailing Flux
+B en pose un, pour H1 uniquement). La seule protection est le polling de
+`manage_open_trades` (60s) : si ce polling est interrompu (coupure de
+courant/breaker api_errors du 31/08-03/09, redémarrage, contention
+« database is locked »), la position n'a RIEN pour la protéger pendant
+la coupure. Hypothèse plausible, NON CONFIRMÉE, sur une partie des 790
+`autre_echec_placement` (concentrés sur US30/US100, jamais historiquement
+soumis au stop garanti) : si Capital.com exige en réalité un champ de
+stop quelconque sur ce compte, l'absence totale de `stopLevel` pourrait
+elle-même expliquer une partie de ces échecs — pas vérifié, aucune trace
+du texte d'erreur brut conservée pour ces cas.
+
+**Aucun code écrit pour ce point** — touche une décision de risque
+(quel stop poser, sous quelle forme, sur des instruments qui n'en ont
+jamais eu un jusqu'ici) hors du périmètre d'un correctif d'exécution pur.
+Point 3 de la liste de décisions du rapport (Phase 6) : validation
+explicite d'Ismaël requise avant toute investigation, même diagnostique,
+conformément à l'invariant #4.
+
+### Procédure de rollback
+
+Aucun commit créé, aucun déploiement effectué — les deux correctifs
+existent uniquement dans l'arbre de travail local
+(`src/executor.py`, `src/capital_client.py`, `tests/test_executor.py`).
+Si Ismaël valide le déploiement : commit dédié, `git push`, puis sur le
+VPS `git pull` et redémarrage supervisé des 6 process (même procédure
+que le 03/09/2026, `6c80914`) — un par un, fenêtre d'observation entre
+chaque, jamais tous en même temps. Rollback si un comportement inattendu
+apparaît : `git revert` du commit dédié sur le VPS, `git pull`,
+redémarrage — les deux correctifs sont dans des fonctions isolées
+(`_push_stop_to_broker`, le bloc `except CapitalApiError` de
+`open_signal`), aucune migration de schéma, aucun changement de
+`risk_engine.py`/`capital_manager.py` : un rollback ne perd aucune
+donnée, seulement le bénéfice du correctif.
+
+## 2026-09-24 (suite) — Volet B : récupération de l'historique réel Capital.com, 106 trades reconciliés
+
+Suite du point précédent, même mission. **Aucune écriture dans la base de
+production** — ce qui suit a été exécuté sur une copie locale en lecture
+seule du 24/09/2026 18h01 UTC. Le fetch brut, lui, a nécessairement
+touché le broker (lecture seule, `GET /history/activity`).
+
+**Méthode** : `scripts/fetch_capital_history.py` (nouveau, lecture seule,
+même discipline que `discover_instruments.py`/`calibrate_pip_value.py`)
+authentifie séparément les 5 comptes (base Station X/H1 + 4 comptes
+dédiés H2-H5) et récupère `GET /history/activity?detailed=true` du
+30/08/2026 au 24/09/2026, fenêtre de 1 jour par appel (contrainte API
+confirmée), 1,5s de pause entre chaque appel. Exécuté **depuis le VPS**
+(pas ce poste local) : le `.env` local n'a pas `CAPITAL_ACCOUNT_ID_HYPOTHESIS5`
+(jamais synchronisé, cohérent avec la politique du projet de ne jamais
+transmettre de secret à un LLM/poste externe) — le VPS a les 5 comptes
+complets. 1136 activités brutes récupérées, sauvegardées telles quelles
+dans `data/capital_history_raw/` (jamais commité, `.gitignore` à
+vérifier avant tout commit futur touchant ce dossier).
+
+**Schéma réel découvert** (non documenté publiquement en détail, voir
+docs de l'audit du 24/09/2026) : une activité `type="POSITION"` avec
+`details.openPrice` présent est un événement de CLÔTURE — `openPrice`
+est le prix d'ENTRÉE d'origine, `details.level` le prix de SORTIE réel,
+`details.direction` la direction de l'ORDRE DE CLÔTURE (donc inversée
+par rapport à la position : `BUY` ferme un short, `SELL` ferme un long).
+`details.workingOrderId` permet de rapprocher une clôture du `deal_id`
+tel qu'il était stocké AVANT le remplissage (utile pour les trades dont
+`trades.deal_id` n'a jamais été réécrit par `check_pending_fills`).
+`source="SL"` confirme une clôture par stop (garanti ou non).
+
+**Rapprochement** (`reconcile.py`, script d'audit ponctuel, non versionné
+dans `scripts/` — logique simple, à formaliser séparément si Ismaël
+valide son usage récurrent) : pour chaque trade local `ferme_non_reconcilie`/
+`ouvert` (v2 + Station X), recherche des activités de clôture par
+`dealId` puis par `workingOrderId`, calcul du R RÉEL via
+`risk_engine.compute_r_multiple(direction, entry_price=openPrice_broker,
+stop_price=stop_loss_initial_local, exit_price=level_broker)` — le prix
+d'entrée et de sortie viennent du broker (jamais recopiés d'un calcul
+antérieur, invariant #2), le stop initial (l'unité de risque, 1R) vient
+de notre propre décision de risque au moment de l'ouverture. Agrégation
+pondérée sur plusieurs jambes (`compute_weighted_r_multiple`) quand
+plusieurs événements de clôture partagent le même `dealId`.
+
+**Résultat** : 106 des 116 trades non-reconciliés retrouvent un R réel
+et vérifiable (10 sans aucune activité de clôture trouvée côté broker —
+probablement encore ouverts au sens propre, à vérifier). Un trade
+(ETHUSD, hypothesis5_v2, id=15840) vérifié manuellement événement par
+événement : ouvert le 17/09 à 2423.61 (stop initial 2409.45), stop
+suivi à la hausse par 25 `EDIT_STOP_AND_LIMIT` successifs sur 3 jours,
+clôturé par stop (source=SL) le 20/09 à 2611.75 — R=+13.28,
+mathématiquement exact et cohérent avec un trailing qui a fonctionné
+correctement de bout en bout (voir aussi Bug 2 ci-dessus : H5 sort
+100% en trailing, jamais par clôture partielle TP1 — n'était donc pas
+concerné par ce bug précis, cohérent avec ce constat).
+
+**n recalculé par hypothèse** (v2, tous actifs confondus, TOUJOURS
+< 30, aucun verdict actionnable) : H1(`hypothesis_v2`)=28,
+H2(`hypothesis2_v2`)=18, H3(`hypothesis3_v2`)=20, H4(`hypothesis4_v2`)=20,
+H5(`hypothesis5_v2`)=19. Détail complet par (hypothèse, actif) et le
+CSV brut dans le rapport de mission (docs/Rapport_Mission_ABC_24-09-2026.md).
+
+**Décision requise avant toute action** : ces 106 R reconciliés
+n'ont PAS été écrits dans `trades.r_multiple_total`/`statut` en
+production — écrire dans la base de production est un changement
+d'état qui affecte immédiatement `metrics.py`/`confidence_scorer.py`/le
+dashboard/le compteur de comparaisons multiples, hors du mandat de cette
+mission sans validation explicite (voir décision 2 du rapport). Le
+mécanisme structurel qui a produit ce manque (Bug 2 + la course entre
+exécution instantanée d'un stop garanti côté broker et notre polling
+60s, jamais entièrement réparée par le seul Bug 2) mérite une réflexion
+séparée : une réconciliation périodique basée sur `/history/activity`
+(plutôt que la seule absence de la position dans `/positions`)
+fermerait la boucle plus fermement — proposé comme piste, pas construit
+ici.
+

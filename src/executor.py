@@ -61,7 +61,7 @@ from src.audit_notifier import (
     format_trade_partial_notification,
     send_notification,
 )
-from src.capital_client import CapitalApiError, CapitalClient
+from src.capital_client import CapitalApiError, CapitalClient, parse_stoploss_boundary
 from src.capital_manager import CapitalManager, apply_trade_result
 from src.circuit_breaker import (
     CLUSTER_EXPOSURE_CAP_EUR,
@@ -972,18 +972,89 @@ def open_signal(
             level=signal_row["entree_min"],
             guaranteed_stop=adjustment.stop_distance > 0, stop_distance=adjustment.stop_distance if adjustment.stop_distance > 0 else None,
         )
-    except CapitalApiError as exc:
-        logger.exception("Échec du placement de l'ordre limite pour le signal %s", signal_row["id"])
-        # Ligne pré-insérée ci-dessus annulée — jamais laissée en
-        # 'en_attente' sans deal_id, ce qui bloquerait indéfiniment tout
-        # nouveau signal sur cet actif (invariant #7, fail-safe).
-        # `annulation_motif` (point 10, 29/08/2026, voir docs/DECISIONS.md) :
-        # sépare la cause EN CODE, jamais reconstruite après coup depuis un
-        # log texte — condition de la Mesure A (taux de remplissage).
-        motif = _classify_placement_failure(str(exc))
-        with connection_scope(db_path) as conn:
-            conn.execute("UPDATE trades SET statut = 'annule', annulation_motif = ? WHERE id = ?", (motif, trade_id))
-        return None
+    except CapitalApiError as first_exc:
+        # Réessai unique sur la valeur EXACTE divulguée par le broker
+        # (24/09/2026, voir docs/DECISIONS.md, audit du 24/09/2026) — même
+        # mécanisme que capital_client.update_position_stop (28-29/08/2026),
+        # jamais porté jusqu'ici : le seuil de distance de stop garanti est
+        # une BANDE DYNAMIQUE, pas la constante statique lue une seule fois
+        # par _compute_guaranteed_stop_adjustment (dealingRules, potentiellement
+        # périmée de plusieurs minutes/heures au moment de l'ouverture) — cause
+        # racine confirmée de la concentration des échecs `stop_refuse` sur
+        # GOLD/BTCUSD/ETHUSD (seuls actifs de la liste blanche à exiger un
+        # stop garanti sur ce compte démo), voir docs/DECISIONS.md pour le
+        # détail complet. Ne s'applique JAMAIS si le stop n'est pas garanti
+        # (adjustment.guaranteed_required=False) : aucun stopDistance n'a
+        # alors été transmis, un `invalid.stoploss` serait sans rapport.
+        retry_result = None
+        if adjustment.guaranteed_required:
+            boundary_distance = parse_stoploss_boundary(str(first_exc))
+            if boundary_distance is not None and boundary_distance > adjustment.stop_distance:
+                # Le broker a demandé un stop même plus large que ce que
+                # _compute_guaranteed_stop_adjustment avait déjà calculé.
+                # Jamais une valeur devinée : reconstruit le prix de stop à
+                # EXACTEMENT cette distance divulguée, dans le sens qui
+                # élargit depuis le prix d'entrée (même convention que
+                # _compute_guaranteed_stop_adjustment). `boundary_distance <=
+                # adjustment.stop_distance` (garde ci-dessus) : une valeur
+                # divulguée plus petite ou égale n'expliquerait pas ce rejet
+                # précis — jamais retentée, jamais interprétée à tort comme
+                # une distance (voir docs/DECISIONS.md, incertitude
+                # explicitement documentée sur l'unité divulguée pour ce
+                # champ précis, à confirmer en fenêtre supervisée avant
+                # déploiement).
+                retried_stop_price = (
+                    round(signal_row["entree_min"] - boundary_distance, 8) if signal_row["sens"] == "long"
+                    else round(signal_row["entree_min"] + boundary_distance, 8)
+                )
+                retried_decision = decide_entry(
+                    asset=asset, direction=signal_row["sens"], entry_price=signal_row["entree_min"],
+                    stop_price=retried_stop_price, confidence=signal_row["confiance"] or 0.0,
+                    current_price=snapshot.mid, market_status=snapshot.market_status,
+                    risk_engine=risk_engine, whitelist=whitelist, envelope_balance=envelope_manager.balance,
+                    confidence_threshold=confidence_threshold, go_nogo_ok=go_nogo_status.allowed,
+                )
+                if retried_decision.approved:
+                    logger.warning(
+                        "Signal %s : stop garanti rejeté (distance=%s), réessai unique à la distance divulguée "
+                        "par le broker (%s), taille recalculée (%s -> %s unités)",
+                        signal_row["id"], adjustment.stop_distance, boundary_distance,
+                        units, retried_decision.risk_decision.units,
+                    )
+                    try:
+                        retry_result = client.place_limit_order(
+                            epic=epic, direction=direction_api, size=retried_decision.risk_decision.units,
+                            level=signal_row["entree_min"],
+                            guaranteed_stop=True, stop_distance=boundary_distance,
+                        )
+                    except CapitalApiError:
+                        retry_result = None
+                    else:
+                        units = retried_decision.risk_decision.units
+                        risk_amount_eur = retried_decision.risk_decision.risk_amount_eur
+                        with connection_scope(db_path) as conn:
+                            conn.execute(
+                                "UPDATE trades SET taille_initiale = ?, stop_loss_initial = ?, stop_loss_courant = ?, "
+                                "risque_eur = ?, pourcentage_risque_applique = ?, stop_elargi = 1 WHERE id = ?",
+                                (
+                                    units, retried_stop_price, retried_stop_price, risk_amount_eur,
+                                    (risk_amount_eur / envelope_manager.balance * 100) if envelope_manager.balance else 0.0,
+                                    trade_id,
+                                ),
+                            )
+        if retry_result is None:
+            logger.exception("Échec du placement de l'ordre limite pour le signal %s", signal_row["id"])
+            # Ligne pré-insérée ci-dessus annulée — jamais laissée en
+            # 'en_attente' sans deal_id, ce qui bloquerait indéfiniment tout
+            # nouveau signal sur cet actif (invariant #7, fail-safe).
+            # `annulation_motif` (point 10, 29/08/2026, voir docs/DECISIONS.md) :
+            # sépare la cause EN CODE, jamais reconstruite après coup depuis un
+            # log texte — condition de la Mesure A (taux de remplissage).
+            motif = _classify_placement_failure(str(first_exc))
+            with connection_scope(db_path) as conn:
+                conn.execute("UPDATE trades SET statut = 'annule', annulation_motif = ? WHERE id = ?", (motif, trade_id))
+            return None
+        result = retry_result
 
     with connection_scope(db_path) as conn:
         conn.execute("UPDATE trades SET deal_id = ? WHERE id = ?", (result["deal_id"], trade_id))
@@ -1405,6 +1476,77 @@ def _weighted_r_multiple_for_trade(db_path: str, trade_id: int) -> float:
     return compute_weighted_r_multiple([(p["fraction"], p["r_atteint"]) for p in partials])
 
 
+def _push_stop_to_broker(
+    db_path: str, client: CapitalClient, state: "OpenTradeState", candidate_stop_price: float,
+    risk_engine: Optional[RiskEngine] = None, current_price: Optional[float] = None,
+) -> None:
+    """Transmet un nouveau niveau de stop au broker pour une position déjà
+    ouverte, plafonné au minimum garanti si besoin (jamais un élargissement
+    net par rapport au stop actuellement en place, invariant #3) —
+    factorisée le 24/09/2026 (voir docs/DECISIONS.md, audit du 24/09/2026) :
+    auparavant dupliquée uniquement dans la branche UPDATE_TRAILING_STOP de
+    `_apply_management_action` ; la branche de clôture partielle (TP1,
+    §2.10 : « stop déplacé au breakeven ») n'appelait JAMAIS
+    `client.update_position_stop()` — elle écrivait `stop_loss_courant`
+    en base et s'arrêtait là. Le stop réellement posé chez Capital.com
+    restait donc à son niveau D'ORIGINE (plus large) après TP1 : la
+    position était moins protégée que ce que le système croyait, et une
+    clôture broker-side sur ce stop d'origine (jamais notre propre
+    `close_position()`) devenait une position fantôme
+    (`GHOST_TRADE_STATUS`) — aucun prix jamais imputé, tout comme prévu
+    pour ce mécanisme, mais pour une position qui n'aurait jamais dû
+    diverger de la base en premier lieu. Bug réel confirmé par
+    `trade_partials` en production : chaque position fantôme de la
+    génération « refonte » qui avait touché TP1 s'arrête à EXACTEMENT un
+    seul palier (`tp1`, fraction 0.5) — jamais de second palier — signe
+    d'un stop qui n'a jamais été poussé au broker pour le reliquat.
+
+    Appelée depuis DEUX points : le trailing Donchian (Flux B) ET le
+    passage au breakeven déclenché par TP1 — même logique de plafonnement,
+    jamais dupliquée deux fois (voir docs/DECISIONS.md, leçon déjà tirée
+    pour `_envelope_source_key`)."""
+    new_stop_price = candidate_stop_price
+    if state.guaranteed_stop and risk_engine is not None and current_price is not None:
+        # Plafonne le candidat au minimum garanti du broker AVANT toute
+        # tentative — corrigé le 21/08/2026 (voir docs/DECISIONS.md) : avant
+        # ce correctif, un candidat plus serré que ce minimum était tenté
+        # tel quel, rejeté en boucle indéfiniment (error.invalid.stoploss.
+        # minvalue) sans jamais dégrader gracieusement. Réutilise
+        # _compute_guaranteed_stop_adjustment (déjà utilisée à l'ouverture),
+        # avec le prix COURANT comme référence — c'est contre le marché
+        # courant, pas le prix d'entrée d'origine, que le broker applique
+        # cette contrainte à un trade déjà ouvert.
+        adjustment = _compute_guaranteed_stop_adjustment(
+            client, state.asset, state.direction, current_price, new_stop_price,
+        )
+        if adjustment.widened:
+            # Le plafond est un ÉLARGISSEMENT par rapport au candidat brut —
+            # mais reste-t-il un RESSERREMENT par rapport au stop
+            # actuellement en place ? Revalidé via risk_engine.
+            # evaluate_stop_update (invariant #5, jamais cette fonction
+            # seule) : si même le plafond n'améliore pas le stop existant,
+            # aucune mise à jour n'est tentée plutôt que d'échouer au broker
+            # pour rien.
+            stop_decision = risk_engine.evaluate_stop_update(state.stop_price, adjustment.stop_price, state.direction)
+            if not stop_decision.approved:
+                logger.info(
+                    "Stop plafonné au minimum garanti pour le trade %s (%s), mais n'améliore plus le stop actuel (%s) — inchangé",
+                    state.trade_id, adjustment.stop_price, state.stop_price,
+                )
+                return
+            logger.info(
+                "Stop plafonné au minimum garanti broker pour le trade %s : %s -> %s (candidat brut %s)",
+                state.trade_id, state.stop_price, adjustment.stop_price, new_stop_price,
+            )
+            new_stop_price = adjustment.stop_price
+    client.update_position_stop(
+        state.deal_id, new_stop_price, guaranteed_stop=state.guaranteed_stop,
+        direction=state.direction, current_stop_level=state.stop_price,
+    )
+    with connection_scope(db_path) as conn:
+        conn.execute("UPDATE trades SET stop_loss_courant = ? WHERE id = ?", (new_stop_price, state.trade_id))
+
+
 def _apply_management_action(
     db_path, client, state, action, envelope_managers, envelope_ids,
     risk_engine=None, current_price=None, trigger_time=None,
@@ -1423,48 +1565,7 @@ def _apply_management_action(
     d'urgence (`force_close_all_open_trades`, aucun `evaluate_position_
     management` associé) — jamais une valeur inventée."""
     if action.action == ManagementActionType.UPDATE_TRAILING_STOP:
-        new_stop_price = action.new_stop_price
-        if state.guaranteed_stop and risk_engine is not None and current_price is not None:
-            # Plafonne le candidat de trailing au minimum garanti du broker
-            # AVANT toute tentative — corrigé le 21/08/2026 (voir
-            # docs/DECISIONS.md) : avant ce correctif, un candidat Donchian
-            # plus serré que ce minimum était tenté tel quel, rejeté en
-            # boucle indéfiniment (error.invalid.stoploss.minvalue) sans
-            # jamais dégrader gracieusement — le trailing restait bloqué au
-            # dernier niveau accepté, jamais réévalué. Réutilise
-            # _compute_guaranteed_stop_adjustment (déjà utilisée à
-            # l'ouverture), avec le prix COURANT comme référence — c'est
-            # contre le marché courant, pas le prix d'entrée d'origine, que
-            # le broker applique cette contrainte à un trade déjà ouvert.
-            adjustment = _compute_guaranteed_stop_adjustment(
-                client, state.asset, state.direction, current_price, new_stop_price,
-            )
-            if adjustment.widened:
-                # Le plafond est un ÉLARGISSEMENT par rapport au candidat
-                # Donchian brut — mais reste-t-il un RESSERREMENT par
-                # rapport au stop actuellement en place ? Revalidé via
-                # risk_engine.evaluate_stop_update (invariant #5, jamais
-                # cette fonction seule) : si même le plafond n'améliore pas
-                # le stop existant, aucune mise à jour n'est tentée plutôt
-                # que d'échouer au broker pour rien.
-                stop_decision = risk_engine.evaluate_stop_update(state.stop_price, adjustment.stop_price, state.direction)
-                if not stop_decision.approved:
-                    logger.info(
-                        "Trailing plafonné au minimum garanti pour le trade %s (%s), mais n'améliore plus le stop actuel (%s) — inchangé",
-                        state.trade_id, adjustment.stop_price, state.stop_price,
-                    )
-                    return
-                logger.info(
-                    "Trailing plafonné au minimum garanti broker pour le trade %s : %s -> %s (candidat brut %s)",
-                    state.trade_id, state.stop_price, adjustment.stop_price, new_stop_price,
-                )
-                new_stop_price = adjustment.stop_price
-        client.update_position_stop(
-            state.deal_id, new_stop_price, guaranteed_stop=state.guaranteed_stop,
-            direction=state.direction, current_stop_level=state.stop_price,
-        )
-        with connection_scope(db_path) as conn:
-            conn.execute("UPDATE trades SET stop_loss_courant = ? WHERE id = ?", (new_stop_price, state.trade_id))
+        _push_stop_to_broker(db_path, client, state, action.new_stop_price, risk_engine, current_price)
         return
 
     # Clôtures (partielles ou totales)
@@ -1543,8 +1644,20 @@ def _apply_management_action(
                 trigger_time, current_price, close_requested_at,
             ),
         )
-        if action.new_stop_price is not None:
-            conn.execute("UPDATE trades SET stop_loss_courant = ? WHERE id = ?", (action.new_stop_price, state.trade_id))
+
+    # Transmission du nouveau stop (breakeven après TP1, §2.10) au broker —
+    # jamais depuis l'intérieur du `with connection_scope` ci-dessus (appel
+    # réseau tenu hors transaction SQLite, même discipline que le reste de
+    # cette fonction, pour ne jamais aggraver la contention déjà connue
+    # entre les 6 process écrivains). Bug réel corrigé le 24/09/2026 (voir
+    # _push_stop_to_broker et docs/DECISIONS.md) : avant ce correctif, seule
+    # la base était mise à jour ici — le stop réel chez Capital.com restait
+    # à son niveau d'origine. `not is_full_close` est une garde défensive
+    # (une clôture totale ne fixe jamais `new_stop_price`, voir
+    # `_evaluate_position_management`) : aucune position ne subsiste après
+    # une clôture totale, rien à pousser au broker.
+    if not is_full_close and action.new_stop_price is not None:
+        _push_stop_to_broker(db_path, client, state, action.new_stop_price, risk_engine, current_price)
 
     # Clôture partielle (§7.2, absent avant le 20/08/2026 — voir
     # docs/DECISIONS.md) : uniquement TP1/TP2 Station X — le Flux B n'a
