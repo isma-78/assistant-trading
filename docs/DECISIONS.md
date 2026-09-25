@@ -12,6 +12,175 @@ la plus récente en tête.
 
 ---
 
+## 2026-09-25 (nuit) — Réparation déployée (Option B, E1, fidélité, boucles orphelines) + boucle d'évolution par hypothèse
+
+Mandat d'Ismaël du 25/09/2026 soir : Option B TP1, protocole E1, Bug 2
+conservé, script de fidélité, arrêt des boucles orphelines — validés,
+exécution autonome, chaque élément déployé un par un avec vérification de
+santé avant le suivant. Puis boucle d'évolution par hypothèse, chacune sur
+ses seules données valides.
+
+### Partie 1.1 — Option B : trois positions broker dès l'entrée (déployée 19:12 UTC)
+
+**Test préalable sur l'API réelle** (`scripts/_verify_leg_independence.py`,
+preuve JSON `logs/leg_independence_test_25-09-2026.json`) — aucun
+sous-compte libre (les 5 sous-comptes démo sont tous utilisés par le
+système, vérifié via `GET /accounts`), test automatisé à taille minimale
+sur le sous-compte « hypothèse 4 » (la règle CLAUDE.md vise les ordres
+MANUELS sur le compte de l'exécuteur ; les scripts automatisés type
+calibration y sont admis), tout fermé/annulé dans la minute. **11/11
+étapes OK** : 3 ordres limite distincts, annuler l'un laisse les 2 autres ;
+3 positions EURUSD puis 3 ETHUSD : modifier le stop de l'une ne touche
+pas les autres (EURUSD 1.13151 -> 1.13322 sur la 1 seule), fermer l'une
+(DELETE sans taille) laisse les 2 autres ouvertes, taille intacte.
+
+**Découverte en préparant le test** : les 9 actifs portent tous une règle
+`minGuaranteedStopDistance` (sous-comptes Station X/H1 et H4 vérifiés) —
+la production pose donc TOUJOURS un stop garanti. **L'anomalie
+« place_limit_order n'attache aucun stop à la majorité de la liste
+blanche » (rapport du 24/09, §1) ne s'applique pas à l'état actuel du
+broker** : le chemin sans stop existe dans le code mais n'est emprunté par
+aucun instrument aujourd'hui. Point clos sans correctif ; à rouvrir si
+Capital.com retire un jour cette règle d'un actif.
+
+**Implémentation** (`src/executor.py`, `src/db.py`, table `trade_legs`) :
+- Tout signal à paliers (TP1 ET TP2, pas de cible fixe) -> 3 ordres
+  limite 50/30/20 (`compute_tp_allocations`, somme exacte = taille
+  dimensionnée par risk_engine, jamais plus). Si un palier tombe sous la
+  taille minimale broker : signal REJETÉ (consigné dans
+  `risk_decisions`), jamais dégradé en silence. Si un ordre échoue après
+  d'autres : ceux-ci sont annulés, trade annulé — jamais à moitié placé.
+- Remplissage rapproché palier par palier ; TP1/TP2 ferment LEUR
+  position entière ; un stop ou /stop_urgence ferme toutes les positions
+  restantes ; tout déplacement de stop (breakeven après TP1 = Bug 2,
+  trailing) s'applique à toutes les positions restantes.
+- `evaluate_position_management` (décision) INCHANGÉ — seule l'exécution
+  change : parité live/backtest préservée.
+- H5 (100% trailing) et tout signal sans TP1/TP2 : inchangés, une position.
+
+**Ajout indispensable à la validité des compteurs E1** : la
+réconciliation (`reconcile_ghost_positions`) cherche désormais la clôture
+RÉELLE d'une position disparue dans `/history/activity` (fenêtre UTC
+vérifiée sur une clôture connue) et la comptabilise normalement (R au
+prix réel, P&L, enveloppe, coupe-circuits R) — seule une position
+introuvable reste « fantôme ». Motif : 66 des 106 trades réconciliés à la
+main le 24/09 étaient des stops garantis exécutés entre deux cycles, tous
+invisibles des statistiques et des coupe-circuits R — un biais
+systématique contre les pertes qui aurait faussé tout verdict E1.
+
+Tests : 1248 puis 1257 passent, couverture 100% maintenue
+(`risk_engine`/`capital_manager`/`go_nogo`/`validator`/
+`hypothesis5_strategy_v2`). 19 tests dédiés (`tests/test_executor_legs.py`).
+
+**Preuve en production** : premier trade à paliers, 25/09 19:35 UTC,
+H2/USDJPY 2200 -> 3 ordres broker distincts (1100/700/400), même niveau
+157.201, chacun avec son stop garanti (lu directement sur le broker).
+
+### Correctif complémentaire — seuil de stop divulgué = NIVEAU, pas distance (déployé 19:35 UTC)
+
+Constaté juste après le déploiement : chaque placement H2/USDJPY et
+H4/EURUSD échouait en `stop_refuse`, un nouveau signal à chaque cycle —
+**préexistant, pas une régression** (43 échecs H2/USDJPY dans l'heure de
+18h, avant le déploiement de 19:12). Erreurs réelles lues dans les logs :
+`maxvalue: 156.38` (USDJPY long à 157.177), `minvalue: 1.145705` (EURUSD
+short à 1.139945) — des NIVEAUX de prix. Le réessai du correctif Bug 1
+(24/09) les lisait comme des DISTANCES (156,38 JPY !) et ne pouvait donc
+jamais réussir — l'incertitude sur l'unité était explicitement notée dans
+son commentaire. Corrigé : niveau converti en distance depuis le niveau
+de l'ordre, dans le sens du stop ; valeur du mauvais côté = aucun
+réessai. C'est l'élargissement au minimum broker déjà décidé par Ismaël
+le 20/08 (taille recalculée par risk_engine, risque inchangé), pas un
+nouveau paramètre de risque. Preuve : le trade 16716 ci-dessus est passé
+par ce réessai (`stop_elargi=1`, stop 156.403).
+
+### Partie 1.2 — Protocole E1 (19:12 UTC)
+
+- Époques écrites dans `hypothesis_epochs` à l'heure EXACTE de
+  redémarrage de chaque process : H1 19:12:17Z, H2 19:12:26Z, H3
+  19:12:35Z, H4 19:12:44Z (+ H2 `grille_defaut` 18:14:16Z pour la trace).
+- **102 trades antérieurs H1-H4** (ouverts, fermés, fantômes) étiquetés
+  `exit_type='tp_fixe_involontaire'` + `anomalie_technique=
+  'tp1_cloture_totale_broker'` — exclus de `metrics`/dashboard/score de
+  confiance (filtre déjà existant), jamais du P&L réel. Jamais mélangés
+  aux trades E1.
+- Compteur : `scripts/epoch_status.py` (lecture seule) — ne compte que
+  les trades de l'époque en vigueur, seuil de verdict max(30, 10 ×
+  variables). État au déploiement : H1 0/30, H2 0/40, H3 0/30, H4 0/30.
+- `src/h2_forward_tracking.py` devient obsolète (il suivait le combo H2
+  retiré le 25/09) — appelé par aucun code en production, laissé tel quel.
+
+### Partie 1.3 — Bug 2 conservé
+
+Inchangé. Désormais réellement opérant : après TP1, le breakeven est
+poussé aux positions TP2 et reliquat qui existent vraiment.
+
+### Partie 1.4 — Script de fidélité réparé
+
+- `scripts/refresh_historical_tail.py` : complète les fichiers
+  `data/historical/` avec les seules bougies postérieures, une requête à
+  la fois, pause 1,5 s + retry (échelonnement du Volet B), **arrêt
+  immédiat** si 429 sur nos requêtes OU côté exécuteurs (compteur
+  `api_error_streak:*` > 0 ou placement annulé pour 429 depuis le début),
+  jamais de bougie en formation, écriture atomique. Exécuté : 27 fichiers
+  à jour (HOUR 25/09 18:00, HOUR_4 12:00, DAY 24/09), aucun arrêt 429,
+  exécuteurs à 0 erreur pendant et après.
+- `scripts/_compare_live_vs_backtest_window.py` : couverture VÉRIFIÉE
+  avant tout rejeu (sur les données périmées : 39 « COUVERTURE
+  INSUFFISANTE », code de sortie 1 — plus jamais un « 0 trade »
+  silencieux) ; paramètres rejoués PAR PÉRIODE (H2 combo jusqu'au 25/09
+  18:14:16, défauts ensuite ; H5 sans puis avec le filtre E2) ; H1 et H5
+  ajoutées ; mesure = appariement des signaux (même sens, ±2 h) ; rejeu
+  borné à 90 j HOUR / 200 j DAY avant la fenêtre (le live n'en voit pas
+  plus).
+- **Résultats (données à jour)** — part des signaux live retrouvés par le
+  backtest : **H1 82%** (36/44), **H5 75%** (49/65), **H3 59%** (20/34),
+  **H4 52%** (14/27), **H2 combo retiré 12%** (4/32). Réserves : le live
+  répète le même signal à chaque heure tant que le placement échoue
+  (échecs `stop_refuse` ci-dessus), ce qui gonfle le dénominateur ; le
+  filtre « heures chères » live n'est pas répliqué. **H2 à 12% est une
+  divergence réelle non expliquée** — elle concerne le mécanisme
+  multi-TF, toujours utilisé par H2 aux valeurs par défaut : à
+  investiguer dans une session dédiée, non creusé ici.
+
+### Partie 1.5 — Boucles orphelines arrêtées
+
+PID 141328 et 142409 vérifiés avant arrêt : `bash -c until ! pgrep -f
+_compare_live_vs_backtest_window.py ...`, parent init, actives depuis 31
+jours (elles se reconnaissaient elles-mêmes dans `pgrep`, donc éternelles).
+Arrêtées (`kill`), absence confirmée.
+
+### Santé du système
+
+Après chaque redémarrage : les 6 exécuteurs vivants, compteur d'erreurs
+API à 0 à chaque cycle (`system_state`), `process_watchdog` à « up ».
+Angle mort signalé : la sortie des process passe par `| tee` en mode
+tamponné — les journaux n'apparaissent qu'avec retard (voire à l'arrêt) ;
+la santé a été vérifiée par la base, pas par les journaux.
+
+### Partie 2 — Boucle d'évolution, par hypothèse
+
+- **H5** — seule hypothèse avec des trades valides (19, jamais touchée par
+  le défaut TP1). Analyse causale faite (voir le pré-enregistrement E2-H5
+  ci-dessous : pertes = fausses cassures immédiates). **Une idée,
+  pré-enregistrée à 19:20:00Z avant tout code, déployée à 19:25:40Z**
+  (époque `E2`, compteur remis à 0/40). Filtre vérifié en conditions
+  réelles : 99 bougies DAY closes par actif, signe défini pour les 9
+  actifs (4 haussiers, 5 baissiers). Son effet sur les 19 trades déjà vus
+  n'a PAS été calculé et ne le sera pas. H5 redémarrée une seconde fois à
+  19:35 pour le correctif de placement (commun aux 6 process) :
+  configuration E2 et époque inchangées.
+- **H1, H2, H3, H4** — **aucun trade postérieur à E1 à ce stade** (0
+  fermé). Les 25 jours contaminés ne sont jamais utilisés. L'analyse
+  causale démarrera dès qu'une poignée de trades E1 sera fermée
+  (`scripts/epoch_status.py`) ; aucune idée n'est proposée avant — rien à
+  analyser, et la règle interdit de s'appuyer sur les trades contaminés.
+- Rappel honnête pour H3/H4 : leur clôture de recherche du 29/08
+  (18/18 et 27/27 combinaisons négatives) reposait sur un backtest qui
+  simulait DÉJÀ correctement la sortie 50/30/20 — E1 restaure la fidélité
+  du live, il ne promet pas d'edge.
+
+---
+
 ## PRÉ-ENREGISTREMENT E2-H5 — 2026-09-25T19:20:00Z — Alignement de la cassure sur la tendance de fond (momentum de série temporelle)
 
 Écrit AVANT toute ligne de code de cette idée et SANS avoir calculé son
