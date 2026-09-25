@@ -12,6 +12,80 @@ la plus récente en tête.
 
 ---
 
+## PRÉ-ENREGISTREMENT E2-H5 — 2026-09-25T19:20:00Z — Alignement de la cassure sur la tendance de fond (momentum de série temporelle)
+
+Écrit AVANT toute ligne de code de cette idée et SANS avoir calculé son
+effet sur aucune donnée déjà vue (ni les 19 trades H5 valides, ni le
+backtest) — et cet effet ne sera jamais calculé sur ces données-là.
+
+**Ce qui l'a suscitée (analyse causale des 19 trades H5 valides, même
+jour)** : les 10 pertes pleines (−1R) sont TOUTES des échecs immédiats —
+aucun ajustement de stop côté broker, stop initial touché en 0,2 à 18,5 h
+(médiane ≈ 6 h), le prix réintégrant la zone de compression. Les 7 gains
+ne commencent à suivre qu'après ≈ 19-20 h (Donchian(20) en barres
+horaires) puis courent 31 à 74 h. Mécanisme de perte : la fausse cassure.
+Le test d'information pré-enregistré du 29/08 avait déjà établi que le
+sens de la cassure seul ne porte aucune information directionnelle
+(r = −0,078, n = 447, non discernable de zéro).
+
+**Justification théorique (tient seule, sans ces chiffres)** :
+1. La compression de volatilité annonce une EXPANSION de volatilité, pas
+   un sens : c'est la persistance de la volatilité (regroupement de
+   volatilité, modèles ARCH/GARCH, Engle 1982, Bollerslev 1986) — elle dit
+   « quand », jamais « de quel côté ». Une cassure prise dans les deux
+   sens sans autre information est donc, en attente, un pari
+   directionnel sans avantage, où seule l'asymétrie du trailing crée des
+   gains ponctuels.
+2. Le momentum de série temporelle (Moskowitz, Ooi & Pedersen 2012 ;
+   Hurst, Ooi & Pedersen 2017, un siècle de données) est l'une des
+   régularités les mieux documentées sur indices, devises, matières
+   premières : le signe du rendement passé d'un actif sur 1 à 12 mois
+   prédit positivement son rendement à venir. C'est une source de SENS
+   indépendante de la cassure.
+3. Combinaison : la compression fournit le moment, le momentum fournit le
+   sens. Une cassure contre la tendance de fond a, sous cette théorie,
+   une probabilité plus élevée d'être une fausse cassure qui réintègre la
+   zone — précisément le mode de perte dominant.
+
+**Réserve honnête, écrite avant tout test** : H1 v1 (filtre MA200 +
+cassure Donchian) a été close négative en backtest ; un filtre de
+tendance de fond n'est donc pas une garantie. La combinaison
+compression + momentum n'a jamais été testée dans ce projet.
+
+**Définition FIGÉE (aucune grille, aucune valeur balayée)** :
+- Tendance de fond = signe du rendement sur 63 bougies DAY CLOSES (≈ 3
+  mois de séances ; ≈ 9 semaines pour les cryptos, cotées 7 j/7) :
+  `close[-1] / close[-64] − 1`. 63 choisi a priori comme l'horizon le plus
+  court de la plage documentée (1-12 mois), le plus proche de la durée de
+  détention de H5 (heures à jours) ; jamais comparé à une autre valeur.
+- Cassure haussière retenue seulement si tendance > 0 ; baissière
+  seulement si tendance < 0. Tendance nulle, ou moins de 64 bougies DAY
+  closes disponibles : AUCUN signal (fail-safe).
+- Tout le reste INCHANGÉ : compression (Bollinger 20/2σ, percentile 20,
+  durée 10), stop 25% à l'intérieur de la bande, sortie 100% trailing
+  Donchian(20).
+
+**Budget (invariant #10)** : H5 passe de 3/5 à **4/5** variables
+(`TSMOM_LOOKBACK_DAYS` = 63, figée). Plancher 10 trades/variable -> seuil
+de verdict **n ≥ 40** trades fermés postérieurs au déploiement
+(max(30, 10 × 4)).
+
+**Protocole** :
+1. Déploiement sur le compte démo « hypothèse 5 » ; époque `E2` écrite
+   dans `hypothesis_epochs` à l'heure exacte du redémarrage ; compteur H5
+   remis à zéro à cette date (`scripts/epoch_status.py`).
+2. Les 19 trades H5 antérieurs ne sont JAMAIS agrégés aux trades E2.
+3. **Verdict formel uniquement à n ≥ 40 trades E2 fermés** : espérance
+   positive requise sur la borne basse par bootstrap par blocs
+   calendaires, correction de Bonferroni sur le compteur cumulatif du
+   projet (m = 30 au 02/09/2026 + 1 = **31**) — même procédure que la
+   confirmation du 02/09/2026, jamais une autre.
+4. Aucune lecture intermédiaire ne déclenche de modification ; seul un
+   défaut technique (signaux jamais émis, erreur de câblage) justifie une
+   intervention, consignée ici.
+
+---
+
 ## 2026-09-25 (soir) — Diagnostic fidélité H2 + découverte : la clôture partielle TP1 ferme 100% de la position + boucle d'évolution, état par hypothèse
 
 Mission reçue le 25/09/2026 soir : (1) diagnostic de l'anomalie « 0 trade
