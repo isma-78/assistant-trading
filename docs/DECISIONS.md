@@ -12,6 +12,159 @@ la plus récente en tête.
 
 ---
 
+## 2026-09-25 — Décisions validées par Ismaël sur le rapport de mission du 24/09/2026
+
+Suite à `docs/Rapport_Mission_ABC_24-09-2026.md` (§6, 7 décisions
+récapitulées) et à l'anomalie `place_limit_order` (§1). Chaque point
+présenté séparément à Ismaël (langage simple, options, conséquence
+concrète), validation explicite reçue avant de passer au suivant.
+
+1. **H2 — combo « mort »** : **revenir aux valeurs par défaut de grille**
+   (comme H1/H3/H4/H5), abandon du combo `EMA=20/RSI=55/N_TF=3/SCORE=1,0`
+   déclaré mort le 01/09/2026. À appliquer : config H2 remise sur les
+   valeurs de grille par défaut, redémarrage `hypothesis2_executor`.
+2. **106 trades reconciliés** : **oui, écrire** dans
+   `trades.r_multiple_total`/`statut` en production. Effet immédiat
+   attendu sur `metrics.py`/`confidence_scorer.py`/le dashboard/le
+   compteur de comparaisons multiples.
+3. **Anomalie `place_limit_order`** (aucun stop attaché hors
+   GOLD/BTCUSD/ETHUSD/GBPUSD/US100) : **investigation autorisée**,
+   **aucun correctif de risque autorisé à ce stade** — décision de
+   déploiement à revalider séparément une fois les options posées
+   (invariant #4).
+4. **Déploiement Bugs 1/2** (stop garanti à l'ouverture, stop breakeven
+   transmis au broker après TP1) : **oui, déployer**, fenêtre supervisée,
+   procédure de rollback (voir entrées Bug 1/2 du 24/09/2026 pour le
+   détail technique).
+5. **Suspension H1/H3/H4** (clause du 02/09/2026) : **levée** — H1/H3/H4
+   redeviennent explorables pour de nouvelles hypothèses (H6+), au même
+   titre que H2/H5.
+6. **Script de fidélité simulateur** (cassé depuis le 29/08/2026) :
+   **réparation autorisée maintenant**.
+7. **Règle de collecte forward H5** (« hypothèse close reste en démo »,
+   29/08/2026) : **pas de changement immédiat** — attendre l'effet des
+   Bugs 1/2 sur le rythme de collecte (1-2 semaines), réexaminer ensuite.
+
+Actions découlant de ces décisions consignées séparément ci-dessous au
+fur et à mesure de leur exécution.
+
+---
+
+## 2026-09-25 (suite) — Actions effectuées sur les 7 décisions ci-dessus
+
+Aucun secret trouvé (grep ciblé sur les fichiers modifiés/untracked —
+`api[_-]?key|password|secret|token|CAPITAL_API|X-CAP|Bearer` — seules
+des références à `config.capital_*` chargées depuis `.env`, jamais de
+valeur en clair) avant tout commit. Commit unique `0442f53` (correctifs
+Bug 1/2 + tests, `scripts/fetch_capital_history.py`, rapport de mission,
+audit, `DECISIONS.md`) — l'arriéré `docs/*.md` du 27/08-01/09 et
+`db.sqlite` (0 octet, sans rapport) volontairement laissés de côté, non
+committés.
+
+1. **H2 reverti aux valeurs de grille par défaut** : les 4 lignes
+   `rule_changes` actives (`H2_v2.EMA_PERIOD=20/RSI_THRESHOLD=55/
+   N_TF=3/SCORE_THRESHOLD=1.0`, `statut='applique'`) passées à
+   `statut='retire'` sur la base de production du VPS (vocabulaire
+   nouveau — aucun antécédent pour "désactiver" un override déjà
+   appliqué dans `rule_changes`, seul `propose`→`applique` existait).
+   `hypothesis2_executor` redémarré (voir point 4) — log de démarrage
+   confirmé : `EMA_PERIOD=50, RSI_THRESHOLD=50.0, N_TF=2,
+   SCORE_THRESHOLD=0.6666666666666666 (overrides appliqués : AUCUN)`.
+2. **106 R reconciliés écrits en production** : sauvegarde fraîche de
+   `data/assistant_trading.db` sur le VPS avant écriture
+   (`scripts/backup_db.py`, `assistant_trading_20260925T175629Z.db`).
+   `data/reconciled_trades_24-09-2026.csv` transféré sur le VPS (107
+   lignes, checksum de transfert vérifié par comptage de lignes).
+   Script ponctuel (non committé, supprimé après usage, même convention
+   que `reconcile.py`) : pour chacun des 106 trades `matched_ok=True`,
+   vérifie `statut actuel == 'ferme_non_reconcilie'` ET `deal_id`
+   identique avant d'écrire — sinon `SKIP`, jamais un écrasement
+   aveugle. **106/106 appliqués, 0 skip.** `pnl_net` volontairement
+   NON touché (hors du périmètre exact de la décision 2, aucune donnée
+   EUR validée dans le CSV — seul `total_pnl_price_units`, en unités de
+   prix). Vérifié après coup : `id=15840` (ETHUSD, exemple du rapport)
+   → `r_multiple_total=13.2833`, cohérent avec le +13.28R cité au
+   §2 du rapport.
+3. **Anomalie `place_limit_order` — investigation (lecture seule)** :
+   cause confirmée dans le code. `_compute_guaranteed_stop_adjustment`
+   (`executor.py:599`) retourne `stop_distance=0.0,
+   guaranteed_required=False` pour tout instrument sans
+   `minGuaranteedStopDistance` côté broker (la majorité de la liste
+   blanche). `open_signal` (`executor.py:970`) traduit ça en
+   `guaranteed_stop=False, stop_distance=None` — et
+   `place_limit_order` (`capital_client.py:326`) n'ajoute `stopDistance`
+   au corps de la requête QUE dans la branche `guaranteed_stop=True`
+   (`capital_client.py:336-338`) : aucun autre chemin n'attache de stop
+   au broker à l'ouverture. Deux options identifiées, **aucune
+   implémentée** (décision de risque, invariant #4, validation séparée
+   requise) :
+   - **Option A** : étendre `place_limit_order` pour accepter un stop
+     NON garanti (`body["stopLevel"] = ...`, sans `guaranteedStop`)
+     quand un `stop_price` est connu mais qu'aucun stop garanti n'est
+     requis — protection côté broker dès l'ouverture, pour tous les
+     instruments.
+   - **Option B** : statu quo assumé et documenté — la protection reste
+     uniquement locale (trailing/TP1, cycle ~30-60s) jusqu'à ce qu'un
+     mécanisme de gestion pose un stop.
+4. **Bugs 1/2 déployés** : `git push origin main` (commit `0442f53`),
+   `git pull` sur le VPS (fast-forward, vérifié `git log
+   HEAD..origin/main` avant pull — un seul commit attendu). Conflit
+   mineur résolu : `scripts/fetch_capital_history.py` existait déjà
+   untracked sur le VPS (checksum MD5 identique au contenu committé) —
+   supprimé avant le pull, aucune perte. Imports de tous les modules
+   exécuteurs vérifiés sains avant tout redémarrage
+   (`python -c "import src.executor, ..."` → `OK imports`). **6
+   exécuteurs redémarrés un par un, chacun vérifié vivant avant de
+   passer au suivant** (Ctrl-C sur la session tmux puis relance de la
+   même commande qu'au démarrage initial) : `executor_loop` (interrompu
+   pendant `time.sleep`, aucune opération broker en vol),
+   `trend_executor` (idem), `hypothesis2_executor` (voir point 1),
+   `hypothesis3_executor`, `hypothesis4_executor`,
+   `hypothesis5_executor`. Vérification finale : les 8 process
+   (+ `telegram_listener`/`control_bot`, jamais touchés) confirmés
+   `vivant` par `process_watchdog.py` sur deux cycles consécutifs
+   (18h10 et 18h15 UTC).
+5. **Suspension H1/H3/H4 levée** : recherché dans `src/` — **aucune
+   application par code** de cette clause (`grep` sur
+   "suspension"/"02/09"/"H6" dans `src/` ne retourne rien de pertinent) :
+   c'était une règle procédurale (invariant #10 : justification
+   théorique écrite avant d'ouvrir une nouvelle hypothèse), jamais un
+   verrou logiciel. La lever est donc une décision purement
+   journalisée ici, aucune action de code nécessaire.
+6. **Script de fidélité simulateur réparé**
+   (`scripts/_compare_live_vs_backtest_window.py`) : la casse
+   dépassait le seul `ModuleNotFoundError` documenté dans l'audit —
+   H2/H3/H4 ont TOUS changé de module (`hypothesis{2,3,4}_strategy` →
+   `_v2`), de source (`hypothesisN` → `hypothesisN_v2`), et pour
+   H3/H4 de `require_regime_confirmation` (`True`→`False`) depuis la
+   refonte du 29/08/2026 — vérifié en lisant directement
+   `hypothesis{2,3,4}_executor.py` plutôt que supposé. H2 nécessite en
+   plus le câblage multi-TF (HOUR natif + HOUR_4 + DAY) déjà utilisé
+   par `scripts/_recalibrate_h2_lookahead_fix.py`, repris à
+   l'identique. Overrides actifs relus via `hypothesis_params` au lieu
+   d'être supposés stables (source de la casse initiale). **Vérifié en
+   exécution réelle sur le VPS** (lecture seule, `data/historical/`
+   n'existe que là) : `exit 0`, comparaisons produites pour 9 actifs ×
+   3 hypothèses. **Limite assumée, non corrigée** : le filtre "heures
+   chères" (actif en direct pour H3/H4 depuis le 30/08) n'est pas
+   répliqué, `replay_hypothesis` ne le supporte pas — un signal
+   supprimé par ce filtre en direct peut apparaître à tort comme
+   "backtest seulement". **Observation brute du premier run, non
+   creusée** : 0 trade backtest trouvé dans les fenêtres échantillonnées
+   pour H2, alors que des trades réels existent sur ces mêmes fenêtres
+   — mérite une session dédiée pour déterminer si c'est un signal réel
+   de divergence ou un effet de bord du câblage (ex. warm-up
+   insuffisant), **hors périmètre de cette réparation**. Committé
+   (`df5768f`), déployé sur le VPS (script ponctuel, jamais appelé par
+   les boucles live — aucun redémarrage nécessaire pour lui-même).
+7. **Règle de collecte forward H5** : décision d'Ismaël précisée —
+   **attendre l'effet des Bugs 1/2 déployés aujourd'hui (1-2 semaines)
+   avant de réexaminer**, plutôt qu'un changement immédiat. Rien à
+   appliquer maintenant ; prochaine échéance indicative
+   **~09-10/10/2026**.
+
+---
+
 ## 2026-08-30 (suite 2) — Points 4-6 : vérifications sur H2 confirmée, financement intégré à l'attribution, cinq compteurs
 
 Exécuté en parallèle du déploiement (mené séparément) — aucune écriture
