@@ -12,6 +12,111 @@ la plus récente en tête.
 
 ---
 
+## 2026-09-26 — Diagnostic de l'écart de fidélité H2 (12%) + `python -u` au prochain redémarrage planifié
+
+Mandat d'Ismaël : (1) diagnostic uniquement de l'écart H2 — touche-t-il
+aussi la configuration par défaut en production ? aucun correctif, aucun
+changement de configuration sans validation ; (2) `-u` au prochain
+redémarrage planifié, sans redémarrage dédié. E1 (H1-H4) et E2 (H5)
+laissés tourner sans intervention. **Aucun process redémarré, aucun
+paramètre modifié, aucune écriture en base dans cette entrée.**
+
+### 1. Écart de fidélité H2 — cause établie
+
+Trois scripts de diagnostic, lecture seule, exécutés sur le VPS à priorité
+basse (`scripts/_diag_h2_fidelity.py`, `_diag_h2_forming_bar.py`,
+`_diag_h2_consistency.py`), fenêtre 30/08 -> 25/09, 9 actifs.
+
+**a) La logique d'entrée H2 n'est pas en cause.** Les 169 signaux live
+distincts (actif, sens, heure) de l'ancien combo, rejoués avec exactement
+l'information disponible à la minute du signal (bougies HOUR closes + 99
+HOUR_4/DAY closes) : **151/169 reproduits (89%)**, 158/169 (93%) en
+tolérant une bougie. Deux méthodes indépendantes donnent le même 151.
+
+**b) Les 12% viennent du cycle de vie des trades, pas des signaux.** H2
+est la seule hypothèse dont le signal est un ÉTAT (« les unités de temps
+sont alignées ») et non un ÉVÉNEMENT (franchissement de seuil, cassure,
+divergence, retracement) : tant que l'alignement dure, `evaluate_entry`
+renvoie un signal à chaque bougie. L'instant du signal enregistré dépend
+donc uniquement du moment où le trade précédent s'est terminé — et ce
+cycle diffère totalement entre le live et le rejeu. Mesuré sur l'ancien
+combo : **7009 signaux live émis en 36 épisodes continus** (médiane 13
+signaux par épisode, jusqu'à 2652) ; **6915 (98,7%) rejetés avant de
+devenir un trade**, donc réémis au cycle suivant ; 68 annulés au
+placement, 18 fermés, 8 ouverts. Le rejeu, lui, tient un seul trade
+simulé à la fois pendant toute sa durée : 7 trades sur la période.
+L'appariement des instants de signal que mesure le script de fidélité
+compare donc deux cycles de vie, pas deux logiques d'entrée. Les autres
+hypothèses, à signal-événement, n'ont pas ce biais (52-82%).
+
+**c) Profondeur de fenêtre HOUR_4/DAY : écart réel mais faible, et
+propre à la configuration par défaut.** Le live reçoit 99 bougies
+HOUR_4/DAY closes (`EXTRA_RESOLUTION_CANDLE_COUNT = 100`, moins celle en
+formation), le rejeu 220 (`DEFAULT_LOOKBACK`). `compute_ema` est amorcée
+par la SMA des `period` premières bougies de la fenêtre : poids résiduel
+de l'amorce après 99 bougies ≈ 14% pour EMA(50), ≈ 0,04% pour EMA(20).
+Vérifié heure par heure sans logique de trade : **ancien combo (EMA 20) :
+0 heure divergente sur 4584 ; configuration par défaut (EMA 50) : 48
+heures divergentes sur 4500 heures-signal = 1,1%** (recoupé par deux
+scripts).
+
+**d) Constat sur la configuration par défaut, hors fidélité** : elle
+émet un signal dans **98% des heures** (4499 heures-signal sur 4584
+évaluées, 9 actifs). Quasiment aucune sélectivité : le moment d'entrée
+de H2 en production est dicté par la disponibilité (fin du trade
+précédent, rejets), la stratégie se résume au sens voté et à la sortie.
+À garder en tête pour lire les résultats E1 de H2 — ce n'est pas un
+défaut de fidélité et rien n'est modifié.
+
+**Réponse à la question posée** : l'écart de 12% ne vient pas d'une
+divergence de logique. Il touchera aussi la configuration par défaut,
+mais comme artefact de mesure (signal-état + cycle de vie, encore plus
+marqué à 98% d'heures-signal), pas comme défaut du live. La seule
+divergence réelle live/backtest identifiée (profondeur HOUR_4/DAY) est
+propre à la configuration par défaut et porte sur ~1% des heures-signal.
+
+**Non établi** : les 18 signaux (11%) non reproduits sur bougies closes.
+Cause probable, non démontrée : la bougie HOUR en formation que le live
+évalue (son « close » est le prix courant, un état peut basculer en cours
+d'heure). Test impossible ce jour : fichiers MINUTE_15 arrêtés au 28/08,
+et l'API refuse les requêtes M15 sur la plage que j'ai tentée
+(`error.invalid.max.daterange`) — rafraîchissement échoué dès la première
+requête, aucun fichier modifié, option retirée du script.
+
+**Correction de mon propre travail** : le premier script
+(`_diag_h2_fidelity.py`) donnait 66% pour la mesure (a) ; contredit par
+le contrôle côte à côte (`_diag_h2_consistency.py`, 151/169 par les deux
+méthodes). Erreur d'implémentation dans cette mesure, non identifiée,
+signalée en tête du script — seule sa mesure de profondeur (c) est
+reprise ici, recoupée par un second script.
+
+**Correctifs possibles, NON appliqués (validation d'Ismaël requise)** :
+- porter la profondeur live HOUR_4/DAY de H2 à 221 bougies (même nombre
+  d'appels, réponses plus longues) pour supprimer l'écart (c) — change le
+  signal live sur ~1% des heures-signal, pendant l'époque E1 de H2 :
+  question de protocole à trancher (nouvelle époque ou non) ;
+- remplacer, pour H2 seulement, la mesure de fidélité par l'accord heure
+  par heure sans logique de trade (la seule qui mesure la logique d'un
+  signal-état).
+
+### 2. `python -u` au prochain redémarrage planifié
+
+Aucun redémarrage effectué. `scripts/restart_process.sh` (nouveau) :
+relance un process (ou `all` pour les 6 exécuteurs) dans sa session tmux,
+un par un, avec `venv/bin/python -u -m <module> 2>&1 | tee -a
+logs/<session>.log`, et vérifie qu'il tourne avant de passer au suivant.
+`docs/DEPLOIEMENT_V2.md` (étape 5) renvoie désormais à ce script pour tout
+redémarrage courant. Il prendra effet au premier redémarrage planifié
+(prochain déploiement de code), jamais lancé par un cron.
+
+### État au 26/09/2026
+
+H1-H4 (E1) et H5 (E2) non touchés, attente des premiers trades de leur
+époque. Aucune analyse causale H1-H4 avant qu'une poignée de trades E1
+soit fermée.
+
+---
+
 ## 2026-09-25 (nuit) — Réparation déployée (Option B, E1, fidélité, boucles orphelines) + boucle d'évolution par hypothèse
 
 Mandat d'Ismaël du 25/09/2026 soir : Option B TP1, protocole E1, Bug 2

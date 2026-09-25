@@ -156,6 +156,14 @@ tmux ls
 ```
 **Attendu** : les 6 sessions réapparaissent dans `tmux ls`.
 
+> **Redémarrage courant, depuis le 26/09/2026** (voir `docs/DECISIONS.md`) :
+> les sessions tmux existent déjà ; utiliser `scripts/restart_process.sh all`
+> (ou `scripts/restart_process.sh <session>`), qui relance chaque process
+> un par un avec `python -u` (journaux non tamponnés), sa sortie ajoutée à
+> `logs/<session>.log`, et vérifie qu'il tourne avant de passer au suivant.
+> Les commandes ci-dessus (sans `-u`, sans journal) restent l'historique du
+> premier démarrage v2.
+
 Réactiver la capture de log persistante (convention du 26/08/2026, sinon
 perdue au premier crash d'un pane one-shot) :
 
