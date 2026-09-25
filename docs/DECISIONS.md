@@ -12,6 +12,267 @@ la plus récente en tête.
 
 ---
 
+## 2026-09-25 (soir) — Diagnostic fidélité H2 + découverte : la clôture partielle TP1 ferme 100% de la position + boucle d'évolution, état par hypothèse
+
+Mission reçue le 25/09/2026 soir : (1) diagnostic de l'anomalie « 0 trade
+backtest retrouvé sur les fenêtres H2 », sans correctif ; (2) lancement
+de la boucle d'évolution à partir des 106 trades reconciliés ; (3)
+consignation datée. **Rien n'a été déployé, rien n'a été modifié en
+production, aucun fichier de code n'a été touché dans cette entrée.**
+
+### 1. Diagnostic de l'anomalie de fidélité — trois causes, prouvées
+
+**Cause 1 (suffisante à elle seule) — les bougies historiques s'arrêtent
+AVANT la fenêtre live.** Dernière bougie des fichiers utilisés par le
+script, lue sur le VPS : `*_HOUR.json` → 28/08/2026 20:00 (FX/indices/
+GOLD) ou 30/08/2026 07:00 (BTCUSD/ETHUSD) ; `*_HOUR_4.json` → 26-28/08 ;
+`*_DAY.json` → 29/08-02/09. Fenêtre live H2 : 03/09/2026 05:06 →
+24/09/2026 00:54. Le script ne garde que les trades backtest dont
+`signal_time_utc >= début de fenêtre − 2h` : **aucune bougie n'existe
+dans cet intervalle, le résultat « 0 trade » est une certitude
+arithmétique, pas un signal de divergence de logique.** Le script ne
+signale jamais cette absence de couverture (il imprime « 0 trades »
+sans avertissement) — défaut de conception de l'outil.
+
+**Cause 2 — configuration H2 rejouée ≠ configuration qui a produit les
+trades live.** Le script a été lancé APRÈS le passage des overrides H2
+à `statut='retire'` (même soirée) : il a donc rejoué les valeurs de
+grille par défaut (EMA=50/RSI=50/N_TF=2/SCORE=0,667) contre des trades
+live produits par le combo EMA=20/RSI=55/N_TF=3/SCORE=1,0. Même avec
+des bougies à jour, la comparaison H2 du 03/09 au 25/09 aurait été
+faussée. Une comparaison de fidélité correcte doit rejouer, pour chaque
+trade live, les paramètres ACTIFS à sa date (historique `rule_changes`).
+
+**Cause 3 — divergence RÉELLE de structure de sortie live/backtest
+(découverte, voir §2).** `backtest_engine` simule une vraie clôture
+partielle TP1 (50%, `remaining_fraction` décrémentée, reliquat vers
+TP2/trailing — `backtest_engine.py:580-597`) ; en live, le broker ferme
+100% à TP1. Une fois les causes 1 et 2 levées, le script montrera donc
+une divergence H1-H4 LÉGITIME sur les sorties — exactement ce qu'il est
+censé détecter.
+
+**Autres limites de l'outil constatées** : H1 (`hypothesis_v2`) et H5
+ne sont pas couvertes par le script (seules H2/H3/H4 y figurent) ; le
+filtre « heures chères » n'est pas répliqué (déjà noté).
+
+**Correctif proposé, NON appliqué (validation requise)** : (a)
+rafraîchir `data/historical/` jusqu'à aujourd'hui
+(`scripts/download_historical_data.py`, appels réseau throttlés vers le
+même compte que les 6 process live — à planifier) ; (b) faire échouer
+le script bruyamment si la dernière bougie précède la fenêtre ; (c)
+rejouer chaque trade avec les paramètres actifs à sa date ; (d) ajouter
+H1 et H5.
+
+**Correction de mon propre journal** : l'entrée « Actions effectuées »
+du même jour (point 6) affirmait « exit 0, comparaisons produites pour
+9 actifs × 3 hypothèses ». C'était faux : la commande était pipée dans
+`head -80`, seuls 7 actifs de H2 ont été vus, H3/H4 jamais, et l'exit
+code était celui de `head`. Marqué `[CORRIGÉ]` sur place. Relance
+complète en arrière-plan sur le VPS (sortie `/tmp/fidelity_full_25-09.out`)
+— résultat consigné ci-dessous au §1bis.
+
+### 2. Découverte : la « clôture partielle » TP1 ferme 100% de la position chez Capital.com
+
+**Preuve, trois sources indépendantes, les 106 trades reconciliés :**
+- **Ce que notre code demande** (`trade_partials`, base de production) :
+  40 événements `tp1`, tous `fraction=0.5` — ex. trade 14512 CHFJPY
+  `taille_initiale=900`, taille demandée 450 ; trade 15247 US30
+  `0.069` → 0.0345. Aucun événement `tp2` n'a JAMAIS existé.
+- **Ce que notre client HTTP envoie** : `capital_client.delete()`
+  transmet bien `json={"size": ...}` (`capital_client.py:255-264`,
+  appelé par `close_position`, `capital_client.py:393-394`).
+- **Ce que le broker exécute** (`/history/activity`, fichiers bruts
+  `data/capital_history_raw/`) : sur les 40 clôtures d'origine `USER`
+  (= nos propres DELETE), **40/40 ont fermé exactement la taille
+  d'ouverture complète** (ex. 14512 : ouvert 900, fermé 900 ; 15247 :
+  ouvert 0.069, fermé 0.069 à 52089.1 = TP1). Les 66 autres clôtures
+  sont `SL`, toutes pleine taille aussi. **0 clôture partielle sur 106.**
+- Conclusion : `DELETE /positions/{dealId}` chez Capital.com **ignore le
+  champ `size` et ferme la position entière**. Jamais documenté
+  auparavant dans ce dépôt (recherche dans `docs/` : aucune occurrence).
+
+**Conséquences :**
+- **H1-H4 n'ont jamais tourné en live avec la sortie pré-enregistrée le
+  29/08/2026** (TP1 50%/TP2 30%/reliquat 20% trailing 2×ATR). En
+  réalité : **TP fixe 100% à +1R, stop fixe à −1R.** Confirmé par
+  l'absence totale d'`EDIT_STOP_AND_LIMIT` pour H1-H4 dans l'historique
+  broker (0 ajustement de stop en 25 jours), contre 159 pour H5.
+- **H5 n'est PAS affectée** : 100% trailing par conception (aucun TP1),
+  19/19 clôtures par `SL` (stop suiveur), 159 ajustements de stop
+  transmis au broker — seule hypothèse dont le live correspond à sa
+  pré-inscription.
+- **C'est le mécanisme qui produisait les positions « fantômes »** : après
+  TP1, la base croyait à un reliquat de 50% encore ouvert ; la position
+  n'existait plus chez le broker ; la détection de fantômes la marquait
+  `ferme_non_reconcilie`. Les R écrits aujourd'hui (+1.0R pour ces
+  trades) sont donc CORRECTS (100% fermés à TP1) — mais leur
+  `exit_type='tp_partiel'` est faux dans les faits (`tp_fixe` réel) ;
+  non corrigé en base sans validation.
+- **Effet sur le correctif Bug 2 déployé cet après-midi** : après chaque
+  TP1, `_push_stop_to_broker` tente de modifier le stop d'une position
+  qui n'existe plus → `CapitalApiError`, rattrapée par le `except
+  Exception` par trade de `manage_open_trades` (`executor.py:1414/1812`),
+  journalisée, trade marqué fantôme au cycle suivant — **même état final
+  qu'avant le déploiement**. Vérifié : ce chemin n'alimente PAS le
+  coupe-circuit `api_errors` (seule la sonde de connectivité,
+  `executor.py:1961-1973`, le fait). Effet secondaire mineur : la
+  notification Telegram de clôture partielle n'est plus envoyée (levée
+  avant). **Pas de rollback jugé nécessaire** — à confirmer par Ismaël.
+  Bug 2 reste un correctif juste, mais sans objet tant que la clôture
+  partielle ne fonctionne pas.
+- **Tout résultat de backtest/recherche H1-H4 simulé avec la sortie
+  §2.10 (partielle + trailing) mesure une stratégie DIFFÉRENTE de celle
+  qui tourne en live.**
+
+**Deux approches de correctif, NON implémentées, à vérifier d'abord sur
+un compte démo Capital.com SÉPARÉ (règle CLAUDE.md : jamais d'ordre
+manuel sur le compte configuré)** :
+- **A — ordre inverse partiel** : `POST /positions` dans le sens opposé,
+  taille 50%. Dépend du mode du compte (netting vs hedging) : en mode
+  hedging, ouvrirait une position inverse au lieu de réduire — à
+  vérifier empiriquement avant tout.
+- **B — trois positions dès l'entrée** (50/30/20), chacune avec son
+  propre TP broker (`limitLevel`) et son stop ; trailing sur la seule
+  jambe 20%. Ne dépend d'aucune clôture partielle. Contraintes à
+  vérifier : `minDealSize` par actif (la jambe 20% peut passer sous le
+  minimum), 3× plus d'appels à l'ouverture (rate-limit partagé).
+
+### 1bis. Relance complète du script de fidélité (lecture seule)
+
+Relance sans troncature, code de sortie de Python capturé
+(`echo EXIT=$?` juste après l'appel) : **`EXIT=0`, « Terminé. »,
+506 lignes, les trois hypothèses couvertes** (H2 fenêtre 03/09 →
+25/09 18:33, H3 03/09 → 25/09 02:58, H4 03/09 → 24/09 23:00). **22
+comparaisons (hypothèse, actif), 22 avec 0 trade backtest, 0 avec au
+moins un.** H3 et H4 échouent exactement comme H2 — ce que prédit la
+cause 1 (aucune bougie après le 28-30/08 pour aucun actif), et que ne
+prédirait pas une divergence de logique propre à H2. Le symptôme
+n'était donc pas spécifique à H2 ; il n'avait simplement été vu que
+sur H2 à cause de la troncature.
+
+### 3. Analyse causale des trades perdants (105 trades v2 + 1 Station X)
+
+Chiffres sur les 105 trades v2 fermés (tous issus de la réconciliation
+du 24/09 — aucun trade v2 n'avait été fermé par le chemin normal) :
+
+| Hyp. | n | ΣR | R moyen | % gagnants | gain moyen | perte moyenne |
+|---|---|---|---|---|---|---|
+| H1 | 28 | +2,45 | +0,09 | 50% | +1,18 | −1,00 |
+| H2 (combo retiré) | 18 | +6,23 | +0,35 | 67% | +1,02 | −1,00 |
+| H3 | 20 | −4,45 | −0,22 | 40% | +0,94 | −1,00 |
+| H4 | 20 | −9,72 | −0,49 | 25% | +1,06 | −1,00 |
+| H5 | 19 | +26,79 | +1,41 | 37% | +5,45 | −0,95 |
+
+**Cause dominante des pertes H1-H4 : la structure de gain amputée (§2),
+pas un sous-groupe d'actifs/sessions.** Avec gains plafonnés à +1R et
+pertes à −1R, l'espérance vaut ≈ 2×(taux de réussite) − 1 avant coûts :
+H4 à 25% ne peut qu'être négatif, H3 à 40% aussi, H1 à 50% à peine
+positif. Toutes les pertes H1-H4 sont des stops d'ORIGINE (−1,00R
+exact), jamais un breakeven — cohérent avec 0 ajustement de stop
+broker. H5, seule dont la queue droite n'est pas coupée, a un taux de
+réussite inférieur à H1 mais un gain moyen ×5.
+
+**Découpages examinés (actif, sens, session, stop élargi, durée) :
+AUCUN sous-groupe n'atteint 10 trades avec un écart exploitable** — ex.
+H1/ETHUSD n=9 (−2,8R), H4/US100 n=7 (−3,0R), H3/short n=11 (−5,7R). Sous
+le plancher de 10 trades/variable (invariant #10), et observés APRÈS
+coup : **aucun de ces découpages ne peut fonder une variable.** Consigné
+comme observation, jamais comme justification. `stop_elargi` : 3 trades
+sur 105, non informatif. Durée médiane des pertes < gains pour
+H1/H3/H4/H5 (stops touchés vite) ; inversée pour H2 (115h vs 25h).
+
+**Réserve H5** : +26,79R porté par 4 trades (+13,28 ; +6,39 ; +6,37 ;
++5,07) — distribution à queue épaisse, n=19, aucun verdict. H5 a déjà
+été regardée avant toute théorie écrite (rapport du 24/09, §4) : ces
+chiffres ne peuvent justifier aucune idée H5.
+
+### 4. Boucle d'évolution — idées pré-enregistrées ce cycle
+
+**Une seule idée, structurelle, pré-enregistrée ci-dessous. Aucune
+nouvelle variable proposée pour aucune hypothèse ce cycle** (règle du
+25/08/2026 : un cycle sans justification théorique neuve conclut « rien
+à tester », jamais une idée inventée pour le calendrier).
+
+#### PRÉ-ENREGISTREMENT E1 — 25/09/2026 — Restaurer la sortie pré-enregistrée de H1-H4
+
+- **Nature** : correction d'implémentation, PAS une nouvelle variable —
+  rend la sortie live conforme à la pré-inscription du 29/08/2026 (TP1
+  50% à 1R / TP2 30% à 2R / reliquat 20% trailing 2×ATR, stop au
+  breakeven après TP1). Ne consomme aucun budget (invariant #10) :
+  H1 reste 3/5, H2 4/5, H3 3/5, H4 3/5.
+- **Justification théorique (écrite avant tout trade qu'elle produira)** :
+  les rendements des stratégies de suivi de tendance/cassure sont
+  asymétriques — l'essentiel de l'espérance vient d'une minorité de
+  mouvements longs, avec un taux de réussite typiquement sous 50%.
+  Plafonner le gain à +1R en gardant la perte à −1R supprime
+  mécaniquement cette queue droite : pour que l'hypothèse ait une
+  chance d'être jugée sur ce qu'elle prétend être, la sortie qui
+  préserve la queue droite doit exister réellement. Cette justification
+  ne s'appuie sur aucun chiffre de H5 (déjà observée, contaminée).
+  Réserve théorique pour H4 (retournement sur divergence, pas suivi de
+  tendance) : l'asymétrie attendue y est plus faible ; la sortie est
+  restaurée quand même, par fidélité à la pré-inscription, pas parce
+  qu'on en attend un gain.
+- **Protocole** :
+  1. Choix technique (A ou B, §2) vérifié d'abord sur un compte démo
+     SÉPARÉ, puis présenté à Ismaël.
+  2. **Déploiement uniquement après validation explicite d'Ismaël.**
+  3. **Compteurs H1-H4 remis à zéro à la date/heure de déploiement** :
+     les trades antérieurs (TP fixe 1R) ne sont JAMAIS agrégés aux
+     trades postérieurs pour un verdict — étiquetés distinctement
+     (proposition : `exit_type='tp_fixe_involontaire'` pour les 25
+     jours passés, sur validation).
+  4. **Verdict formel uniquement à n ≥ 30 trades fermés postérieurs au
+     déploiement, par hypothèse** ; jamais sur les 105 trades ci-dessus
+     qui ont révélé le défaut.
+  5. Critère de verdict inchangé par rapport à la pré-inscription du
+     29/08/2026 (Bonferroni sur le compteur cumulatif du projet,
+     borne basse par bootstrap par blocs calendaires).
+- **Statut : pré-enregistré, NON déployé.**
+
+#### Idées écartées ce cycle, et pourquoi (traçabilité)
+
+- **Filtres par actif/session/sens** (ex. retirer ETHUSD de H1, les
+  shorts de H3) : sous 10 trades par cellule, observés après coup,
+  confondus avec la sortie cassée — écartés.
+- **Nouvelle variable H4** (ex. filtre de force de tendance) : aurait une
+  justification théorique classique (une divergence de retournement
+  échoue plus souvent en tendance forte), mais l'empiler sur E1 rendrait
+  impossible d'attribuer l'effet de l'une ou l'autre (même leçon que la
+  V2 de H5 le 23/08). **À réexaminer seulement après le verdict E1.**
+  Non pré-enregistrée.
+- **H5** : aucune idée — sortie conforme, budget 3/5, mais données déjà
+  vues (contamination, rapport du 24/09 §4) et règle de collecte à
+  réexaminer vers le 09-10/10 (décision 7, non touchée).
+- **H2** : repart de zéro depuis le retour aux valeurs de grille
+  (25/09/2026 18:14 UTC) — rien à analyser, aucune idée.
+
+### 5. État de chaque hypothèse au 25/09/2026 soir
+
+| Hyp. | Config live | Sortie live RÉELLE | Budget | n valide pour verdict | Prochaine étape |
+|---|---|---|---|---|---|
+| H1 (L1, ADX) | défaut | TP fixe 1R (défaut §2) | 3/5 | **0** (28 trades hors pré-inscription) | E1 à valider |
+| H2 (L2, multi-TF) | grille par défaut depuis 25/09 18:14 | TP fixe 1R (défaut §2) | 4/5 | **0** | E1 à valider |
+| H3 (L3, pullback) | défaut | TP fixe 1R (défaut §2) | 3/5 | **0** (20 hors pré-inscription) | E1 à valider |
+| H4 (L4, divergence) | défaut | TP fixe 1R (défaut §2) | 3/5 | **0** (20 hors pré-inscription) | E1 à valider ; variable éventuelle après verdict E1 |
+| H5 (L5, compression) | défaut | 100% trailing (conforme) | 3/5 | **19** (conformes) | collecte ; règle à réexaminer ~09-10/10 |
+
+Les n du rapport du 24/09 (H1=28, H3=20, H4=20) restent vrais comme
+comptage de trades, mais **ne comptent pas vers un verdict de
+l'hypothèse pré-enregistrée** pour H1-H4.
+
+### Décisions requises d'Ismaël (rien n'est appliqué sans elles)
+
+1. Autoriser la vérification de l'approche A/B sur un compte démo
+   Capital.com séparé, puis le déploiement d'E1.
+2. Valider le protocole E1 (remise à zéro des compteurs H1-H4 au
+   déploiement, étiquetage des 25 jours passés).
+3. Confirmer qu'aucun rollback du correctif Bug 2 n'est souhaité.
+4. Autoriser le correctif du script de fidélité (§1, a-d), dont le
+   rafraîchissement des données historiques (appels réseau).
+
+---
+
 ## 2026-09-25 — Décisions validées par Ismaël sur le rapport de mission du 24/09/2026
 
 Suite à `docs/Rapport_Mission_ABC_24-09-2026.md` (§6, 7 décisions
@@ -145,7 +406,10 @@ committés.
    d'être supposés stables (source de la casse initiale). **Vérifié en
    exécution réelle sur le VPS** (lecture seule, `data/historical/`
    n'existe que là) : `exit 0`, comparaisons produites pour 9 actifs ×
-   3 hypothèses. **Limite assumée, non corrigée** : le filtre "heures
+   3 hypothèses. **[CORRIGÉ le 25/09/2026 soir, voir l'entrée "Diagnostic
+   fidélité" plus haut : affirmation INEXACTE — la sortie avait été
+   tronquée par `| head -80`, seuls 7 actifs de H2 avaient été vus, H3/H4
+   jamais ; l'`exit 0` était celui de `head`, pas de Python.]** **Limite assumée, non corrigée** : le filtre "heures
    chères" (actif en direct pour H3/H4 depuis le 30/08) n'est pas
    répliqué, `replay_hypothesis` ne le supporte pas — un signal
    supprimé par ce filtre en direct peut apparaître à tort comme
