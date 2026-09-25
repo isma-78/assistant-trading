@@ -54,14 +54,19 @@ DB_PATH = PROJECT_ROOT / "data" / "assistant_trading.db"
 ENVELOPE_INITIAL = 500.0
 CONFIDENCE_THRESHOLD = 0.75
 MATCH_TOLERANCE = timedelta(hours=2)
+# Rejeu démarré peu avant la fenêtre live, jamais depuis 2017 : le live ne
+# voit lui-même que quelques centaines de bougies (CANDLE_COUNT), 90 jours
+# HOUR et 200 jours DAY couvrent largement tout indicateur des 5 hypothèses.
+OWN_WARMUP = timedelta(days=90)
+EXTRA_WARMUP = timedelta(days=200)
 EXTRA_SECONDS = {"HOUR_4": 14400.0, "DAY": 86400.0}
 
 HYPOTHESES = {
-    "hypothesis_v2": {"label": "H1", "module": h1_mod, "resolution": "HOUR", "multi_tf": False, "donchian": False},
-    "hypothesis2_v2": {"label": "H2", "module": h2_mod, "resolution": "HOUR", "multi_tf": True, "donchian": False},
-    "hypothesis3_v2": {"label": "H3", "module": h3_mod, "resolution": "HOUR", "multi_tf": False, "donchian": False},
-    "hypothesis4_v2": {"label": "H4", "module": h4_mod, "resolution": "HOUR", "multi_tf": False, "donchian": False},
-    "hypothesis5_v2": {"label": "H5", "module": h5_mod, "resolution": "HOUR", "multi_tf": False, "donchian": True},
+    "hypothesis_v2": {"label": "H1", "module": h1_mod, "resolution": "HOUR", "extras": [], "donchian": False},
+    "hypothesis2_v2": {"label": "H2", "module": h2_mod, "resolution": "HOUR", "extras": ["HOUR_4", "DAY"], "donchian": False},
+    "hypothesis3_v2": {"label": "H3", "module": h3_mod, "resolution": "HOUR", "extras": [], "donchian": False},
+    "hypothesis4_v2": {"label": "H4", "module": h4_mod, "resolution": "HOUR", "extras": [], "donchian": False},
+    "hypothesis5_v2": {"label": "H5", "module": h5_mod, "resolution": "HOUR", "extras": ["DAY"], "donchian": True},
 }
 
 # Historique des paramètres réellement actifs (rule_changes, vérifié le
@@ -73,6 +78,11 @@ PARAM_PERIODS = {
         ("2026-08-30T00:00:00", "2026-09-25T18:14:16",
          {"EMA_PERIOD": 20, "RSI_THRESHOLD": 55.0, "N_TF": 3, "SCORE_THRESHOLD": 1.0}),
         ("2026-09-25T18:14:16", "2100-01-01T00:00:00", {}),
+    ],
+    # E2-H5 déployé au redémarrage du 2026-09-25T19:25:40Z (docs/DECISIONS.md).
+    "hypothesis5_v2": [
+        ("2026-08-29T00:00:00", "2026-09-25T19:25:40", {"TSMOM_FILTER_ENABLED": False}),
+        ("2026-09-25T19:25:40", "2100-01-01T00:00:00", {}),
     ],
 }
 DEFAULT_PERIOD = [("2026-08-29T00:00:00", "2100-01-01T00:00:00", {})]
@@ -139,19 +149,24 @@ def main() -> int:
             tot_live = tot_bt = tot_match = 0
             for asset, signals in live.items():
                 needed = {cfg["resolution"]: timedelta(hours=1)}
-                if cfg["multi_tf"]:
-                    needed.update({r: timedelta(seconds=2 * s) for r, s in EXTRA_SECONDS.items()})
+                needed.update({r: timedelta(seconds=2 * EXTRA_SECONDS[r]) for r in cfg["extras"]})
                 coverage = {res: _bars(asset, res)[-1].time_utc for res in needed}
                 if any(_dt(coverage[res]) < _dt(last_live) - slack for res, slack in needed.items()):
                     print(f"  {asset}: COUVERTURE INSUFFISANTE — dernières bougies {coverage}, dernier signal live {last_live}")
                     failures += 1
                     continue
-                own = [b for b in _bars(asset, cfg["resolution"]) if b.time_utc <= end]
+                first_signal = _dt(signals[0][1] + ":00:00")
+                own_from = (first_signal - OWN_WARMUP).strftime("%Y-%m-%dT%H:%M:%S")
+                extra_from = (first_signal - EXTRA_WARMUP).strftime("%Y-%m-%dT%H:%M:%S")
+                own = [b for b in _bars(asset, cfg["resolution"]) if own_from <= b.time_utc <= end]
                 kwargs = {"is_donchian_trailing": cfg["donchian"]}
-                if cfg["multi_tf"]:
+                if cfg["extras"]:
                     kwargs.update(
-                        extra_resolution_bars={r: [b for b in _bars(asset, r) if b.time_utc <= end] for r in ("HOUR_4", "DAY")},
-                        own_bar_duration_seconds=3600.0, extra_resolution_seconds=EXTRA_SECONDS,
+                        extra_resolution_bars={
+                            r: [b for b in _bars(asset, r) if extra_from <= b.time_utc <= end] for r in cfg["extras"]
+                        },
+                        own_bar_duration_seconds=3600.0,
+                        extra_resolution_seconds={r: EXTRA_SECONDS[r] for r in cfg["extras"]},
                     )
                 with _override(cfg["module"], attrs):
                     result = replay_hypothesis(asset, own, cfg["module"].evaluate_entry, engine, ASSET_WHITELIST,
