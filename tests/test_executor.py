@@ -695,8 +695,10 @@ def test_open_signal_retries_placement_once_on_disclosed_stop_boundary(tmp_path)
     }
     # Signal à paliers (TP1/TP2) : 1 échec sur le premier palier, puis 3
     # ordres au réessai (positions séparées, 25/09/2026).
+    # Le broker divulgue un NIVEAU (confirmé en production le 25/09/2026) :
+    # short entré à 100 -> stop minimal au niveau 102.0, soit 2.0 de distance.
     client.place_limit_order.side_effect = [
-        CapitalApiError('400 Client Error — corps de la réponse : {"errorCode":"error.invalid.stoploss.minvalue: 2.0"}'),
+        CapitalApiError('400 Client Error — corps de la réponse : {"errorCode":"error.invalid.stoploss.minvalue: 102.0"}'),
         {"deal_id": "deal-retry-ok"}, {"deal_id": "deal-retry-2"}, {"deal_id": "deal-retry-3"},
     ]
 
@@ -728,6 +730,57 @@ def test_open_signal_retries_placement_once_on_disclosed_stop_boundary(tmp_path)
         assert [l["order_deal_id"] for l in legs] == ["deal-retry-ok", "deal-retry-2", "deal-retry-3"]
     finally:
         conn.close()
+
+
+def test_open_signal_retry_reads_disclosed_boundary_as_price_level_for_long(tmp_path):
+    # Cas réel du 25/09/2026 : USDJPY long entré à 157.177, le broker refuse
+    # avec `maxvalue: 156.38` (niveau de stop le plus haut admis). Lu comme
+    # une distance (156.38 !), le réessai échouait à chaque cycle.
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, sens="long", entree=157.177, stop=156.94, tp1=157.414, tp2=157.651)
+    whitelist = {"GOLD": AssetSpec(symbol="GOLD", min_units=0.01, pip_value_per_unit=0.86)}
+
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "snapshot": {"bid": 157.17, "offer": 157.18, "marketStatus": "TRADEABLE"},
+        "dealingRules": {"minGuaranteedStopDistance": {"value": 0.5, "unit": "PERCENTAGE"}},
+    }
+    client.place_limit_order.side_effect = [
+        CapitalApiError('400 Client Error — corps de la réponse : {"errorCode":"error.invalid.stoploss.maxvalue: 156.38"}'),
+        {"deal_id": "r1"}, {"deal_id": "r2"}, {"deal_id": "r3"},
+    ]
+
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), whitelist, CapitalManager(initial_balance=500.0), envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+
+    assert result == "r1"
+    retry_calls = [c.kwargs for c in client.place_limit_order.call_args_list[1:]]
+    assert all(c["stop_distance"] == pytest.approx(157.177 - 156.38) for c in retry_calls)
+    trade = get_connection(db_path).execute("SELECT stop_loss_initial FROM trades").fetchone()
+    assert trade["stop_loss_initial"] == pytest.approx(156.38)
+
+
+def test_open_signal_retry_skipped_when_disclosed_level_is_on_wrong_side(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, confiance=1.0)  # short entré à 100 : un stop sous 100 n'a aucun sens
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"},
+        "dealingRules": {"minGuaranteedStopDistance": {"value": 1.2, "unit": "POINTS"}},
+    }
+    client.place_limit_order.side_effect = CapitalApiError(
+        '400 Client Error — corps de la réponse : {"errorCode":"error.invalid.stoploss.minvalue: 98.0"}'
+    )
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, CapitalManager(initial_balance=500.0), envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+    assert result is None
+    assert client.place_limit_order.call_count == 1
 
 
 def test_open_signal_placement_retry_skipped_when_stop_not_guaranteed(tmp_path):

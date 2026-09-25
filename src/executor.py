@@ -1075,7 +1075,20 @@ def open_signal(
         # alors été transmis, un `invalid.stoploss` serait sans rapport.
         retry_order_ids = None
         if adjustment.guaranteed_required:
-            boundary_distance = parse_stoploss_boundary(str(first_exc))
+            # La valeur divulguée est un NIVEAU de prix, pas une distance —
+            # confirmé en production le 25/09/2026 (`maxvalue: 156.38` pour
+            # un USDJPY long entré à 157.177, `minvalue: 1.145705` pour un
+            # EURUSD short à 1.139945). Lue à tort comme une distance
+            # jusque-là, le réessai ne pouvait jamais réussir. Convertie ici
+            # en distance depuis le niveau de l'ordre, dans le sens du stop.
+            boundary_level = parse_stoploss_boundary(str(first_exc))
+            boundary_distance = None
+            if boundary_level is not None:
+                raw_distance = (
+                    signal_row["entree_min"] - boundary_level if signal_row["sens"] == "long"
+                    else boundary_level - signal_row["entree_min"]
+                )
+                boundary_distance = round(raw_distance, 8) if raw_distance > 0 else None
             if boundary_distance is not None and boundary_distance > adjustment.stop_distance:
                 # Le broker a demandé un stop même plus large que ce que
                 # _compute_guaranteed_stop_adjustment avait déjà calculé.
@@ -1084,12 +1097,8 @@ def open_signal(
                 # élargit depuis le prix d'entrée (même convention que
                 # _compute_guaranteed_stop_adjustment). `boundary_distance <=
                 # adjustment.stop_distance` (garde ci-dessus) : une valeur
-                # divulguée plus petite ou égale n'expliquerait pas ce rejet
-                # précis — jamais retentée, jamais interprétée à tort comme
-                # une distance (voir docs/DECISIONS.md, incertitude
-                # explicitement documentée sur l'unité divulguée pour ce
-                # champ précis, à confirmer en fenêtre supervisée avant
-                # déploiement).
+                # divulguée qui n'élargit pas le stop n'expliquerait pas ce
+                # rejet précis — jamais retentée.
                 retried_stop_price = (
                     round(signal_row["entree_min"] - boundary_distance, 8) if signal_row["sens"] == "long"
                     else round(signal_row["entree_min"] + boundary_distance, 8)
