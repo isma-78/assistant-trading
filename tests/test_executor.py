@@ -693,9 +693,11 @@ def test_open_signal_retries_placement_once_on_disclosed_stop_boundary(tmp_path)
         "snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"},
         "dealingRules": {"minGuaranteedStopDistance": {"value": 1.2, "unit": "POINTS"}},
     }
+    # Signal à paliers (TP1/TP2) : 1 échec sur le premier palier, puis 3
+    # ordres au réessai (positions séparées, 25/09/2026).
     client.place_limit_order.side_effect = [
         CapitalApiError('400 Client Error — corps de la réponse : {"errorCode":"error.invalid.stoploss.minvalue: 2.0"}'),
-        {"deal_id": "deal-retry-ok"},
+        {"deal_id": "deal-retry-ok"}, {"deal_id": "deal-retry-2"}, {"deal_id": "deal-retry-3"},
     ]
 
     envelope_manager = CapitalManager(initial_balance=500.0)
@@ -705,22 +707,25 @@ def test_open_signal_retries_placement_once_on_disclosed_stop_boundary(tmp_path)
     )
 
     assert result == "deal-retry-ok"
-    assert client.place_limit_order.call_count == 2
+    assert client.place_limit_order.call_count == 4
     first_call_kwargs = client.place_limit_order.call_args_list[0].kwargs
-    second_call_kwargs = client.place_limit_order.call_args_list[1].kwargs
+    retry_calls = [c.kwargs for c in client.place_limit_order.call_args_list[1:]]
     assert first_call_kwargs["stop_distance"] == pytest.approx(1.212)  # 1.2*1.01, plafond statique initial
-    assert second_call_kwargs["stop_distance"] == pytest.approx(2.0)  # valeur EXACTE divulguée par le broker
-    assert second_call_kwargs["size"] < first_call_kwargs["size"]  # stop plus large -> taille recalculée à la baisse
+    assert all(c["stop_distance"] == pytest.approx(2.0) for c in retry_calls)  # valeur EXACTE divulguée
 
     conn = get_connection(db_path)
     try:
         trade = conn.execute("SELECT * FROM trades").fetchone()
+        original_units = conn.execute("SELECT units FROM risk_decisions").fetchone()["units"]
         assert trade["statut"] == "en_attente"
         assert trade["deal_id"] == "deal-retry-ok"
         assert trade["annulation_motif"] is None
         assert trade["stop_elargi"] == 1
         assert trade["stop_loss_courant"] == pytest.approx(102.0)  # 100 (entrée) + 2.0 (short, élargi)
-        assert trade["taille_initiale"] == pytest.approx(second_call_kwargs["size"])
+        assert trade["taille_initiale"] == pytest.approx(sum(c["size"] for c in retry_calls))
+        assert trade["taille_initiale"] < original_units  # stop plus large -> taille recalculée à la baisse
+        legs = conn.execute("SELECT palier, taille, order_deal_id FROM trade_legs ORDER BY id").fetchall()
+        assert [l["order_deal_id"] for l in legs] == ["deal-retry-ok", "deal-retry-2", "deal-retry-3"]
     finally:
         conn.close()
 
@@ -1043,11 +1048,12 @@ def test_open_signal_no_widening_needed_sizing_unchanged_from_original_stop(tmp_
     )
 
     assert result == "deal-xyz"
-    client.place_limit_order.assert_called_once()
-    _, kwargs = client.place_limit_order.call_args
-    assert kwargs["size"] == pytest.approx(11.62)
-    assert kwargs["guaranteed_stop"] is False
-    assert kwargs["stop_distance"] is None
+    # Signal à paliers : 3 ordres (positions séparées, 25/09/2026) dont la
+    # somme vaut exactement la taille dimensionnée — jamais plus.
+    calls = [c.kwargs for c in client.place_limit_order.call_args_list]
+    assert len(calls) == 3
+    assert sum(c["size"] for c in calls) == pytest.approx(11.62)
+    assert all(c["guaranteed_stop"] is False and c["stop_distance"] is None for c in calls)
 
     conn = get_connection(db_path)
     try:
@@ -1165,10 +1171,10 @@ def test_open_signal_widens_stop_and_resizes_when_too_tight_for_guaranteed_stop(
     )
 
     assert result == "deal-xyz"
-    call_kwargs = client.place_limit_order.call_args.kwargs
-    assert call_kwargs["guaranteed_stop"] is True
-    assert call_kwargs["stop_distance"] == pytest.approx(5.05)
-    assert call_kwargs["size"] == pytest.approx(2.30)
+    calls = [c.kwargs for c in client.place_limit_order.call_args_list]
+    assert all(c["guaranteed_stop"] is True for c in calls)
+    assert all(c["stop_distance"] == pytest.approx(5.05) for c in calls)
+    assert sum(c["size"] for c in calls) == pytest.approx(2.30)
 
     conn = get_connection(db_path)
     try:

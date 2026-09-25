@@ -470,6 +470,34 @@ CREATE TABLE IF NOT EXISTS system_state (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+-- Sortie §2.10 en trois positions broker distinctes (25/09/2026, voir
+-- docs/DECISIONS.md) : Capital.com ignore `size` sur DELETE /positions et
+-- ferme toujours la position entière — une clôture partielle n'existe donc
+-- qu'en ouvrant dès l'entrée une position par palier. Une ligne par
+-- position ; `trades` reste l'unité logique (risque, R, P&L).
+CREATE TABLE IF NOT EXISTS trade_legs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id INTEGER NOT NULL REFERENCES trades(id),
+    palier TEXT NOT NULL,          -- "tp1" | "tp2" | "runner"
+    taille REAL NOT NULL,
+    order_deal_id TEXT,            -- dealId de l'ordre limite
+    position_deal_id TEXT,         -- dealId de la position après remplissage
+    statut TEXT NOT NULL,          -- "en_attente" | "ouvert" | "ferme" | "annule"
+    prix_entree_reel REAL,
+    ferme_at TEXT
+);
+
+-- Époques de comptage par hypothèse (25/09/2026, protocole E1) : un
+-- verdict ne compte que les trades ouverts APRÈS `started_at` de l'époque
+-- en vigueur — jamais mélangés avec une époque antérieure.
+CREATE TABLE IF NOT EXISTS hypothesis_epochs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    epoch TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    description TEXT NOT NULL
+);
 """
 
 

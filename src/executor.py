@@ -47,8 +47,9 @@ Invariants appliqués strictement :
 """
 
 import logging
+import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Callable, List, Optional, Tuple
 
@@ -379,6 +380,31 @@ def compute_tp_allocations(total_units: float, min_units: float) -> Tuple[float,
         tp2 = round(tp2 + tp3, 10)
         tp3 = 0.0
     return tp1, tp2, tp3
+
+
+# Sortie §2.10 en trois positions broker (Option B, 25/09/2026, voir
+# docs/DECISIONS.md) : Capital.com ignore `size` sur DELETE /positions et
+# ferme la position entière (40/40 clôtures TP1 vérifiées) — un palier
+# n'est donc fermable seul que s'il est sa propre position dès l'entrée.
+LEG_PALIERS = ("tp1", "tp2", "runner")
+
+
+def uses_split_legs(tp1: Optional[float], tp2: Optional[float], take_profit: Optional[float]) -> bool:
+    """Vrai pour toute sortie §2.10 à paliers (TP1 ET TP2 définis, pas de
+    cible fixe unique) — jamais pour H5 (100% trailing) ni H4 v1."""
+    return tp1 is not None and tp2 is not None and take_profit is None
+
+
+def compute_leg_sizes(total_units: float, min_units: float) -> Optional[Tuple[float, float, float]]:
+    """Tailles TP1/TP2/reliquat via `compute_tp_allocations`, ou None si
+    l'un des trois paliers tombe sous la taille minimale broker : la
+    sortie pré-enregistrée ne peut alors pas exister réellement, le signal
+    est rejeté plutôt que dégradé en silence (jamais de taille augmentée,
+    le risque ne peut que rester égal)."""
+    sizes = compute_tp_allocations(total_units, min_units)
+    if min(sizes) < min_units - 1e-9:
+        return None
+    return sizes
 
 
 # ---------------------------------------------------------------------------
@@ -737,6 +763,53 @@ def _classify_placement_failure(error_text: str) -> str:
     return "autre_echec_placement"
 
 
+def _row_value(row, key: str):
+    """Valeur d'une colonne, None si absente (sqlite3.Row lève IndexError,
+    un dict KeyError) — les lignes `signals` antérieures à une migration,
+    ou les doublures de test, peuvent ne pas porter toutes les colonnes."""
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
+# Pause entre deux ordres d'un même trade à paliers : 3 ordres = 6 requêtes
+# (POST + confirmation) rapprochées sur une IP partagée par 6 process, seuil
+# de 429 mesuré à ~16 requêtes rapprochées (24/08/2026).
+LEG_PLACEMENT_DELAY_SECONDS = 0.5
+
+
+def _place_limit_orders(
+    client: CapitalClient, epic: str, direction_api: str, sizes: List[float], level: float,
+    guaranteed_stop: bool, stop_distance: Optional[float],
+) -> List[str]:
+    """Place un ordre limite par taille, même niveau, même stop. Si un ordre
+    échoue après que d'autres ont déjà été placés, ceux-ci sont annulés
+    avant de relever l'exception — jamais un trade à moitié placé."""
+    placed: List[str] = []
+    try:
+        for index, size in enumerate(sizes):
+            if index > 0:
+                time.sleep(LEG_PLACEMENT_DELAY_SECONDS)
+            result = client.place_limit_order(
+                epic=epic, direction=direction_api, size=size, level=level,
+                guaranteed_stop=guaranteed_stop, stop_distance=stop_distance,
+            )
+            placed.append(result["deal_id"])
+    except CapitalApiError:
+        for deal_id in placed:
+            try:
+                client.cancel_working_order(deal_id)
+            except CapitalApiError:
+                logger.exception(
+                    "Ordre %s d'un trade à paliers incomplet NON annulé — annulé par la péremption (%ss) "
+                    "s'il n'est pas rempli d'ici là ; sinon position hors base, à vérifier à la main",
+                    deal_id, LIMIT_ORDER_EXPIRY_SECONDS,
+                )
+        raise
+    return placed
+
+
 def open_signal(
     db_path: str, client: CapitalClient, signal_row, risk_engine: RiskEngine, whitelist: dict,
     envelope_manager: CapitalManager, envelope_id: int, confidence_threshold: float, go_nogo_status: GoNoGoStatus,
@@ -888,6 +961,19 @@ def open_signal(
                 ),
             )
 
+    split_legs = uses_split_legs(
+        _row_value(signal_row, "tp1"), _row_value(signal_row, "tp2"), _row_value(signal_row, "take_profit"),
+    )
+    min_units = whitelist[asset].min_units if asset in whitelist else None
+    if decision.approved and split_legs and compute_leg_sizes(decision.risk_decision.units, min_units) is None:
+        decision = EntryDecision(
+            approved=False, validation=decision.validation, risk_decision=decision.risk_decision,
+            detail=(
+                f"Rejeté : taille {decision.risk_decision.units} insuffisante pour trois paliers "
+                f"(TP1/TP2/reliquat) d'au moins {min_units} chacun (§2.10, positions séparées)"
+            ),
+        )
+
     with connection_scope(db_path) as conn:
         conn.execute(
             "INSERT INTO risk_decisions (signal_id, decided_at, approved, reason, detail, units, risk_amount_eur) "
@@ -966,11 +1052,12 @@ def open_signal(
         )
         trade_id = cursor.lastrowid
 
+    sizes = list(compute_leg_sizes(units, min_units)) if split_legs else [units]
     try:
-        result = client.place_limit_order(
-            epic=epic, direction=direction_api, size=units,
-            level=signal_row["entree_min"],
-            guaranteed_stop=adjustment.stop_distance > 0, stop_distance=adjustment.stop_distance if adjustment.stop_distance > 0 else None,
+        order_ids = _place_limit_orders(
+            client, epic, direction_api, sizes, signal_row["entree_min"],
+            guaranteed_stop=adjustment.stop_distance > 0,
+            stop_distance=adjustment.stop_distance if adjustment.stop_distance > 0 else None,
         )
     except CapitalApiError as first_exc:
         # Réessai unique sur la valeur EXACTE divulguée par le broker
@@ -986,7 +1073,7 @@ def open_signal(
         # détail complet. Ne s'applique JAMAIS si le stop n'est pas garanti
         # (adjustment.guaranteed_required=False) : aucun stopDistance n'a
         # alors été transmis, un `invalid.stoploss` serait sans rapport.
-        retry_result = None
+        retry_order_ids = None
         if adjustment.guaranteed_required:
             boundary_distance = parse_stoploss_boundary(str(first_exc))
             if boundary_distance is not None and boundary_distance > adjustment.stop_distance:
@@ -1014,7 +1101,15 @@ def open_signal(
                     risk_engine=risk_engine, whitelist=whitelist, envelope_balance=envelope_manager.balance,
                     confidence_threshold=confidence_threshold, go_nogo_ok=go_nogo_status.allowed,
                 )
+                retried_sizes = None
                 if retried_decision.approved:
+                    retried_units = retried_decision.risk_decision.units
+                    if split_legs:
+                        leg_sizes = compute_leg_sizes(retried_units, min_units)
+                        retried_sizes = list(leg_sizes) if leg_sizes is not None else None
+                    else:
+                        retried_sizes = [retried_units]
+                if retried_sizes is not None:
                     logger.warning(
                         "Signal %s : stop garanti rejeté (distance=%s), réessai unique à la distance divulguée "
                         "par le broker (%s), taille recalculée (%s -> %s unités)",
@@ -1022,14 +1117,14 @@ def open_signal(
                         units, retried_decision.risk_decision.units,
                     )
                     try:
-                        retry_result = client.place_limit_order(
-                            epic=epic, direction=direction_api, size=retried_decision.risk_decision.units,
-                            level=signal_row["entree_min"],
+                        retry_order_ids = _place_limit_orders(
+                            client, epic, direction_api, retried_sizes, signal_row["entree_min"],
                             guaranteed_stop=True, stop_distance=boundary_distance,
                         )
                     except CapitalApiError:
-                        retry_result = None
+                        retry_order_ids = None
                     else:
+                        sizes = retried_sizes
                         units = retried_decision.risk_decision.units
                         risk_amount_eur = retried_decision.risk_decision.risk_amount_eur
                         with connection_scope(db_path) as conn:
@@ -1042,7 +1137,7 @@ def open_signal(
                                     trade_id,
                                 ),
                             )
-        if retry_result is None:
+        if retry_order_ids is None:
             logger.exception("Échec du placement de l'ordre limite pour le signal %s", signal_row["id"])
             # Ligne pré-insérée ci-dessus annulée — jamais laissée en
             # 'en_attente' sans deal_id, ce qui bloquerait indéfiniment tout
@@ -1054,10 +1149,17 @@ def open_signal(
             with connection_scope(db_path) as conn:
                 conn.execute("UPDATE trades SET statut = 'annule', annulation_motif = ? WHERE id = ?", (motif, trade_id))
             return None
-        result = retry_result
+        order_ids = retry_order_ids
 
     with connection_scope(db_path) as conn:
-        conn.execute("UPDATE trades SET deal_id = ? WHERE id = ?", (result["deal_id"], trade_id))
+        conn.execute("UPDATE trades SET deal_id = ? WHERE id = ?", (order_ids[0], trade_id))
+        if split_legs:
+            for palier, size, order_id in zip(LEG_PALIERS, sizes, order_ids):
+                conn.execute(
+                    "INSERT INTO trade_legs (trade_id, palier, taille, order_deal_id, statut) "
+                    "VALUES (?, ?, ?, ?, 'en_attente')",
+                    (trade_id, palier, size, order_id),
+                )
 
     # §3.8, variable #1 — collecte uniquement (invariant : n'influence
     # jamais decide_entry ci-dessus, appelé APRÈS que le trade est déjà
@@ -1070,8 +1172,8 @@ def open_signal(
     except Exception:
         logger.exception("Échec de la collecte align_matinale pour le trade %s — sans impact sur l'ouverture", trade_id)
 
-    logger.info("Ordre limite placé pour le signal %s : deal_id=%s", signal_row["id"], result["deal_id"])
-    return result["deal_id"]
+    logger.info("Ordre(s) limite placé(s) pour le signal %s : deal_id=%s", signal_row["id"], order_ids)
+    return order_ids[0]
 
 
 def cancel_stale_working_orders(db_path: str, client: CapitalClient, max_age_seconds: int = LIMIT_ORDER_EXPIRY_SECONDS) -> int:
@@ -1110,10 +1212,46 @@ def cancel_stale_working_orders(db_path: str, client: CapitalClient, max_age_sec
             with connection_scope(db_path) as conn:
                 conn.execute(
                     "UPDATE trades SET statut = 'annule', annulation_motif = 'peremption_marche' "
-                    "WHERE deal_id = ? AND statut = 'en_attente'",
+                    "WHERE deal_id = ? AND statut = 'en_attente' "
+                    "AND NOT EXISTS (SELECT 1 FROM trade_legs l WHERE l.trade_id = trades.id)",
                     (data["dealId"],),
                 )
+                leg = conn.execute(
+                    "SELECT id, trade_id FROM trade_legs WHERE order_deal_id = ? AND statut = 'en_attente'",
+                    (data["dealId"],),
+                ).fetchone()
+                if leg is not None:
+                    conn.execute("UPDATE trade_legs SET statut = 'annule' WHERE id = ?", (leg["id"],))
+                    _settle_unfilled_legs(conn, leg["trade_id"])
     return cancelled
+
+
+def _settle_unfilled_legs(conn, trade_id: int) -> None:
+    """Appelée quand un palier n'a jamais été rempli (péremption). Tant
+    qu'un autre palier du même trade est encore en attente, rien à faire.
+    Sinon : aucun palier rempli -> trade annulé ; au moins un rempli ->
+    le trade est ramené à la taille RÉELLEMENT ouverte (risque réduit
+    d'autant, jamais augmenté), pour que les fractions des paliers
+    restants somment toujours à 1."""
+    legs = conn.execute("SELECT statut, taille FROM trade_legs WHERE trade_id = ?", (trade_id,)).fetchall()
+    if any(l["statut"] == "en_attente" for l in legs):
+        return
+    filled = sum(l["taille"] for l in legs if l["statut"] in ("ouvert", "ferme"))
+    if filled <= 0:
+        conn.execute(
+            "UPDATE trades SET statut = 'annule', annulation_motif = 'peremption_marche' "
+            "WHERE id = ? AND statut = 'en_attente'",
+            (trade_id,),
+        )
+        return
+    trade = conn.execute("SELECT taille_initiale FROM trades WHERE id = ?", (trade_id,)).fetchone()
+    if trade["taille_initiale"] and abs(filled - trade["taille_initiale"]) > 1e-12:
+        factor = filled / trade["taille_initiale"]
+        conn.execute(
+            "UPDATE trades SET taille_initiale = ?, risque_eur = risque_eur * ?, "
+            "pourcentage_risque_applique = pourcentage_risque_applique * ? WHERE id = ?",
+            (filled, factor, factor, trade_id),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1159,6 +1297,81 @@ def _load_open_trade_state(conn, trade_row) -> OpenTradeState:
     )
 
 
+def _check_pending_leg_fills(
+    db_path: str, positions_by_working_order_id: dict, working_order_ids: set,
+    sources: Optional[list], source_filter: Optional[Callable[[str], bool]],
+    bot_token: Optional[str], chat_id: Optional[str],
+) -> int:
+    """Équivalent de check_pending_fills pour les trades à paliers : chaque
+    palier est rapproché de SA position via `workingOrderId`. Le trade passe
+    à 'ouvert' dès le premier palier rempli (pour que la gestion le protège
+    aussitôt), les paliers restants continuent d'être rapprochés ensuite.
+    Retourne le nombre de trades passés à 'ouvert'."""
+    query = (
+        "SELECT l.id AS leg_id, l.trade_id, l.order_deal_id, t.source, t.statut AS trade_statut "
+        "FROM trade_legs l JOIN trades t ON t.id = l.trade_id "
+        "WHERE l.statut = 'en_attente' AND t.statut IN ('en_attente', 'ouvert')"
+    )
+    params: list = []
+    if sources:
+        query += f" AND t.source IN ({','.join('?' for _ in sources)})"
+        params.extend(sources)
+
+    opened_trades = []
+    with connection_scope(db_path) as conn:
+        pending_legs = conn.execute(query, params).fetchall()
+        if source_filter is not None:
+            pending_legs = [row for row in pending_legs if source_filter(row["source"])]
+        touched = set()
+        for leg in pending_legs:
+            if leg["order_deal_id"] in working_order_ids:
+                continue
+            position = positions_by_working_order_id.get(leg["order_deal_id"])
+            if position is None:
+                continue
+            position_data = position.get("position", {})
+            conn.execute(
+                "UPDATE trade_legs SET statut = 'ouvert', position_deal_id = ?, prix_entree_reel = ? WHERE id = ?",
+                (position_data.get("dealId"), position_data.get("level"), leg["leg_id"]),
+            )
+            logger.info(
+                "Palier rempli : trade_id=%s, ordre=%s -> position=%s, niveau=%s",
+                leg["trade_id"], leg["order_deal_id"], position_data.get("dealId"), position_data.get("level"),
+            )
+            if leg["trade_statut"] == "en_attente":
+                touched.add(leg["trade_id"])
+
+        for trade_id in touched:
+            trade_row = conn.execute("SELECT * FROM trades WHERE id = ?", (trade_id,)).fetchone()
+            open_legs = conn.execute(
+                "SELECT taille, prix_entree_reel, position_deal_id FROM trade_legs "
+                "WHERE trade_id = ? AND statut = 'ouvert' ORDER BY id",
+                (trade_id,),
+            ).fetchall()
+            priced = [l for l in open_legs if l["prix_entree_reel"] is not None]
+            entry_level = (
+                sum(l["taille"] * l["prix_entree_reel"] for l in priced) / sum(l["taille"] for l in priced)
+                if priced else None
+            )
+            conn.execute(
+                "UPDATE trades SET statut = 'ouvert', prix_entree_reel = ?, slippage_entree = ?, deal_id = ? WHERE id = ?",
+                (
+                    entry_level,
+                    (entry_level - trade_row["prix_entree_prevu"]) if entry_level is not None else None,
+                    open_legs[0]["position_deal_id"], trade_id,
+                ),
+            )
+            opened_trades.append((trade_row, entry_level))
+
+    for trade_row, entry_level in opened_trades:
+        if bot_token and chat_id:
+            send_notification(bot_token, chat_id, format_trade_opened_notification(
+                trade_row["actif"], _envelope_source_key(trade_row["source"]), trade_row["direction"],
+                entry_level, trade_row["stop_loss_initial"], trade_row["taille_initiale"],
+            ))
+    return len(opened_trades)
+
+
 def check_pending_fills(
     db_path: str, client: CapitalClient, sources: Optional[list] = None,
     source_filter: Optional[Callable[[str], bool]] = None,
@@ -1202,13 +1415,18 @@ def check_pending_fills(
     positions_by_working_order_id = {p.get("position", {}).get("workingOrderId"): p for p in positions}
     working_order_ids = {o.get("workingOrderData", {}).get("dealId") for o in client.get_working_orders()}
 
-    query = "SELECT * FROM trades WHERE statut = 'en_attente'"
+    query = (
+        "SELECT * FROM trades WHERE statut = 'en_attente' "
+        "AND NOT EXISTS (SELECT 1 FROM trade_legs l WHERE l.trade_id = trades.id)"
+    )
     params: list = []
     if sources:
         query += f" AND source IN ({','.join('?' for _ in sources)})"
         params.extend(sources)
 
-    filled = 0
+    filled = _check_pending_leg_fills(
+        db_path, positions_by_working_order_id, working_order_ids, sources, source_filter, bot_token, chat_id,
+    )
     with connection_scope(db_path) as conn:
         pending = conn.execute(query, params).fetchall()
         if source_filter is not None:
@@ -1263,6 +1481,8 @@ GHOST_TRADE_STATUS = "ferme_non_reconcilie"
 
 def reconcile_ghost_positions(
     db_path: str, client: CapitalClient, source_filter: Optional[Callable[[str], bool]] = None,
+    envelope_managers: Optional[dict] = None, envelope_ids: Optional[dict] = None,
+    anthropic_client=None, bot_token: Optional[str] = None, chat_id: Optional[str] = None,
 ) -> int:
     """Passe de réconciliation PÉRIODIQUE (28/08/2026, voir
     docs/DECISIONS.md) — pas une rustine à chaque point d'appel qui peut
@@ -1286,32 +1506,151 @@ def reconcile_ghost_positions(
     simulée (`capital_manager` non appelé ici) — connu, pas corrigé
     (imputer une valeur serait pire que l'absence de valeur).
 
-    Retourne le nombre de trades réconciliés."""
+    Retourne le nombre de trades réconciliés.
+
+    **Clôture réelle retrouvée (25/09/2026, voir docs/DECISIONS.md)** : si
+    `envelope_managers`/`envelope_ids` sont fournis, une position disparue
+    est d'abord cherchée dans /history/activity ; trouvée, elle est
+    comptabilisée comme une clôture normale AU PRIX RÉEL du broker (R, P&L,
+    enveloppe, coupe-circuits) — seule une position introuvable reste
+    fantôme. Motif : 66 des 106 trades réconciliés à la main le 24/09
+    étaient des stops garantis exécutés par le broker entre deux cycles,
+    tous invisibles des statistiques et des coupe-circuits R, un biais
+    systématique contre les pertes. Les trades à paliers sont traités
+    palier par palier."""
     positions = client.get_open_positions()
     real_position_ids = {p.get("position", {}).get("dealId") for p in positions}
-    now = _now()
+    can_settle = envelope_managers is not None and envelope_ids is not None
+
+    with connection_scope(db_path) as conn:
+        single = conn.execute(
+            "SELECT * FROM trades WHERE statut = 'ouvert' AND deal_id IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM trade_legs l WHERE l.trade_id = trades.id)"
+        ).fetchall()
+        leg_trades = conn.execute(
+            "SELECT * FROM trades WHERE statut = 'ouvert' "
+            "AND EXISTS (SELECT 1 FROM trade_legs l WHERE l.trade_id = trades.id)"
+        ).fetchall()
+    if source_filter is not None:
+        single = [row for row in single if source_filter(row["source"])]
+        leg_trades = [row for row in leg_trades if source_filter(row["source"])]
 
     reconciled = 0
-    with connection_scope(db_path) as conn:
-        pending = conn.execute(
-            "SELECT id, source, actif, deal_id FROM trades WHERE statut = 'ouvert' AND deal_id IS NOT NULL"
-        ).fetchall()
-        if source_filter is not None:
-            pending = [row for row in pending if source_filter(row["source"])]
-        for row in pending:
-            if row["deal_id"] in real_position_ids:
+    for row in single:
+        if row["deal_id"] in real_position_ids:
+            continue
+        try:
+            broker_close = _find_broker_close(client, row["deal_id"]) if can_settle else None
+            if broker_close is not None:
+                _settle_broker_closed_trade(
+                    db_path, row, broker_close, envelope_managers, envelope_ids,
+                    anthropic_client, bot_token, chat_id,
+                )
+                reconciled += 1
                 continue
-            conn.execute(
-                "UPDATE trades SET statut = ?, ferme_at = ? WHERE id = ?",
-                (GHOST_TRADE_STATUS, now, row["id"]),
-            )
-            logger.warning(
-                "Trade %s (%s/%s) réconcilié : deal_id %s introuvable côté broker — "
-                "position fantôme, créneau libéré, aucun prix imputé",
-                row["id"], row["source"], row["actif"], row["deal_id"],
-            )
-            reconciled += 1
+        except Exception:
+            logger.exception("Comptabilisation de la clôture broker du trade %s impossible — passage en fantôme", row["id"])
+        _mark_ghost(db_path, row)
+        reconciled += 1
+
+    for row in leg_trades:
+        try:
+            if _reconcile_leg_trade(
+                db_path, client, row, real_position_ids, can_settle, envelope_managers, envelope_ids,
+                anthropic_client, bot_token, chat_id,
+            ):
+                reconciled += 1
+        except Exception:
+            logger.exception("Réconciliation du trade à paliers %s impossible — nouvelle tentative au prochain cycle", row["id"])
     return reconciled
+
+
+def _mark_ghost(db_path: str, row) -> None:
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "UPDATE trades SET statut = ?, ferme_at = ? WHERE id = ?",
+            (GHOST_TRADE_STATUS, _now(), row["id"]),
+        )
+    logger.warning(
+        "Trade %s (%s/%s) réconcilié : deal_id %s introuvable côté broker — "
+        "position fantôme, créneau libéré, aucun prix imputé",
+        row["id"], row["source"], row["actif"], row["deal_id"],
+    )
+
+
+def _broker_close_action(state: OpenTradeState, broker_close: dict) -> ManagementAction:
+    level = broker_close["level"]
+    return ManagementAction(
+        action=ManagementActionType.CLOSE_FULL_STOP,
+        fraction_to_close=state.remaining_fraction,
+        exit_price=level,
+        r_multiple=compute_r_multiple(state.direction, state.entry_price, state.initial_stop_price, level),
+        detail=f"Clôture exécutée par le broker (source={broker_close['source']}), retrouvée dans /history/activity",
+    )
+
+
+def _settle_broker_closed_trade(
+    db_path, trade_row, broker_close, envelope_managers, envelope_ids, anthropic_client, bot_token, chat_id,
+) -> None:
+    with connection_scope(db_path) as conn:
+        state = _load_open_trade_state(conn, trade_row)
+    action = _broker_close_action(state, broker_close)
+    _record_leg_exit(
+        db_path, state.trade_id, None, "sl", state.remaining_fraction, action.exit_price, action.r_multiple,
+        action.detail, broker_close["level"], broker_close["date"],
+    )
+    _finalize_closed_trade(
+        db_path, state, action, envelope_managers, envelope_ids, _now(),
+        anthropic_client=anthropic_client, bot_token=bot_token, chat_id=chat_id,
+    )
+    logger.info(
+        "Trade %s (%s/%s) : clôture broker retrouvée à %s (R=%.4f), comptabilisée",
+        state.trade_id, state.source, state.asset, action.exit_price, action.r_multiple,
+    )
+
+
+def _reconcile_leg_trade(
+    db_path, client, trade_row, real_position_ids, can_settle, envelope_managers, envelope_ids,
+    anthropic_client, bot_token, chat_id,
+) -> bool:
+    """Retourne True si le trade a été clos (comptabilisé ou fantôme)."""
+    legs = _load_legs(db_path, trade_row["id"])
+    vanished = [leg for leg in legs if leg["statut"] == "ouvert" and leg["position_deal_id"] not in real_position_ids]
+    if not vanished and any(leg["statut"] in ("en_attente", "ouvert") for leg in legs):
+        return False
+    with connection_scope(db_path) as conn:
+        state = _load_open_trade_state(conn, trade_row)
+    total_size = _initial_size(db_path, trade_row["id"])
+    last_close = None
+    for leg in vanished:
+        broker_close = _find_broker_close(client, leg["position_deal_id"]) if can_settle else None
+        if broker_close is None:
+            with connection_scope(db_path) as conn:
+                conn.execute(
+                    "UPDATE trade_legs SET statut = ?, ferme_at = ? WHERE id = ?",
+                    (GHOST_TRADE_STATUS, _now(), leg["id"]),
+                )
+            continue
+        last_close = broker_close
+        action = _broker_close_action(state, broker_close)
+        _record_leg_exit(
+            db_path, state.trade_id, leg["id"], "sl", leg["taille"] / total_size, action.exit_price,
+            action.r_multiple, f"{action.detail} — palier {leg['palier']}", broker_close["level"], broker_close["date"],
+        )
+    if not can_settle:
+        remaining = [leg for leg in _load_legs(db_path, trade_row["id"]) if leg["statut"] in ("en_attente", "ouvert")]
+        if remaining:
+            return False
+        _mark_ghost(db_path, trade_row)
+        return True
+    final_action = _broker_close_action(state, last_close) if last_close is not None else ManagementAction(
+        action=ManagementActionType.CLOSE_FULL_STOP, exit_price=state.stop_price, r_multiple=0.0,
+        detail="Paliers clos sans nouvelle clôture broker à imputer",
+    )
+    return _finalize_trade_if_done(
+        db_path, state, final_action, envelope_managers, envelope_ids,
+        anthropic_client=anthropic_client, bot_token=bot_token, chat_id=chat_id,
+    )
 
 
 def manage_open_trades(
@@ -1479,6 +1818,7 @@ def _weighted_r_multiple_for_trade(db_path: str, trade_id: int) -> float:
 def _push_stop_to_broker(
     db_path: str, client: CapitalClient, state: "OpenTradeState", candidate_stop_price: float,
     risk_engine: Optional[RiskEngine] = None, current_price: Optional[float] = None,
+    deal_ids: Optional[List[str]] = None,
 ) -> None:
     """Transmet un nouveau niveau de stop au broker pour une position déjà
     ouverte, plafonné au minimum garanti si besoin (jamais un élargissement
@@ -1539,10 +1879,30 @@ def _push_stop_to_broker(
                 state.trade_id, state.stop_price, adjustment.stop_price, new_stop_price,
             )
             new_stop_price = adjustment.stop_price
-    client.update_position_stop(
-        state.deal_id, new_stop_price, guaranteed_stop=state.guaranteed_stop,
-        direction=state.direction, current_stop_level=state.stop_price,
-    )
+    # `deal_ids` (25/09/2026, positions séparées par palier) : le même stop
+    # est appliqué à CHAQUE position restante du trade. Un échec isolé est
+    # journalisé sans bloquer les autres ; le stop logique en base avance
+    # dès qu'au moins une position l'a reçu (la gestion locale fermera
+    # alors toutes les positions à ce niveau, jamais plus tard). Échec sur
+    # toutes : exception relevée, base inchangée (comportement historique
+    # pour une position unique).
+    targets = deal_ids if deal_ids is not None else [state.deal_id]
+    if not targets:
+        return
+    last_error: Optional[Exception] = None
+    succeeded = 0
+    for deal_id in targets:
+        try:
+            client.update_position_stop(
+                deal_id, new_stop_price, guaranteed_stop=state.guaranteed_stop,
+                direction=state.direction, current_stop_level=state.stop_price,
+            )
+            succeeded += 1
+        except CapitalApiError as exc:
+            last_error = exc
+            logger.exception("Mise à jour du stop refusée pour la position %s (trade %s)", deal_id, state.trade_id)
+    if succeeded == 0:
+        raise last_error
     with connection_scope(db_path) as conn:
         conn.execute("UPDATE trades SET stop_loss_courant = ? WHERE id = ?", (new_stop_price, state.trade_id))
 
@@ -1564,6 +1924,15 @@ def _apply_management_action(
     historiques (colonnes ajoutées après coup) et pour toute clôture
     d'urgence (`force_close_all_open_trades`, aucun `evaluate_position_
     management` associé) — jamais une valeur inventée."""
+    legs = _load_legs(db_path, state.trade_id)
+    if legs:
+        _apply_leg_management_action(
+            db_path, client, state, action, legs, envelope_managers, envelope_ids,
+            risk_engine=risk_engine, current_price=current_price, trigger_time=trigger_time,
+            anthropic_client=anthropic_client, bot_token=bot_token, chat_id=chat_id,
+        )
+        return
+
     if action.action == ManagementActionType.UPDATE_TRAILING_STOP:
         _push_stop_to_broker(db_path, client, state, action.new_stop_price, risk_engine, current_price)
         return
@@ -1672,63 +2041,281 @@ def _apply_management_action(
         )
 
     if is_full_close:
-        pnl_eur = _trade_pnl_eur(db_path, state.trade_id, action.r_multiple)
-        r_multiple_total = _weighted_r_multiple_for_trade(db_path, state.trade_id)
-        reason_code = _infer_close_reason(action, state)
-        raison_label = _CLOSE_REASON_LABELS[reason_code]
-        envelope_key = (state.asset, source_label)
-        manager, envelope_id = envelope_managers[envelope_key], envelope_ids[envelope_key]
-        balance_before = manager.balance
-        reserve_before = load_reserve_total(db_path)
-        reserve_share, reserve_after = apply_trade_result(manager, pnl_eur, reserve_before, note=action.detail)
-        persist_trade_result(db_path, envelope_id, manager, state.trade_id, balance_before, reserve_share, reserve_after)
+        _finalize_closed_trade(
+            db_path, state, action, envelope_managers, envelope_ids, now,
+            anthropic_client=anthropic_client, bot_token=bot_token, chat_id=chat_id,
+        )
 
+
+def _finalize_closed_trade(
+    db_path, state, action, envelope_managers, envelope_ids, now,
+    anthropic_client=None, bot_token=None, chat_id=None,
+) -> None:
+    """Comptabilité de fin de trade, une fois TOUTES ses jambes closes
+    (trade_partials complet) : R total pondéré, P&L, enveloppe/réserve,
+    statut 'ferme', notification, attribution causale, analyse post-trade.
+    Extraite telle quelle de `_apply_management_action` le 25/09/2026 pour
+    être partagée avec les trades à paliers et la réconciliation broker."""
+    source_label = _envelope_source_key(state.source)
+    pnl_eur = _trade_pnl_eur(db_path, state.trade_id, action.r_multiple)
+    r_multiple_total = _weighted_r_multiple_for_trade(db_path, state.trade_id)
+    reason_code = _infer_close_reason(action, state)
+    raison_label = _CLOSE_REASON_LABELS[reason_code]
+    envelope_key = (state.asset, source_label)
+    manager, envelope_id = envelope_managers[envelope_key], envelope_ids[envelope_key]
+    balance_before = manager.balance
+    reserve_before = load_reserve_total(db_path)
+    reserve_share, reserve_after = apply_trade_result(manager, pnl_eur, reserve_before, note=action.detail)
+    persist_trade_result(db_path, envelope_id, manager, state.trade_id, balance_before, reserve_share, reserve_after)
+
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "UPDATE trades SET statut = 'ferme', ferme_at = ?, r_multiple_total = ?, pnl_net = ?, "
+            "cloture_reason = ? WHERE id = ?",
+            (now, r_multiple_total, pnl_eur, reason_code, state.trade_id),
+        )
+
+    if bot_token and chat_id:
+        send_notification(
+            bot_token, chat_id,
+            format_trade_closed_notification(state.asset, source_label, r_multiple_total, raison_label, pnl_eur),
+        )
+
+    # Attribution causale (27/08/2026, voir docs/DECISIONS.md) : même
+    # discipline best-effort que analyze_closed_trade ci-dessous — la
+    # clôture est déjà journalisée, un échec ici ne perd que
+    # l'attribution de CE trade, jamais son P&L réel. None tant que
+    # `trade_partials.prix_sortie_reel` n'est pas encore renseigné
+    # (aucune jambe de sortie n'a de prix réel avant ce déploiement).
+    try:
+        decomposition = compute_trade_causal_decomposition(db_path, state.trade_id)
+        if decomposition is not None:
+            persist_trade_causal_decomposition(db_path, state.trade_id, decomposition, now)
+    except Exception:
+        logger.exception(
+            "Échec de l'attribution causale pour le trade %s — clôture déjà journalisée, sans impact",
+            state.trade_id,
+        )
+
+    # La clôture est déjà journalisée ci-dessus avant cet appel :
+    # un échec ici (LLM, réseau, garde-fou) ne doit jamais remettre
+    # en cause l'enregistrement du trade fermé, seule l'analyse
+    # post-trade est perdue pour ce cycle (bug réel trouvé le
+    # 16/08/2026 pendant le test encadré : trade_analyzer.py était
+    # entièrement construit et testé mais jamais appelé depuis
+    # executor.py — voir docs/DECISIONS.md).
+    try:
+        analyze_closed_trade(
+            db_path, state.trade_id, anthropic_client, bot_token, chat_id,
+            source=source_label,
+        )
+    except Exception:
+        logger.exception(
+            "Échec de l'analyse post-trade pour le trade %s — clôture déjà journalisée, sans impact",
+            state.trade_id,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Trades à paliers en positions séparées (Option B, 25/09/2026)
+# ---------------------------------------------------------------------------
+
+_LEG_TARGET_BY_ACTION = {
+    ManagementActionType.CLOSE_PARTIAL_TP1: "tp1",
+    ManagementActionType.CLOSE_PARTIAL_TP2: "tp2",
+}
+
+# Fenêtre de /history/activity : l'API plafonne from/to à 1 jour et filtre
+# en UTC (vérifié le 25/09/2026 sur une clôture connue) ; `to` légèrement
+# dans le futur est accepté.
+_HISTORY_LOOKBACK = timedelta(hours=22)
+_HISTORY_LOOKAHEAD = timedelta(hours=1)
+
+
+def _load_legs(db_path: str, trade_id: int) -> list:
+    with connection_scope(db_path) as conn:
+        return conn.execute("SELECT * FROM trade_legs WHERE trade_id = ? ORDER BY id", (trade_id,)).fetchall()
+
+
+def _find_broker_close(client: CapitalClient, deal_id: str) -> Optional[dict]:
+    """Événement de clôture RÉEL d'une position disparue, lu dans
+    /history/activity (une activité POSITION portant `openPrice` est une
+    clôture : `level` = prix de sortie réel — schéma vérifié sur 1136
+    activités le 24/09/2026). None si introuvable ou en cas d'erreur :
+    l'appelant retombe alors sur le statut fantôme, jamais un prix inventé."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    params = {
+        "from": (now - _HISTORY_LOOKBACK).strftime("%Y-%m-%dT%H:%M:%S"),
+        "to": (now + _HISTORY_LOOKAHEAD).strftime("%Y-%m-%dT%H:%M:%S"),
+        "detailed": "true",
+    }
+    try:
+        data = retry_with_backoff(
+            lambda: client.get("/history/activity", params=params),
+            exceptions=(CapitalApiError, requests.exceptions.RequestException),
+        )
+    except (CapitalApiError, requests.exceptions.RequestException):
+        logger.exception("Lecture de /history/activity impossible pour la position %s", deal_id)
+        return None
+    for activity in data.get("activities", []):
+        details = activity.get("details") or {}
+        if (
+            activity.get("dealId") == deal_id and activity.get("type") == "POSITION"
+            and details.get("openPrice") is not None and details.get("level") is not None
+        ):
+            return {
+                "level": details["level"],
+                "date": activity.get("dateUTC") or activity.get("date"),
+                "source": activity.get("source"),
+            }
+    return None
+
+
+def _record_leg_exit(
+    db_path: str, trade_id: int, leg_id: Optional[int], palier: str, fraction: float,
+    exit_price: float, r_multiple: float, detail: str, real_level: Optional[float] = None,
+    real_time: Optional[str] = None, trigger_time: Optional[str] = None,
+    trigger_price: Optional[float] = None, requested_at: Optional[str] = None,
+) -> None:
+    now = _now()
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO trade_partials (trade_id, palier, fraction, prix_sortie, r_atteint, motif, executed_at, "
+            "prix_sortie_reel, broker_executed_at, t_declenchement, p_declenchement, t_demande) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                trade_id, palier, fraction, exit_price, r_multiple, detail, now,
+                real_level, real_time, trigger_time, trigger_price, requested_at,
+            ),
+        )
+        if leg_id is not None:
+            conn.execute("UPDATE trade_legs SET statut = 'ferme', ferme_at = ? WHERE id = ?", (now, leg_id))
+
+
+def _finalize_trade_if_done(
+    db_path, state, action, envelope_managers, envelope_ids,
+    anthropic_client=None, bot_token=None, chat_id=None,
+) -> bool:
+    """Clôture comptable du trade dès qu'aucun palier n'est plus ouvert ni
+    en attente. Un palier disparu sans prix retrouvable rend le R total
+    incalculable : le trade passe alors en fantôme, jamais un R partiel
+    présenté comme complet."""
+    with connection_scope(db_path) as conn:
+        statuts = [row["statut"] for row in conn.execute(
+            "SELECT statut FROM trade_legs WHERE trade_id = ?", (state.trade_id,),
+        )]
+    if any(s in ("en_attente", "ouvert") for s in statuts):
+        return False
+    if GHOST_TRADE_STATUS in statuts:
         with connection_scope(db_path) as conn:
             conn.execute(
-                "UPDATE trades SET statut = 'ferme', ferme_at = ?, r_multiple_total = ?, pnl_net = ?, "
-                "cloture_reason = ? WHERE id = ?",
-                (now, r_multiple_total, pnl_eur, reason_code, state.trade_id),
+                "UPDATE trades SET statut = ?, ferme_at = ? WHERE id = ?",
+                (GHOST_TRADE_STATUS, _now(), state.trade_id),
             )
+        logger.warning("Trade %s : un palier a disparu sans prix retrouvable — trade fantôme", state.trade_id)
+        return True
+    _finalize_closed_trade(
+        db_path, state, action, envelope_managers, envelope_ids, _now(),
+        anthropic_client=anthropic_client, bot_token=bot_token, chat_id=chat_id,
+    )
+    return True
 
-        if bot_token and chat_id:
-            send_notification(
-                bot_token, chat_id,
-                format_trade_closed_notification(state.asset, source_label, r_multiple_total, raison_label, pnl_eur),
-            )
 
-        # Attribution causale (27/08/2026, voir docs/DECISIONS.md) : même
-        # discipline best-effort que analyze_closed_trade ci-dessous — la
-        # clôture est déjà journalisée, un échec ici ne perd que
-        # l'attribution de CE trade, jamais son P&L réel. None tant que
-        # `trade_partials.prix_sortie_reel` n'est pas encore renseigné
-        # (aucune jambe de sortie n'a de prix réel avant ce déploiement).
+def _apply_leg_management_action(
+    db_path, client, state, action, legs, envelope_managers, envelope_ids,
+    risk_engine=None, current_price=None, trigger_time=None,
+    anthropic_client=None, bot_token=None, chat_id=None,
+) -> None:
+    """Même décision que pour une position unique (evaluate_position_
+    management inchangé), exécutée palier par palier : TP1/TP2 ferment LEUR
+    position entière, un stop (ou /stop_urgence) ferme toutes les positions
+    restantes, tout déplacement de stop s'applique à toutes les positions
+    restantes."""
+    open_legs = [leg for leg in legs if leg["statut"] == "ouvert"]
+    if action.action == ManagementActionType.UPDATE_TRAILING_STOP:
+        _push_stop_to_broker(
+            db_path, client, state, action.new_stop_price, risk_engine, current_price,
+            deal_ids=[leg["position_deal_id"] for leg in open_legs],
+        )
+        return
+
+    is_full_close = action.action in (ManagementActionType.CLOSE_FULL_STOP, ManagementActionType.CLOSE_FULL_TP)
+    palier = {
+        ManagementActionType.CLOSE_FULL_STOP: "sl",
+        ManagementActionType.CLOSE_PARTIAL_TP1: "tp1",
+        ManagementActionType.CLOSE_PARTIAL_TP2: "tp2",
+        ManagementActionType.CLOSE_FULL_TP: "tp",
+    }[action.action]
+    total_size = _initial_size(db_path, state.trade_id)
+    targets = open_legs if is_full_close else [
+        leg for leg in open_legs if leg["palier"] == _LEG_TARGET_BY_ACTION[action.action]
+    ]
+
+    if not is_full_close and not targets:
+        # Palier jamais rempli (péremption) : le franchissement est consigné
+        # à fraction nulle pour que TP1/TP2 ne soit pas redéclenché à chaque
+        # cycle — aucun effet sur le R pondéré.
+        _record_leg_exit(
+            db_path, state.trade_id, None, palier, 0.0, action.exit_price, action.r_multiple,
+            f"{action.detail} (palier non rempli, rien à fermer)", trigger_time=trigger_time,
+            trigger_price=current_price,
+        )
+
+    for leg in targets:
+        requested_at = _now()
+        leg_palier, exit_price, r_multiple, detail = palier, action.exit_price, action.r_multiple, action.detail
+        real_level = real_time = None
         try:
-            decomposition = compute_trade_causal_decomposition(db_path, state.trade_id)
-            if decomposition is not None:
-                persist_trade_causal_decomposition(db_path, state.trade_id, decomposition, now)
-        except Exception:
-            logger.exception(
-                "Échec de l'attribution causale pour le trade %s — clôture déjà journalisée, sans impact",
-                state.trade_id,
+            close_result = client.close_position(leg["position_deal_id"], requested_at=requested_at)
+            if isinstance(close_result, dict):
+                real_level, real_time = close_result.get("level"), close_result.get("executed_at")
+        except CapitalApiError:
+            still_open = any(
+                p.get("position", {}).get("dealId") == leg["position_deal_id"] for p in client.get_open_positions()
             )
+            if still_open:
+                raise
+            broker_close = _find_broker_close(client, leg["position_deal_id"])
+            if broker_close is not None:
+                # Fermée par le broker (stop) juste avant notre ordre : son
+                # prix réel prime sur le niveau théorique de l'action.
+                leg_palier, exit_price = "sl", broker_close["level"]
+                real_level, real_time = broker_close["level"], broker_close["date"]
+                r_multiple = compute_r_multiple(state.direction, state.entry_price, state.initial_stop_price, exit_price)
+                detail = f"Palier {leg['palier']} déjà fermé par le broker (source={broker_close['source']})"
+        _record_leg_exit(
+            db_path, state.trade_id, leg["id"], leg_palier, leg["taille"] / total_size, exit_price, r_multiple,
+            detail, real_level, real_time, trigger_time, current_price, requested_at,
+        )
 
-        # La clôture est déjà journalisée ci-dessus avant cet appel :
-        # un échec ici (LLM, réseau, garde-fou) ne doit jamais remettre
-        # en cause l'enregistrement du trade fermé, seule l'analyse
-        # post-trade est perdue pour ce cycle (bug réel trouvé le
-        # 16/08/2026 pendant le test encadré : trade_analyzer.py était
-        # entièrement construit et testé mais jamais appelé depuis
-        # executor.py — voir docs/DECISIONS.md).
-        try:
-            analyze_closed_trade(
-                db_path, state.trade_id, anthropic_client, bot_token, chat_id,
-                source=source_label,
-            )
-        except Exception:
-            logger.exception(
-                "Échec de l'analyse post-trade pour le trade %s — clôture déjà journalisée, sans impact",
-                state.trade_id,
-            )
+    if is_full_close:
+        for leg in legs:
+            if leg["statut"] != "en_attente":
+                continue
+            try:
+                client.cancel_working_order(leg["order_deal_id"])
+            except CapitalApiError:
+                logger.exception("Annulation du palier en attente %s impossible", leg["order_deal_id"])
+                continue
+            with connection_scope(db_path) as conn:
+                conn.execute("UPDATE trade_legs SET statut = 'annule' WHERE id = ?", (leg["id"],))
+
+    if not is_full_close and action.new_stop_price is not None:
+        remaining = [leg["position_deal_id"] for leg in open_legs if leg not in targets]
+        _push_stop_to_broker(db_path, client, state, action.new_stop_price, risk_engine, current_price, deal_ids=remaining)
+
+    if not is_full_close and targets and bot_token and chat_id:
+        send_notification(
+            bot_token, chat_id,
+            format_trade_partial_notification(
+                state.asset, _envelope_source_key(state.source), palier.upper(), action.r_multiple,
+            ),
+        )
+
+    _finalize_trade_if_done(
+        db_path, state, action, envelope_managers, envelope_ids,
+        anthropic_client=anthropic_client, bot_token=bot_token, chat_id=chat_id,
+    )
 
 
 def _initial_size(db_path: str, trade_id: int) -> float:
@@ -1825,11 +2412,19 @@ def force_close_all_open_trades(
     if source_filter is not None:
         pending = [row for row in pending if source_filter(row["source"])]
     for trade_row in pending:
-        try:
-            client.cancel_working_order(trade_row["deal_id"])
-            logger.info("Ordre limite annulé (arrêt d'urgence) : trade_id=%s", trade_row["id"])
-        except CapitalApiError:
-            logger.exception("Échec d'annulation d'urgence de l'ordre du trade %s", trade_row["id"])
+        legs = [leg for leg in _load_legs(db_path, trade_row["id"]) if leg["statut"] == "en_attente"]
+        order_ids = [leg["order_deal_id"] for leg in legs] if legs else [trade_row["deal_id"]]
+        for order_id in order_ids:
+            try:
+                client.cancel_working_order(order_id)
+                logger.info("Ordre limite annulé (arrêt d'urgence) : trade_id=%s, ordre=%s", trade_row["id"], order_id)
+            except CapitalApiError:
+                logger.exception("Échec d'annulation d'urgence de l'ordre %s du trade %s", order_id, trade_row["id"])
+                continue
+            if legs:
+                with connection_scope(db_path) as conn:
+                    conn.execute("UPDATE trade_legs SET statut = 'annule' WHERE order_deal_id = ?", (order_id,))
+                    _settle_unfilled_legs(conn, trade_row["id"])
 
     return closed
 
@@ -1991,7 +2586,11 @@ def run_executor_loop(config, db_path: str, interval_seconds: int = 30, startup_
                 time.sleep(interval_seconds)
                 continue
 
-            reconcile_ghost_positions(db_path, client, source_filter=_stationx_filter)
+            reconcile_ghost_positions(
+                db_path, client, source_filter=_stationx_filter,
+                envelope_managers=envelope_managers, envelope_ids=envelope_ids,
+                anthropic_client=anthropic_client, bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,
+            )
             check_pending_fills(
                 db_path, client, source_filter=_stationx_filter,
                 bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,

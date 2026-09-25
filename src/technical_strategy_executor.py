@@ -565,7 +565,11 @@ def run_technical_strategy_loop(
                     expensive_hours_by_asset=expensive_hours_by_asset,
                 )
 
-            reconcile_ghost_positions(db_path, client, source_filter=lambda s: s in management_sources)
+            reconcile_ghost_positions(
+                db_path, client, source_filter=lambda s: s in management_sources,
+                envelope_managers=envelope_managers, envelope_ids=envelope_ids,
+                anthropic_client=anthropic_client, bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,
+            )
             check_pending_fills(
                 db_path, client, sources=management_sources,
                 bot_token=config.telegram_bot_token, chat_id=config.telegram_chat_id,
