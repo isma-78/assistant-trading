@@ -100,6 +100,10 @@ def run_hypothesis5_loop(config, db_path: str, interval_seconds: int = 60, start
         interval_seconds=interval_seconds,
         startup_offset_seconds=startup_offset_seconds,
         expensive_hours_by_asset=expensive_hours_by_asset,
+        # E2-H5 (pré-enregistré le 25/09/2026, docs/DECISIONS.md) : bougies
+        # DAY closes pour le filtre de momentum (100 demandées, la bougie en
+        # formation est retirée — ≥ 64 requises).
+        extra_resolutions=["DAY"],
     )
 
 

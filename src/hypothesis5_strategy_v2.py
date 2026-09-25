@@ -44,6 +44,32 @@ STOP_BUFFER_PCT = 0.25
 
 OVERRIDABLE = ["COMPRESSION_PERCENTILE", "COMPRESSION_DURATION", "STOP_BUFFER_PCT"]
 
+# E2-H5 (pré-enregistré le 25/09/2026 19:20 UTC, docs/DECISIONS.md) : la
+# cassure n'est retenue que dans le sens du momentum de série temporelle —
+# signe du rendement sur `TSMOM_LOOKBACK_DAYS` bougies DAY closes. Variable
+# FIGÉE (4e du budget H5), jamais balayée. `TSMOM_FILTER_ENABLED` permet de
+# rejouer la définition antérieure (fidélité, recherche), jamais de
+# désactiver le filtre en production.
+TSMOM_FILTER_ENABLED = True
+TSMOM_LOOKBACK_DAYS = 63
+
+
+def compute_tsmom_sign(day_candles: Optional[List[Candle]], lookback: int = TSMOM_LOOKBACK_DAYS) -> int:
+    """+1 / −1 selon le signe de `close[-1] / close[-1-lookback] − 1` sur
+    des bougies DAY closes ; 0 si nul, prix non positif ou historique
+    insuffisant (moins de `lookback + 1` bougies) — 0 n'autorise aucun sens."""
+    if not day_candles or len(day_candles) < lookback + 1:
+        return 0
+    past = day_candles[-1 - lookback].close
+    if past <= 0:
+        return 0
+    change = day_candles[-1].close / past - 1.0
+    if change > 0:
+        return 1
+    if change < 0:
+        return -1
+    return 0
+
 # `MIN_LOOKBACK_FOR_GRID` (29/08/2026, voir docs/DECISIONS.md, point 16) :
 # c'est exactement `min_required` calculé en interne par `_evaluate_
 # entry` (BOLLINGER_PERIOD=20 + COMPRESSION_DURATION grille max 15 +
@@ -118,19 +144,24 @@ def _is_compressed(
     return all(v <= threshold for v in compression_window)
 
 
-def evaluate_entry(asset: str, candles: Optional[List[Candle]]) -> Optional[TrendSignal]:
+def evaluate_entry(
+    asset: str, candles: Optional[List[Candle]], day_candles: Optional[List[Candle]] = None,
+) -> Optional[TrendSignal]:
     """Point d'entrée unique : cassure de la bande de Bollinger après une
-    compression confirmée. Sortie 100% trailing (aucun tp1/tp2, géré par
-    `compute_donchian_channel`/le mécanisme de trailing existant,
-    jamais par ce module). Ne lève jamais d'exception (fail-safe,
-    invariant #7, même patron que trend_strategy.evaluate_entry)."""
+    compression confirmée, dans le sens du momentum DAY (E2-H5). Sortie
+    100% trailing (aucun tp1/tp2, géré par `compute_donchian_channel`/le
+    mécanisme de trailing existant, jamais par ce module). Ne lève jamais
+    d'exception (fail-safe, invariant #7, même patron que
+    trend_strategy.evaluate_entry)."""
     try:
-        return _evaluate_entry(asset, candles)
+        return _evaluate_entry(asset, candles, day_candles)
     except Exception:
         return None
 
 
-def _evaluate_entry(asset: str, candles: Optional[List[Candle]]) -> Optional[TrendSignal]:
+def _evaluate_entry(
+    asset: str, candles: Optional[List[Candle]], day_candles: Optional[List[Candle]] = None,
+) -> Optional[TrendSignal]:
     if not candles:
         return None
     last_index = len(candles) - 1
@@ -156,5 +187,10 @@ def _evaluate_entry(asset: str, candles: Optional[List[Candle]]) -> Optional[Tre
         stop_price = lower + STOP_BUFFER_PCT * (upper - lower)
     else:
         return None  # compression confirmée, mais pas encore de cassure
+
+    if TSMOM_FILTER_ENABLED:
+        required_sign = 1 if direction == "long" else -1
+        if compute_tsmom_sign(day_candles) != required_sign:
+            return None  # cassure contre la tendance de fond, ou tendance inconnue (E2-H5)
 
     return TrendSignal(asset=asset, direction=direction, entry_price=close, stop_price=stop_price)

@@ -27,7 +27,7 @@ ADJUSTED_VARIABLES = {
     "hypothesis2_v2": 4,
     "hypothesis3_v2": 3,
     "hypothesis4_v2": 3,
-    "hypothesis5_v2": 3,
+    "hypothesis5_v2": 4,  # + TSMOM_LOOKBACK_DAYS (E2-H5, 25/09/2026)
 }
 
 

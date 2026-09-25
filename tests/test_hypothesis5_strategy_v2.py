@@ -11,12 +11,15 @@ from src.hypothesis5_strategy_v2 import (
     COMPRESSION_PERCENTILE,
     PERCENTILE_LOOKBACK,
     STOP_BUFFER_PCT,
+    TSMOM_LOOKBACK_DAYS,
     _is_compressed,
     _percentile,
     compute_bollinger_band_at,
     compute_normalized_width_series,
+    compute_tsmom_sign,
     evaluate_entry,
 )
+import src.hypothesis5_strategy_v2 as h5_mod
 from src.market_data import Candle
 from src.trend_strategy import TrendSignal
 
@@ -44,6 +47,11 @@ def _compression_breakout_series(direction="long", breakout=True):
     else:
         candles.append(_c(t, 101, 70, 75)); t += 1
     return candles
+
+
+def _day_trend(sign, n=TSMOM_LOOKBACK_DAYS + 1):
+    """Bougies DAY closes en tendance (+1 hausse, −1 baisse, 0 plate)."""
+    return [_c(i, 0, 0, 100.0 + sign * i) for i in range(n)]
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +103,7 @@ def test_is_compressed_false_when_compression_window_has_none():
 
 def test_evaluate_entry_long_breakout_after_compression():
     candles = _compression_breakout_series("long")
-    signal = evaluate_entry("EURUSD", candles)
+    signal = evaluate_entry("EURUSD", candles, _day_trend(+1))
     assert signal is not None
     assert isinstance(signal, TrendSignal)
     assert signal.direction == "long"
@@ -105,7 +113,7 @@ def test_evaluate_entry_long_breakout_after_compression():
 
 def test_evaluate_entry_short_breakout_after_compression():
     candles = _compression_breakout_series("short")
-    signal = evaluate_entry("EURUSD", candles)
+    signal = evaluate_entry("EURUSD", candles, _day_trend(-1))
     assert signal is not None
     assert signal.direction == "short"
     assert signal.stop_price > signal.entry_price
@@ -113,7 +121,7 @@ def test_evaluate_entry_short_breakout_after_compression():
 
 def test_evaluate_entry_stop_placed_inside_compression_zone():
     candles = _compression_breakout_series("long")
-    signal = evaluate_entry("EURUSD", candles)
+    signal = evaluate_entry("EURUSD", candles, _day_trend(+1))
     band = compute_bollinger_band_at(candles, len(candles) - 1)
     upper, _middle, lower = band
     assert lower < signal.stop_price <= upper  # à l'intérieur de la zone, jamais au-delà
@@ -121,7 +129,52 @@ def test_evaluate_entry_stop_placed_inside_compression_zone():
 
 def test_evaluate_entry_none_when_compressed_but_no_breakout():
     candles = _compression_breakout_series("long", breakout=False)
-    assert evaluate_entry("EURUSD", candles) is None
+    assert evaluate_entry("EURUSD", candles, _day_trend(+1)) is None
+
+
+# ---------------------------------------------------------------------------
+# E2-H5 — filtre de momentum de série temporelle (pré-enregistré 25/09/2026)
+# ---------------------------------------------------------------------------
+
+def test_compute_tsmom_sign_follows_return_sign_over_lookback():
+    assert compute_tsmom_sign(_day_trend(+1)) == 1
+    assert compute_tsmom_sign(_day_trend(-1)) == -1
+    assert compute_tsmom_sign(_day_trend(0)) == 0
+
+
+def test_compute_tsmom_sign_uses_exactly_lookback_bars_back():
+    days = _day_trend(0, n=TSMOM_LOOKBACK_DAYS + 5)
+    days[-1 - TSMOM_LOOKBACK_DAYS] = _c(0, 0, 0, 90.0)  # seule la bougie à -64 compte
+    days[0] = _c(0, 0, 0, 500.0)
+    assert compute_tsmom_sign(days) == 1
+
+
+def test_compute_tsmom_sign_zero_on_insufficient_or_invalid_history():
+    assert compute_tsmom_sign(None) == 0
+    assert compute_tsmom_sign(_day_trend(+1, n=TSMOM_LOOKBACK_DAYS)) == 0
+    invalid = _day_trend(+1)
+    invalid[0] = _c(0, 0, 0, 0.0)
+    assert compute_tsmom_sign(invalid) == 0
+
+
+def test_evaluate_entry_rejects_breakout_against_background_trend():
+    assert evaluate_entry("EURUSD", _compression_breakout_series("long"), _day_trend(-1)) is None
+    assert evaluate_entry("EURUSD", _compression_breakout_series("short"), _day_trend(+1)) is None
+
+
+def test_evaluate_entry_rejects_when_trend_unknown():
+    assert evaluate_entry("EURUSD", _compression_breakout_series("long")) is None  # aucune bougie DAY
+    assert evaluate_entry("EURUSD", _compression_breakout_series("long"), _day_trend(0)) is None
+
+
+def test_evaluate_entry_previous_definition_reproducible_when_filter_disabled(monkeypatch):
+    monkeypatch.setattr(h5_mod, "TSMOM_FILTER_ENABLED", False)
+    signal = evaluate_entry("EURUSD", _compression_breakout_series("long"))
+    assert signal is not None and signal.direction == "long"
+
+
+def test_tsmom_lookback_is_the_preregistered_value():
+    assert TSMOM_LOOKBACK_DAYS == 63
 
 
 def test_evaluate_entry_none_when_no_compression():
