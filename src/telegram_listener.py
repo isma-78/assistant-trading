@@ -281,7 +281,8 @@ if __name__ == "__main__":
 
     from src.config import load_config
 
-    logging.basicConfig(level=logging.INFO)
+    from src.log_setup import configure_logging
+    configure_logging()  # A7 (05/10/2026) : horodatage UTC
     parser_cli = argparse.ArgumentParser()
     parser_cli.add_argument(
         "--backfill", type=int, default=0,

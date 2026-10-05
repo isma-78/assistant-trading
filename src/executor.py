@@ -2881,7 +2881,8 @@ if __name__ == "__main__":
     from src.config import load_config
     from src.db import init_db as _init_db
 
-    _logging.basicConfig(level=_logging.INFO)
+    from src.log_setup import configure_logging
+    configure_logging()  # A7 (05/10/2026) : horodatage UTC
     app_config = load_config()
     _init_db(app_config.db_path)
     run_executor_loop(app_config, db_path=app_config.db_path)

@@ -40,6 +40,7 @@ Cron (crontab du VPS) :
 """
 
 import logging
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -78,10 +79,23 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def pgrep_pattern(module_path: str) -> str:
+    """Motif `pgrep -f` (expression régulière étendue) : `python -m <module>`
+    ou `python -u -m <module>`, en fin de ligne de commande.
+
+    Bilan du 05/10/2026 (A7) : le redémarrage planifié passe par
+    `scripts/restart_process.sh`, qui lance `python -u -m <module>`. L'ancien
+    motif littéral `python -m <module>` n'apparaît plus dans cette ligne de
+    commande : le watchdog aurait déclaré morts les 6 exécuteurs juste après
+    le redémarrage. L'ancre `$` évite aussi qu'un module en masque un autre
+    dont le nom commence pareil."""
+    return f"python( -u)? -m {re.escape(module_path)}$"
+
+
 def is_process_alive(module_path: str) -> bool:
-    """Vrai si au moins un process `python -m <module_path>` tourne
+    """Vrai si au moins un process `python [-u] -m <module_path>` tourne
     actuellement (pgrep -f, ligne de commande complète)."""
-    result = subprocess.run(["pgrep", "-f", f"python -m {module_path}"], capture_output=True, text=True)
+    result = subprocess.run(["pgrep", "-f", pgrep_pattern(module_path)], capture_output=True, text=True)
     return result.returncode == 0
 
 

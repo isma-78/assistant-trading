@@ -12,7 +12,7 @@ from scripts.process_watchdog import PROCESSES, check_process, run_watchdog_chec
 
 def _mock_pgrep(alive_modules: set):
     def _run(args, **kwargs):
-        module = args[2].split("python -m ", 1)[1]
+        module = args[2].split(" -m ", 1)[1].rstrip("$").replace("\.", ".")
         result = MagicMock()
         result.returncode = 0 if module in alive_modules else 1
         return result
@@ -101,3 +101,14 @@ def test_run_watchdog_check_covers_every_known_process(tmp_path):
         "hypothesis5_executor": "down",
     }
     assert set(PROCESSES.keys()) == set(results.keys())
+
+
+def test_pgrep_pattern_matches_plain_and_unbuffered_launch_only_for_exact_module():
+    """A7 (bilan du 05/10/2026) : `python -u -m` doit rester détecté."""
+    import re
+    from scripts.process_watchdog import pgrep_pattern
+    pattern = pgrep_pattern("src.executor")
+    assert re.search(pattern, "venv/bin/python -m src.executor")
+    assert re.search(pattern, "venv/bin/python -u -m src.executor")
+    assert not re.search(pattern, "venv/bin/python -u -m src.executorX")
+    assert not re.search(pattern, "tee -a logs/executor_loop.log")
