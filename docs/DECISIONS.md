@@ -12,6 +12,41 @@ la plus récente en tête.
 
 ---
 
+## 2026-10-05 — Décisions actées par Ismaël sur le bilan du 05/10 (branche `bilan-05-10`, rien en production)
+
+Une ligne datée par décision (mandat « application du bilan du 05/10 ») :
+
+1. 2026-10-05 — **Aucune hypothèse n'est arrêtée. H2 reste ACTIVE** ; la
+   proposition D1 du bilan (suspension de l'exécuteur H2) est **annulée**.
+   La clause de suspension du 02/09/2026 n'est pas remplie (forward H2
+   n < 30) : elle reste **non tranchée** (entrées du 25/09 corrigées sur
+   place, elles disaient « levée »).
+2. 2026-10-05 — **Bonferroni des verdicts forward : m = 40** (35 + 5
+   évolutions de l'étape 4). À recalculer, avant tout regard, si le
+   nombre d'évolutions effectivement déployées change.
+3. 2026-10-05 — **Jalons de verdict : n = 30/40/53 pour H1-H4, ≈ 2 R
+   détectable pour H5 à n = 40.** Non significatif = « indémontrable sur
+   cette fenêtre », jamais « invalidé ». H2 côté recherche reste
+   « invalidée » en découverte (24/24 négatifs, puissance suffisante), ce
+   qui ne l'empêche pas de tourner en démo pour accumuler du forward.
+4. 2026-10-05 — **A9 : les trades CHFJPY sont exclus du compteur de
+   verdict de H2 à H5** (pré-enregistrement du 29/08), comptés à part.
+5. 2026-10-05 — **Époque** : une restriction d'actifs déployée (étape 4.4)
+   ouvre une nouvelle époque `hypothesisN_v3` et remet à zéro le compteur
+   de l'hypothèse concernée. Sans restriction déployée : pas de nouvelle
+   époque.
+6. 2026-10-05 — **Décision 7 du 25/09 (règle de collecte H5, échéance
+   09-10/10) : inchangée**, présentée à Ismaël avec son échéance.
+7. 2026-10-05 — **Alerte Telegram aux jalons n = 30/40/53 trades
+   réconciliés**, avec l'espérance du moment, **sans aucune action
+   automatique** (`scripts/milestone_alerts.py`).
+
+Exécution détaillée, chiffres et décisions par hypothèse :
+`docs/APPLICATION_05-10.md`.
+
+---
+
+
 ## 2026-09-26 — Diagnostic de l'écart de fidélité H2 (12%) + `python -u` au prochain redémarrage planifié
 
 Mandat d'Ismaël : (1) diagnostic uniquement de l'écart H2 — touche-t-il
@@ -648,6 +683,10 @@ concrète), validation explicite reçue avant de passer au suivant.
 5. **Suspension H1/H3/H4** (clause du 02/09/2026) : **levée** — H1/H3/H4
    redeviennent explorables pour de nouvelles hypothèses (H6+), au même
    titre que H2/H5.
+   **[CORRIGÉ le 05/10/2026, décision 1 d'Ismaël : la clause de
+   suspension du 02/09/2026 n'est PAS remplie (forward H2 n < 30) ; elle
+   reste NON TRANCHÉE. « Levée » était inexact. Voir l'entrée du
+   05/10/2026 en tête de ce journal.]**
 6. **Script de fidélité simulateur** (cassé depuis le 29/08/2026) :
    **réparation autorisée maintenant**.
 7. **Règle de collecte forward H5** (« hypothèse close reste en démo »,
@@ -733,7 +772,8 @@ committés.
    (+ `telegram_listener`/`control_bot`, jamais touchés) confirmés
    `vivant` par `process_watchdog.py` sur deux cycles consécutifs
    (18h10 et 18h15 UTC).
-5. **Suspension H1/H3/H4 levée** : recherché dans `src/` — **aucune
+5. **Suspension H1/H3/H4 levée** **[CORRIGÉ le 05/10/2026 : clause non
+   remplie, non tranchée — voir l'entrée du 05/10/2026]** : recherché dans `src/` — **aucune
    application par code** de cette clause (`grep` sur
    "suspension"/"02/09"/"H6" dans `src/` ne retourne rien de pertinent) :
    c'était une règle procédurale (invariant #10 : justification
