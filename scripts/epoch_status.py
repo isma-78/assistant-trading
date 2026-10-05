@@ -12,12 +12,12 @@ Usage : python scripts/epoch_status.py
 """
 
 import os
-import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.config import load_config
+from src.config import load_config  # noqa: E402
+from src.verdict_counter import count_all  # noqa: E402
 
 # Variables ajustées par hypothèse (pré-inscription du 29/08/2026 + toute
 # idée déployée depuis, voir docs/DECISIONS.md) — à mettre à jour à chaque
@@ -36,27 +36,16 @@ def verdict_threshold(source: str) -> int:
 
 
 def main() -> None:
-    conn = sqlite3.connect(load_config().db_path)
-    conn.row_factory = sqlite3.Row
-    epochs = {
-        row["source"]: row
-        for row in conn.execute("SELECT * FROM hypothesis_epochs ORDER BY started_at")
-    }
-    for source in ADJUSTED_VARIABLES:
-        epoch = epochs.get(source)
-        started = epoch["started_at"].replace("Z", "") if epoch else "2026-08-29"
-        label = epoch["epoch"] if epoch else "pré-inscription du 29/08/2026"
-        rows = conn.execute(
-            "SELECT statut, r_multiple_total FROM trades WHERE source = ? AND ouvert_at >= ? "
-            "AND anomalie_technique IS NULL AND statut IN ('ouvert', 'ferme', 'ferme_non_reconcilie')",
-            (source, started),
-        ).fetchall()
-        closed = [r["r_multiple_total"] for r in rows if r["statut"] == "ferme" and r["r_multiple_total"] is not None]
-        ghosts = sum(1 for r in rows if r["statut"] == "ferme_non_reconcilie")
-        opened = sum(1 for r in rows if r["statut"] == "ouvert")
+    # A9 (bilan du 05/10/2026) : comptage délégué à src/verdict_counter.py
+    # (CHFJPY exclue de H2-H5, « réconcilié » = prix broker sur chaque
+    # sortie), partagé avec les alertes de jalons — jamais deux définitions.
+    for count in count_all(load_config().db_path):
+        mean = f"{count.mean_r:+.3f}" if count.mean_r is not None else "  -   "
         print(
-            f"{source:15s} époque={label:30s} depuis {started}  fermés={len(closed):3d}/{verdict_threshold(source)}"
-            f"  ouverts={opened}  fantômes={ghosts}"
+            f"{count.source:15s} époque={count.epoch:30s} depuis {count.started_at}  "
+            f"réconciliés={count.n:3d}/{verdict_threshold(count.source)}  E[R]={mean}  "
+            f"sans_prix_broker={count.closed_without_broker_price}  ouverts={count.open_trades}  "
+            f"fantômes={count.ghosts}  CHFJPY_exclus={count.chfjpy_excluded}"
         )
 
 
