@@ -337,6 +337,32 @@ def test_limit_price_trace_survives_snapshot_failure(tmp_path):
     assert rows and json.loads(rows[0]["message"])["cote"] == "inconnu"
 
 
+def test_describe_stop_refusal_sides():
+    """A10 (bilan du 05/10/2026)."""
+    from src.executor import describe_stop_refusal
+    assert describe_stop_refusal("long", 100.0, 1.0, 98.5)["cote"] == "elargissement_requis"
+    assert describe_stop_refusal("long", 100.0, 1.0, 99.5)["cote"] == "deja_respecte"
+    assert describe_stop_refusal("long", 100.0, 1.0, 100.5)["cote"] == "mauvais_cote"
+    assert describe_stop_refusal("short", 100.0, 1.0, 101.5)["distance_seuil"] == pytest.approx(1.5)
+    assert describe_stop_refusal("short", 100.0, None, None)["cote"] == "inconnu"
+
+
+def test_stop_refusal_is_traced_without_extra_retry(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_market_snapshot.return_value = SNAPSHOT_100
+    client.place_limit_order.side_effect = CapitalApiError('400 {"errorCode":"error.invalid.stoploss.maxvalue: 99.5"}')
+
+    assert _open(db_path, client, _insert_signal(db_path, tp1=None, tp2=None)) is None
+
+    assert _rows(db_path, "SELECT annulation_motif FROM trades")[0]["annulation_motif"] == "stop_refuse"
+    import json
+    rows = _rows(db_path, "SELECT message FROM logs WHERE module = 'executor.stop_refuse'")
+    payload = json.loads(rows[0]["message"])
+    assert payload["seuil"] == 99.5 and payload["cote"] == "mauvais_cote"  # short entré à 100 : 99.5 est côté gain
+
+
 # --- Remplissage ----------------------------------------------------------
 
 def test_check_pending_fills_matches_each_leg_to_its_position(tmp_path):

@@ -797,6 +797,59 @@ def describe_limit_refusal(direction: str, level: float, bid: Optional[float], a
     }
 
 
+def describe_stop_refusal(
+    direction: str, entry: float, requested_distance: Optional[float], boundary_level: Optional[float],
+) -> dict:
+    """A10 (bilan du 05/10/2026) : décrit, sans rien décider, un refus de
+    stop au placement. `boundary_level` est le NIVEAU divulgué par le broker
+    (correctif du 25/09/2026). `cote` :
+    - "elargissement_requis" : le broker exige un stop plus éloigné que
+      celui demandé (seul cas où le réessai au minimum broker, décidé le
+      20/08/2026, s'applique) ;
+    - "deja_respecte" : le seuil divulgué est plus proche que le stop
+      demandé, il n'explique pas le refus — aucun réessai ;
+    - "mauvais_cote" : le seuil est du côté du gain par rapport à l'entrée ;
+    - "inconnu" : aucun seuil lisible dans la réponse."""
+    if boundary_level is None:
+        return {"cote": "inconnu", "seuil": None, "distance_seuil": None, "distance_demandee": requested_distance}
+    distance = (entry - boundary_level) if direction == "long" else (boundary_level - entry)
+    if distance <= 0:
+        cote = "mauvais_cote"
+    elif requested_distance is not None and distance > requested_distance:
+        cote = "elargissement_requis"
+    else:
+        cote = "deja_respecte"
+    return {
+        "cote": cote, "seuil": boundary_level, "distance_seuil": round(distance, 10),
+        "distance_demandee": requested_distance,
+    }
+
+
+def _trace_stop_refusal(db_path: str, trade_id: int, signal_row, asset: str, error_text: str, adjustment) -> None:
+    """A10 : trace dédiée d'un `stop_refuse` (table `logs`, module
+    `executor.stop_refuse`). Ne change rien : aucun élargissement au-delà du
+    minimum broker déjà décidé, aucun réessai supplémentaire."""
+    detail = describe_stop_refusal(
+        signal_row["sens"], signal_row["entree_min"],
+        adjustment.stop_distance if adjustment.stop_distance > 0 else None,
+        parse_stoploss_boundary(error_text),
+    )
+    payload = {
+        "trade_id": trade_id, "signal_id": signal_row["id"], "actif": asset, "sens": signal_row["sens"],
+        "entree": signal_row["entree_min"], "stop_garanti_requis": bool(adjustment.guaranteed_required),
+        "echec_at": _now(), "erreur": error_text[-200:], **detail,
+    }
+    logger.warning("Stop refusé au placement : %s", payload)
+    try:
+        with connection_scope(db_path) as conn:
+            conn.execute(
+                "INSERT INTO logs (timestamp, level, module, message) VALUES (?, 'WARNING', 'executor.stop_refuse', ?)",
+                (payload["echec_at"], json.dumps(payload, ensure_ascii=False)),
+            )
+    except Exception:
+        logger.exception("Trace stop_refuse : écriture impossible pour le trade %s", trade_id)
+
+
 def _trace_limit_price_refusal(db_path: str, client: CapitalClient, trade_id: int, signal_row, asset: str) -> None:
     """A3 : trace dédiée d'un refus `limit.price` — bid/ask relus au moment de
     l'échec (un seul GET, au mieux), horodatage de l'échec, niveau envoyé
@@ -1335,6 +1388,8 @@ def open_signal(
             motif = _classify_placement_failure(str(first_exc))
             if motif == LIMIT_PRICE_REFUSAL_MOTIF:
                 _trace_limit_price_refusal(db_path, client, trade_id, signal_row, asset)
+            elif motif == "stop_refuse":
+                _trace_stop_refusal(db_path, trade_id, signal_row, asset, str(first_exc), adjustment)
             with connection_scope(db_path) as conn:
                 conn.execute("UPDATE trades SET statut = 'annule', annulation_motif = ? WHERE id = ?", (motif, trade_id))
             return None
