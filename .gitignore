@@ -34,3 +34,6 @@ Thumbs.db
 
 # Claude Code — préférences locales, jamais partagées
 .claude/settings.local.json
+
+# Instantanés locaux de la base de production (lecture seule, jamais commités)
+data/snapshots/

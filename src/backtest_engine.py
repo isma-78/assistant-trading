@@ -333,6 +333,7 @@ def replay_hypothesis(
     own_bar_duration_seconds: Optional[float] = None,
     confirming_bar_duration_seconds: Optional[float] = None,
     extra_resolution_seconds: Optional[Dict[str, float]] = None,
+    stop_update_filter: Optional[Callable[[str, float, float], bool]] = None,
 ) -> BacktestResult:
     """Rejoue `entry_fn` sur `own_bars` (ordre chronologique), fenêtre
     glissante stricte de `lookback` bougies (jamais de bougie future),
@@ -380,7 +381,15 @@ def replay_hypothesis(
     sélectionner les bougies de confirmation/résolutions supplémentaires
     déjà closes à cet instant — jamais une bougie encore en cours de
     formation à une résolution supérieure (ex. HOUR_4/DAY pour une
-    hypothèse en HOUR)."""
+    hypothèse en HOUR).
+
+    `stop_update_filter` (A8, bilan du 05/10/2026) : fidélité au broker.
+    En live, une partie des resserrements de stop (trailing, passage au
+    breakeven après TP1) est refusée par Capital.com (seuil de distance
+    minimale) et le stop reste où il était. `stop_update_filter(asset,
+    ancien_stop, nouveau_stop)` renvoie False pour simuler un tel refus.
+    `None` par défaut : comportement strictement inchangé (100 % de
+    resserrements appliqués, comme avant)."""
     if confirming_bars and confirming_bar_duration_seconds is None:
         raise ValueError(
             "confirming_bar_duration_seconds est obligatoire dès que confirming_bars est fourni "
@@ -435,6 +444,7 @@ def replay_hypothesis(
         if open_state is not None:
             closed_trade, open_state = _manage_open_position(
                 open_state, bar, window, risk_engine, asset, is_donchian_trailing, slippage_multiplier,
+                stop_update_filter,
             )
             if closed_trade is not None:
                 trades.append(closed_trade)
@@ -537,6 +547,7 @@ def _bar_hour(time_utc: str) -> Optional[int]:
 def _manage_open_position(
     open_state: dict, bar: HistoricalBar, window: List[Candle], risk_engine: RiskEngine,
     asset: str, is_donchian_trailing: bool, slippage_multiplier: float = SLIPPAGE_SPREAD_MULTIPLIER,
+    stop_update_filter: Optional[Callable[[str, float, float], bool]] = None,
 ) -> Tuple[Optional[BacktestTrade], Optional[dict]]:
     """Gère une position simulée sur `bar` : stop testé EN PREMIER au
     point le plus défavorable de la bougie, cible/trailing testés ensuite
@@ -556,6 +567,8 @@ def _manage_open_position(
         action = evaluate_position_management(state, best_price, atr, risk_engine, trailing_candles)
 
     if action.action == ManagementActionType.UPDATE_TRAILING_STOP:
+        if stop_update_filter is not None and not stop_update_filter(asset, state.stop_price, action.new_stop_price):
+            return None, open_state  # resserrement refusé par le broker : stop inchangé (A8)
         new_state = OpenTradeState(
             trade_id=state.trade_id, deal_id=state.deal_id, asset=state.asset, source=state.source,
             direction=state.direction, entry_price=state.entry_price, initial_stop_price=state.initial_stop_price,
@@ -578,10 +591,16 @@ def _manage_open_position(
     partials = list(open_state["partials"]) + [(action.fraction_to_close, r_this_leg)]
 
     if action.action == ManagementActionType.CLOSE_PARTIAL_TP1:
+        tp1_stop = action.new_stop_price if action.new_stop_price is not None else state.stop_price
+        if (
+            stop_update_filter is not None and action.new_stop_price is not None
+            and not stop_update_filter(asset, state.stop_price, action.new_stop_price)
+        ):
+            tp1_stop = state.stop_price  # breakeven refusé par le broker : stop d'origine conservé (A8)
         new_state = OpenTradeState(
             trade_id=state.trade_id, deal_id=state.deal_id, asset=state.asset, source=state.source,
             direction=state.direction, entry_price=state.entry_price, initial_stop_price=state.initial_stop_price,
-            stop_price=action.new_stop_price if action.new_stop_price is not None else state.stop_price,
+            stop_price=tp1_stop,
             tp1=state.tp1, tp2=state.tp2, tp1_hit=True, tp2_hit=state.tp2_hit,
             remaining_fraction=round(state.remaining_fraction - action.fraction_to_close, 10),
             guaranteed_stop=state.guaranteed_stop, take_profit=state.take_profit,

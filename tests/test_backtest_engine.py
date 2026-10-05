@@ -762,3 +762,65 @@ def test_backtest_result_is_frozen_dataclass_with_expected_fields():
     assert result.trades == []
     assert result.final_envelope_balance == 1000.0
     assert result.final_simulated_reserve == 0.0
+
+
+# ---------------------------------------------------------------------------
+# A8 (bilan du 05/10/2026) : refus de resserrement de stop simulé
+# ---------------------------------------------------------------------------
+
+def _tp_then_crash_bars():
+    return [
+        _bar("2026-01-01T00:00:00", 50, 50, 50, 50),
+        _bar("2026-01-02T00:00:00", 50, 50, 50, 50),
+        _bar("2026-01-03T00:00:00", 50, 50, 50, 50),
+        _bar("2026-01-04T00:00:00", 100, 101, 99, 100),
+        _bar("2026-01-05T00:00:00", 101, 106, 100, 105),  # TP1 -> breakeven demandé
+        _bar("2026-01-06T00:00:00", 104, 104, 95, 96),    # sous le breakeven, au-dessus du stop d'origine (90)
+        _bar("2026-01-07T00:00:00", 96, 96, 80, 85),      # stop d'origine touché
+    ]
+
+
+def _replay_tp(stop_update_filter):
+    risk_engine, whitelist = _make_risk_engine()
+    signal = _FakeSignal(direction="long", entry_price=100.0, stop_price=90.0, tp1=105.0, tp2=110.0)
+    return replay_hypothesis(
+        "TEST", _tp_then_crash_bars(), entry_fn=_trigger_on_call(3, signal), risk_engine=risk_engine,
+        whitelist=whitelist, envelope_initial=1000.0, confidence_threshold=0.0, lookback=5,
+        stop_update_filter=stop_update_filter,
+    )
+
+
+def test_stop_update_filter_accepting_everything_changes_nothing():
+    calls = []
+    accepted = _replay_tp(lambda asset, old, new: calls.append((asset, old, new)) or True)
+    baseline = _replay_tp(None)
+    assert accepted.trades[0].r_multiple_total == pytest.approx(baseline.trades[0].r_multiple_total)
+    assert calls and calls[0][0] == "TEST" and calls[0][1] == pytest.approx(90.0)
+
+
+def test_refused_breakeven_keeps_original_stop_and_lowers_r():
+    refused = _replay_tp(lambda asset, old, new: False)
+    baseline = _replay_tp(None)
+    assert baseline.trades[0].exit_time_utc == "2026-01-06T00:00:00"  # sortie au breakeven
+    assert refused.trades[0].exit_time_utc == "2026-01-07T00:00:00"   # stop d'origine conservé
+    assert refused.trades[0].r_multiple_total < baseline.trades[0].r_multiple_total
+
+
+def test_refused_trailing_update_keeps_previous_stop():
+    bars = _flat_bars(20, level=100.0)
+    bars.append(_bar("2026-02-01T00:00:00", 100, 100, 100, 100))
+    bars.append(_bar("2026-02-02T00:00:00", 100, 101, 99, 100))
+    bars.append(_bar("2026-02-03T00:00:00", 101, 106, 100, 105))
+    bars.append(_bar("2026-02-04T00:00:00", 106, 111, 105, 110))
+    bars.append(_bar("2026-02-05T00:00:00", 111, 120, 115, 119))
+    bars.append(_bar("2026-02-06T00:00:00", 119, 119, 90, 95))
+    signal = _FakeSignal(direction="long", entry_price=100.0, stop_price=90.0, tp1=105.0, tp2=110.0)
+    risk_engine, whitelist = _make_risk_engine()
+
+    def run(flt):
+        return replay_hypothesis(
+            "TEST", bars, entry_fn=_trigger_on_call(21, signal), risk_engine=risk_engine, whitelist=whitelist,
+            envelope_initial=1000.0, confidence_threshold=0.0, lookback=DEFAULT_LOOKBACK, stop_update_filter=flt,
+        ).trades[0].r_multiple_total
+
+    assert run(lambda asset, old, new: False) < run(None)
