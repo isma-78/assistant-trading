@@ -35,7 +35,7 @@ WILSON_Z_95 = 1.959963984540054  # z bilatéral à 95%, valeur exacte (statistic
 FILL_RATE_MIN_N = 30
 FILL_RATE_WILSON_UPPER_THRESHOLD = 0.80
 
-_PLACEMENT_FAILURE_MOTIFS = ("rate_limit_429", "stop_refuse", "autre_echec_placement")
+_PLACEMENT_FAILURE_MOTIFS = ("rate_limit_429", "stop_refuse", "limite_refusee", "autre_echec_placement")
 
 
 def wilson_upper_bound(successes: int, n: int, z: float = WILSON_Z_95) -> float:

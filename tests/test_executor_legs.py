@@ -290,6 +290,53 @@ def test_uncancelled_filled_leg_sends_telegram_alert(tmp_path, monkeypatch):
     assert any("rempli(s) malgré l'échec du placement" in m for m in sent)
 
 
+def test_classify_placement_failure_limit_price_has_dedicated_motif():
+    """A3 (bilan du 05/10/2026)."""
+    from src.executor import _classify_placement_failure
+    assert _classify_placement_failure('400 ... {"errorCode":"error.validation.limit.price"}') == "limite_refusee"
+
+
+def test_describe_limit_refusal_sides():
+    from src.executor import describe_limit_refusal
+    assert describe_limit_refusal("long", 100.3, 100.0, 100.2)["cote"] == "executable_immediatement"
+    assert describe_limit_refusal("long", 99.9, 100.0, 100.2)["cote"] == "cote_attente"
+    assert describe_limit_refusal("short", 99.9, 100.0, 100.2)["cote"] == "executable_immediatement"
+    assert describe_limit_refusal("short", 100.5, 100.0, 100.2)["ecart"] == pytest.approx(-0.5)
+    assert describe_limit_refusal("short", 100.5, None, None) == {"cote": "inconnu", "ecart": None, "niveau": "100.5"}
+
+
+def test_limit_price_refusal_is_traced_with_bid_ask_and_time(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_market_snapshot.return_value = SNAPSHOT_100
+    client.place_limit_order.side_effect = CapitalApiError('400 {"errorCode":"error.validation.limit.price"}')
+
+    assert _open(db_path, client, _insert_signal(db_path, tp1=None, tp2=None)) is None
+
+    assert _rows(db_path, "SELECT annulation_motif FROM trades")[0]["annulation_motif"] == "limite_refusee"
+    log = _rows(db_path, "SELECT * FROM logs WHERE module = 'executor.limite_refusee'")
+    assert len(log) == 1
+    import json
+    payload = json.loads(log[0]["message"])
+    assert payload["bid"] == 100.0 and payload["ask"] == 100.2 and payload["echec_at"]
+    assert payload["cote"] == "executable_immediatement"  # short à 100.0 <= bid 100.0
+
+
+def test_limit_price_trace_survives_snapshot_failure(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_market_snapshot.side_effect = [SNAPSHOT_100, SNAPSHOT_100, CapitalApiError("503")]
+    client.place_limit_order.side_effect = CapitalApiError('400 {"errorCode":"error.validation.limit.price"}')
+
+    assert _open(db_path, client, _insert_signal(db_path, tp1=None, tp2=None)) is None
+
+    import json
+    rows = _rows(db_path, "SELECT message FROM logs WHERE module = 'executor.limite_refusee'")
+    assert rows and json.loads(rows[0]["message"])["cote"] == "inconnu"
+
+
 # --- Remplissage ----------------------------------------------------------
 
 def test_check_pending_fills_matches_each_leg_to_its_position(tmp_path):

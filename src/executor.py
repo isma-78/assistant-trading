@@ -46,6 +46,7 @@ Invariants appliqués strictement :
   jamais open_position() (réservée aux scripts de calibration ponctuels).
 """
 
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -745,6 +746,10 @@ def _check_backtest_confidence_gate(db_path: str, asset: str, source: str, risk_
 
 _RATE_LIMIT_MARKERS = ("too-many.requests", "429 Client Error")
 _STOP_REFUSAL_MARKER = "invalid.stoploss"
+# A3 (bilan du 05/10/2026) : premier motif d'échec de placement en E1 (80 cas
+# en 10 jours), jusqu'ici noyé dans "autre_echec_placement".
+_LIMIT_PRICE_REFUSAL_MARKER = "error.validation.limit.price"
+LIMIT_PRICE_REFUSAL_MOTIF = "limite_refusee"
 
 
 def _classify_placement_failure(error_text: str) -> str:
@@ -760,7 +765,55 @@ def _classify_placement_failure(error_text: str) -> str:
         return "rate_limit_429"
     if _STOP_REFUSAL_MARKER in error_text:
         return "stop_refuse"
+    if _LIMIT_PRICE_REFUSAL_MARKER in error_text:
+        return LIMIT_PRICE_REFUSAL_MOTIF
     return "autre_echec_placement"
+
+
+def describe_limit_refusal(direction: str, level: float, bid: Optional[float], ask: Optional[float]) -> dict:
+    """A3 : décrit, sans rien décider, la position du niveau limite refusé
+    par rapport au marché au moment de l'échec. Un ordre limite d'achat
+    doit être sous l'ask (sinon il serait exécutable tout de suite), un
+    ordre de vente au-dessus du bid. `cote` vaut "executable_immediatement"
+    si le niveau a déjà été franchi, "cote_attente" sinon, "inconnu" sans
+    prix. `ecart` est signé : positif = niveau du côté exécutable."""
+    if bid is None or ask is None:
+        return {"cote": "inconnu", "ecart": None, "niveau": repr(level)}
+    ecart = (level - ask) if direction == "long" else (bid - level)
+    return {
+        "cote": "executable_immediatement" if ecart >= 0 else "cote_attente",
+        "ecart": round(ecart, 10),
+        "niveau": repr(level),
+    }
+
+
+def _trace_limit_price_refusal(db_path: str, client: CapitalClient, trade_id: int, signal_row, asset: str) -> None:
+    """A3 : trace dédiée d'un refus `limit.price` — bid/ask relus au moment de
+    l'échec (un seul GET, au mieux), horodatage de l'échec, niveau envoyé
+    (repr exacte, pour repérer un bruit de précision binaire, cf.
+    market_data._mid_of), écrite dans la table `logs`. Ne change rien à la
+    logique d'entrée. Un échec de la trace n'a aucun effet sur la suite."""
+    failed_at = _now()
+    bid = ask = snapshot_at = None
+    try:
+        snapshot = get_price_snapshot(client, asset)
+        bid, ask, snapshot_at = snapshot.bid, snapshot.ask, snapshot.captured_at_broker
+    except Exception:
+        logger.exception("Trace limit.price : snapshot impossible pour %s", asset)
+    detail = describe_limit_refusal(signal_row["sens"], signal_row["entree_min"], bid, ask)
+    payload = {
+        "trade_id": trade_id, "signal_id": signal_row["id"], "actif": asset, "sens": signal_row["sens"],
+        "bid": bid, "ask": ask, "echec_at": failed_at, "snapshot_broker_at": snapshot_at, **detail,
+    }
+    logger.warning("Ordre limite refusé (limit.price) : %s", payload)
+    try:
+        with connection_scope(db_path) as conn:
+            conn.execute(
+                "INSERT INTO logs (timestamp, level, module, message) VALUES (?, 'WARNING', 'executor.limite_refusee', ?)",
+                (failed_at, json.dumps(payload, ensure_ascii=False)),
+            )
+    except Exception:
+        logger.exception("Trace limit.price : écriture impossible pour le trade %s", trade_id)
 
 
 def _row_value(row, key: str):
@@ -1270,6 +1323,8 @@ def open_signal(
             # sépare la cause EN CODE, jamais reconstruite après coup depuis un
             # log texte — condition de la Mesure A (taux de remplissage).
             motif = _classify_placement_failure(str(first_exc))
+            if motif == LIMIT_PRICE_REFUSAL_MOTIF:
+                _trace_limit_price_refusal(db_path, client, trade_id, signal_row, asset)
             with connection_scope(db_path) as conn:
                 conn.execute("UPDATE trades SET statut = 'annule', annulation_motif = ? WHERE id = ?", (motif, trade_id))
             return None

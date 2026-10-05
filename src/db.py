@@ -180,7 +180,7 @@ CREATE TABLE IF NOT EXISTS trades (
                              -- N'EXCLUT PAS ces trades : le P&L réel reste réel pour la gestion du risque,
                              -- seule leur lecture comme SIGNAL DE PERFORMANCE STRATÉGIQUE est neutralisée.
     annulation_motif TEXT  -- ajout 29/08/2026 (point 10, voir docs/DECISIONS.md) : NULL sauf statut='annule' ;
-                            -- "rate_limit_429" | "stop_refuse" | "peremption_marche" | "autre_echec_placement".
+                            -- "rate_limit_429" | "stop_refuse" | "limite_refusee" (05/10/2026, A3) | "peremption_marche" | "autre_echec_placement".
                             -- Sépare les causes d'annulation en CODE (jamais reconstruit après coup depuis des
                             -- logs texte) — voir executor.py::_classify_placement_failure et
                             -- cancel_stale_working_orders.
