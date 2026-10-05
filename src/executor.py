@@ -242,6 +242,16 @@ _EXIT_TYPE_BY_SOURCE = {
     HYPOTHESIS2_SOURCE: "tp_partiel",    # bascule du 23/08/2026
     HYPOTHESIS4_SOURCE: "tp_fixe",       # cible unique, aucun trailing — mécanisme distinct du §2.10
     HYPOTHESIS5_SOURCE: "tp_partiel",    # tp_partiel depuis son origine, inchangé
+    # A6 (bilan du 05/10/2026) : les sources `_v2` n'étaient pas listées et
+    # retombaient sur "tp_partiel" — faux pour H5/L5, 100% trailing par
+    # pré-enregistrement (29/08/2026). Étiquette seulement : la sortie
+    # réellement appliquée dépend du signal (tp1/tp2/take_profit), jamais
+    # de ce libellé.
+    HYPOTHESIS_V2_SOURCE: "tp_partiel",
+    HYPOTHESIS2_V2_SOURCE: "tp_partiel",
+    HYPOTHESIS3_V2_SOURCE: "tp_partiel",
+    HYPOTHESIS4_V2_SOURCE: "tp_partiel",
+    HYPOTHESIS5_V2_SOURCE: "trailing_pur",
 }
 
 # Couche session/multi-timeframe utilisée par chaque source au moment de
