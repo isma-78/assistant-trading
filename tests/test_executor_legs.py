@@ -197,6 +197,99 @@ def test_open_signal_leg_failure_cancels_already_placed_legs(tmp_path):
     assert _rows(db_path, "SELECT * FROM trade_legs") == []
 
 
+def _client_with_uncancelled_first_leg(second_error="error.validation.limit.price"):
+    client = MagicMock()
+    client.get_market_snapshot.return_value = SNAPSHOT_100
+    client.place_limit_order.side_effect = [{"deal_id": "o1"}, CapitalApiError(second_error)]
+    client.cancel_working_order.side_effect = CapitalApiError('404 {"errorCode":"error.not-found.dealId"}')
+    return client
+
+
+def test_uncancelled_leg_already_filled_is_recorded_as_open_leg(tmp_path):
+    """A2 (bilan du 05/10/2026) : palier rempli avant l'annulation -> enregistré,
+    trade ramené à la taille réellement engagée (risque réduit, jamais augmenté)."""
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = _client_with_uncancelled_first_leg()
+    client.get_open_positions.return_value = [{"position": {"dealId": "p1", "workingOrderId": "o1", "level": 100.05}}]
+
+    assert _open(db_path, client, _insert_signal(db_path)) == "o1"
+
+    first_size = client.place_limit_order.call_args_list[0].kwargs["size"]
+    trade = _rows(db_path, "SELECT * FROM trades")[0]
+    legs = _rows(db_path, "SELECT * FROM trade_legs")
+    assert trade["statut"] == "ouvert" and trade["deal_id"] == "p1"
+    assert trade["taille_initiale"] == pytest.approx(first_size)
+    assert trade["prix_entree_reel"] == pytest.approx(100.05)
+    assert [(l["palier"], l["statut"], l["position_deal_id"]) for l in legs] == [("tp1", "ouvert", "p1")]
+    assert trade["risque_eur"] < 11.0  # ~50 % du risque initial
+    client.get_working_orders.assert_not_called()
+
+
+def test_uncancelled_leg_still_working_is_recorded_as_pending_leg(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = _client_with_uncancelled_first_leg()
+    client.get_open_positions.return_value = []
+    client.get_working_orders.return_value = [{"workingOrderData": {"dealId": "o1"}}]
+
+    assert _open(db_path, client, _insert_signal(db_path)) == "o1"
+
+    trade = _rows(db_path, "SELECT * FROM trades")[0]
+    assert trade["statut"] == "en_attente" and trade["deal_id"] == "o1"
+    assert [l["statut"] for l in _rows(db_path, "SELECT * FROM trade_legs")] == ["en_attente"]
+
+
+def test_uncancelled_leg_found_nowhere_cancels_trade_without_retry(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = _client_with_uncancelled_first_leg(second_error='{"errorCode":"error.invalid.stoploss.minvalue: 99.0"}')
+    client.get_open_positions.return_value = []
+    client.get_working_orders.return_value = []
+
+    assert _open(db_path, client, _insert_signal(db_path)) is None
+
+    assert client.place_limit_order.call_count == 2  # aucun réessai empilé sur un palier incertain
+    assert _rows(db_path, "SELECT statut FROM trades")[0]["statut"] == "annule"
+    assert _rows(db_path, "SELECT * FROM trade_legs") == []
+
+
+def test_uncancelled_leg_lookup_failure_alerts_and_cancels(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    sent = []
+    monkeypatch.setattr("src.executor.send_notification", lambda token, chat, msg: sent.append(msg))
+    client = _client_with_uncancelled_first_leg()
+    client.get_open_positions.side_effect = CapitalApiError("503")
+
+    result = open_signal(
+        db_path, client, _insert_signal(db_path), make_engine(), WHITELIST, CapitalManager(initial_balance=500.0),
+        envelope_id=1, confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+        bot_token="tok", chat_id="chat",
+    )
+
+    assert result is None
+    assert _rows(db_path, "SELECT statut FROM trades")[0]["statut"] == "annule"
+    assert any("à vérifier à la main" in m for m in sent)
+
+
+def test_uncancelled_filled_leg_sends_telegram_alert(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    sent = []
+    monkeypatch.setattr("src.executor.send_notification", lambda token, chat, msg: sent.append(msg))
+    client = _client_with_uncancelled_first_leg()
+    client.get_open_positions.return_value = [{"position": {"dealId": "p1", "workingOrderId": "o1", "level": 100.0}}]
+
+    open_signal(
+        db_path, client, _insert_signal(db_path), make_engine(), WHITELIST, CapitalManager(initial_balance=500.0),
+        envelope_id=1, confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+        bot_token="tok", chat_id="chat",
+    )
+
+    assert any("rempli(s) malgré l'échec du placement" in m for m in sent)
+
+
 # --- Remplissage ----------------------------------------------------------
 
 def test_check_pending_fills_matches_each_leg_to_its_position(tmp_path):

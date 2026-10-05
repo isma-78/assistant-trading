@@ -785,7 +785,13 @@ def _place_limit_orders(
 ) -> List[str]:
     """Place un ordre limite par taille, même niveau, même stop. Si un ordre
     échoue après que d'autres ont déjà été placés, ceux-ci sont annulés
-    avant de relever l'exception — jamais un trade à moitié placé."""
+    avant de relever l'exception — jamais un trade à moitié placé.
+
+    Ordre impossible à annuler (A2, bilan du 05/10/2026) : le plus souvent un
+    404 `not-found.dealId`, parce que l'ordre a déjà été REMPLI. Il est
+    joint à l'exception relevée (`uncancelled_orders` = [(index, deal_id,
+    taille)]) pour que l'appelant le retrouve côté broker au lieu de le
+    laisser hors base."""
     placed: List[str] = []
     try:
         for index, size in enumerate(sizes):
@@ -796,18 +802,106 @@ def _place_limit_orders(
                 guaranteed_stop=guaranteed_stop, stop_distance=stop_distance,
             )
             placed.append(result["deal_id"])
-    except CapitalApiError:
-        for deal_id in placed:
+    except CapitalApiError as exc:
+        uncancelled = []
+        for index, deal_id in enumerate(placed):
             try:
                 client.cancel_working_order(deal_id)
             except CapitalApiError:
                 logger.exception(
-                    "Ordre %s d'un trade à paliers incomplet NON annulé — annulé par la péremption (%ss) "
-                    "s'il n'est pas rempli d'ici là ; sinon position hors base, à vérifier à la main",
-                    deal_id, LIMIT_ORDER_EXPIRY_SECONDS,
+                    "Ordre %s d'un trade à paliers incomplet NON annulé — recherché côté broker "
+                    "(position déjà remplie ou ordre encore actif)", deal_id,
                 )
+                uncancelled.append((index, deal_id, sizes[index]))
+        exc.uncancelled_orders = uncancelled
         raise
     return placed
+
+
+def _rescue_uncancelled_leg_orders(
+    db_path: str, client: CapitalClient, trade_id: int, uncancelled: list,
+    bot_token: Optional[str] = None, chat_id: Optional[str] = None,
+) -> Optional[str]:
+    """A2 (bilan du 05/10/2026) : 6 ordres de palier « NON annulés » en 10
+    jours (404 à l'annulation), soit autant de positions probablement
+    remplies mais absentes de la base : sans gestion, hors statistiques, hors
+    coupe-circuits, hors plafond de cluster.
+
+    Chaque ordre non annulé est cherché côté broker. Une position dont le
+    `workingOrderId` correspond est enregistrée comme palier 'ouvert'. Un
+    ordre encore actif est enregistré comme palier 'en_attente' et suit
+    ensuite le circuit normal (remplissage ou péremption). Le trade est
+    ramené à la taille réellement engagée (risque réduit d'autant, jamais
+    augmenté), comme `_settle_unfilled_legs`. Le stop garanti reste celui
+    posé avec l'ordre.
+
+    Retourne le deal_id de l'ordre retenu, ou None si rien n'a été retrouvé
+    (le trade est alors annulé par l'appelant, comme avant). Une alerte
+    Telegram part dans tous les cas."""
+    try:
+        positions = client.get_open_positions()
+        by_working_order = {
+            p.get("position", {}).get("workingOrderId"): p.get("position", {}) for p in positions
+        }
+        working_ids = set()
+        if any(order_id not in by_working_order for _, order_id, _ in uncancelled):
+            working_ids = {w.get("workingOrderData", {}).get("dealId") for w in client.get_working_orders()}
+    except CapitalApiError:
+        logger.exception("Trade %s : recherche broker des ordres non annulés impossible", trade_id)
+        if bot_token and chat_id:
+            send_notification(bot_token, chat_id, (
+                f"⚠️ Trade {trade_id} : ordre(s) de palier non annulé(s) {[o for _, o, _ in uncancelled]} — "
+                "recherche broker impossible, position hors base possible, à vérifier à la main."
+            ))
+        return None
+
+    filled = [(i, o, s, by_working_order[o]) for i, o, s in uncancelled if o in by_working_order]
+    pending = [(i, o, s) for i, o, s in uncancelled if o not in by_working_order and o in working_ids]
+    if not filled and not pending:
+        if bot_token and chat_id:
+            send_notification(bot_token, chat_id, (
+                f"⚠️ Trade {trade_id} : ordre(s) de palier non annulé(s) introuvables côté broker "
+                f"{[o for _, o, _ in uncancelled]} — trade annulé."
+            ))
+        return None
+
+    kept = sum(s for _, _, s, _ in filled) + sum(s for _, _, s in pending)
+    with connection_scope(db_path) as conn:
+        trade = conn.execute("SELECT taille_initiale, prix_entree_prevu FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        factor = kept / trade["taille_initiale"] if trade["taille_initiale"] else 1.0
+        for index, order_id, size, position in filled:
+            conn.execute(
+                "INSERT INTO trade_legs (trade_id, palier, taille, order_deal_id, position_deal_id, statut, prix_entree_reel) "
+                "VALUES (?, ?, ?, ?, ?, 'ouvert', ?)",
+                (trade_id, LEG_PALIERS[index], size, order_id, position.get("dealId"), position.get("level")),
+            )
+        for index, order_id, size in pending:
+            conn.execute(
+                "INSERT INTO trade_legs (trade_id, palier, taille, order_deal_id, statut) VALUES (?, ?, ?, ?, 'en_attente')",
+                (trade_id, LEG_PALIERS[index], size, order_id),
+            )
+        priced = [(s, p.get("level")) for _, _, s, p in filled if p.get("level") is not None]
+        entry = sum(s * lvl for s, lvl in priced) / sum(s for s, _ in priced) if priced else None
+        deal_id = filled[0][3].get("dealId") if filled else pending[0][1]
+        conn.execute(
+            "UPDATE trades SET statut = ?, deal_id = ?, taille_initiale = ?, risque_eur = risque_eur * ?, "
+            "pourcentage_risque_applique = pourcentage_risque_applique * ?, prix_entree_reel = ?, slippage_entree = ? "
+            "WHERE id = ?",
+            (
+                "ouvert" if filled else "en_attente", deal_id, kept, factor, factor, entry,
+                (entry - trade["prix_entree_prevu"]) if entry is not None else None, trade_id,
+            ),
+        )
+    logger.error(
+        "Trade %s : %d palier(s) non annulé(s) retrouvé(s) côté broker (%d rempli(s), %d en attente) — "
+        "trade ramené à la taille %s", trade_id, len(filled) + len(pending), len(filled), len(pending), kept,
+    )
+    if bot_token and chat_id:
+        send_notification(bot_token, chat_id, (
+            f"⚠️ Trade {trade_id} : {len(filled)} palier(s) rempli(s) malgré l'échec du placement, "
+            f"{len(pending)} encore en attente — enregistré(s) en base, taille ramenée à {kept}."
+        ))
+    return filled[0][1] if filled else pending[0][1]
 
 
 def open_signal(
@@ -1060,6 +1154,14 @@ def open_signal(
             stop_distance=adjustment.stop_distance if adjustment.stop_distance > 0 else None,
         )
     except CapitalApiError as first_exc:
+        # A2 (bilan du 05/10/2026) : un palier déjà placé qui n'a pas pu être
+        # annulé est cherché côté broker avant toute autre chose — jamais
+        # laissé hors base, jamais doublé par un réessai.
+        uncancelled = getattr(first_exc, "uncancelled_orders", None) or []
+        if uncancelled:
+            rescued = _rescue_uncancelled_leg_orders(db_path, client, trade_id, uncancelled, bot_token, chat_id)
+            if rescued is not None:
+                return rescued
         # Réessai unique sur la valeur EXACTE divulguée par le broker
         # (24/09/2026, voir docs/DECISIONS.md, audit du 24/09/2026) — même
         # mécanisme que capital_client.update_position_stop (28-29/08/2026),
@@ -1074,7 +1176,7 @@ def open_signal(
         # (adjustment.guaranteed_required=False) : aucun stopDistance n'a
         # alors été transmis, un `invalid.stoploss` serait sans rapport.
         retry_order_ids = None
-        if adjustment.guaranteed_required:
+        if adjustment.guaranteed_required and not uncancelled:
             # La valeur divulguée est un NIVEAU de prix, pas une distance —
             # confirmé en production le 25/09/2026 (`maxvalue: 156.38` pour
             # un USDJPY long entré à 157.177, `minvalue: 1.145705` pour un
@@ -1125,27 +1227,40 @@ def open_signal(
                         signal_row["id"], adjustment.stop_distance, boundary_distance,
                         units, retried_decision.risk_decision.units,
                     )
-                    try:
-                        retry_order_ids = _place_limit_orders(
-                            client, epic, direction_api, retried_sizes, signal_row["entree_min"],
-                            guaranteed_stop=True, stop_distance=boundary_distance,
-                        )
-                    except CapitalApiError:
-                        retry_order_ids = None
-                    else:
-                        sizes = retried_sizes
-                        units = retried_decision.risk_decision.units
-                        risk_amount_eur = retried_decision.risk_decision.risk_amount_eur
+                    def _record_retried_parameters() -> None:
+                        retried_risk = retried_decision.risk_decision.risk_amount_eur
                         with connection_scope(db_path) as conn:
                             conn.execute(
                                 "UPDATE trades SET taille_initiale = ?, stop_loss_initial = ?, stop_loss_courant = ?, "
                                 "risque_eur = ?, pourcentage_risque_applique = ?, stop_elargi = 1 WHERE id = ?",
                                 (
-                                    units, retried_stop_price, retried_stop_price, risk_amount_eur,
-                                    (risk_amount_eur / envelope_manager.balance * 100) if envelope_manager.balance else 0.0,
+                                    retried_decision.risk_decision.units, retried_stop_price, retried_stop_price,
+                                    retried_risk,
+                                    (retried_risk / envelope_manager.balance * 100) if envelope_manager.balance else 0.0,
                                     trade_id,
                                 ),
                             )
+
+                    try:
+                        retry_order_ids = _place_limit_orders(
+                            client, epic, direction_api, retried_sizes, signal_row["entree_min"],
+                            guaranteed_stop=True, stop_distance=boundary_distance,
+                        )
+                    except CapitalApiError as retry_exc:
+                        retry_order_ids = None
+                        retry_uncancelled = getattr(retry_exc, "uncancelled_orders", None) or []
+                        if retry_uncancelled:
+                            _record_retried_parameters()
+                            rescued = _rescue_uncancelled_leg_orders(
+                                db_path, client, trade_id, retry_uncancelled, bot_token, chat_id,
+                            )
+                            if rescued is not None:
+                                return rescued
+                    else:
+                        sizes = retried_sizes
+                        units = retried_decision.risk_decision.units
+                        risk_amount_eur = retried_decision.risk_decision.risk_amount_eur
+                        _record_retried_parameters()
         if retry_order_ids is None:
             logger.exception("Échec du placement de l'ordre limite pour le signal %s", signal_row["id"])
             # Ligne pré-insérée ci-dessus annulée — jamais laissée en
