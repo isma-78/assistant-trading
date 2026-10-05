@@ -38,7 +38,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.capital_client import CapitalClient  # noqa: E402
+from src.capital_client import CapitalApiError, CapitalClient  # noqa: E402
 from src.config import load_config  # noqa: E402
 
 DEMO_BASE_URL = "https://demo-api-capital.backend-capital.com/api/v1"
@@ -91,7 +91,12 @@ def main() -> int:
             log(f"[simulation] trade {trade_id} {row['actif']} : position {row['deal_id']} ouverte — serait fermée")
             continue
         log(f"trade {trade_id} {row['actif']} : clôture de {row['deal_id']}")
-        result = client.close_position(row["deal_id"], requested_at=datetime.now(timezone.utc).isoformat())
+        try:
+            result = client.close_position(row["deal_id"], requested_at=datetime.now(timezone.utc).isoformat())
+        except CapitalApiError as exc:
+            log(f"trade {trade_id} : clôture REFUSÉE par le broker ({exc}) — marché fermé ? relancer plus tard ; "
+                "trade suivant")
+            continue
         log(f"trade {trade_id} : réponse broker niveau={result.get('level')} exécuté={result.get('executed_at')}")
         time.sleep(SPACING_SECONDS)
         still_open = row["deal_id"] in {p.get("position", {}).get("dealId") for p in client.get_open_positions()}
