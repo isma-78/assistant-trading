@@ -87,3 +87,50 @@ def test_capture_recent_financing_no_transactions_returns_zero(tmp_path):
     client = MagicMock()
     client.get.return_value = {"transactions": []}
     assert capture_recent_financing(client, db_path, now_iso="2026-08-29T00:00:00Z") == 0
+
+
+# ---------------------------------------------------------------------------
+# A4 (bilan du 05/10/2026) : rattrapage par fenêtre + import du script cron
+# ---------------------------------------------------------------------------
+
+def test_capture_financing_window_uses_from_to_and_is_idempotent(tmp_path):
+    from src.financing_capture import capture_financing_window
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get.return_value = {"transactions": [
+        {"transactionType": "SWAP", "reference": "r1", "instrumentName": "EURUSD", "size": "-0.12", "dateUtc": "2026-09-01T21:00:00"},
+        {"transactionType": "TRADE", "reference": "r2", "instrumentName": "EURUSD", "size": "5", "dateUtc": "2026-09-01T10:00:00"},
+    ]}
+
+    assert capture_financing_window(client, db_path, "2026-09-01T00:00:00", "2026-09-02T00:00:00", "now") == 1
+    assert capture_financing_window(client, db_path, "2026-09-01T00:00:00", "2026-09-02T00:00:00", "now") == 0
+    client.get.assert_called_with("/history/transactions", params={"from": "2026-09-01T00:00:00", "to": "2026-09-02T00:00:00"})
+
+
+def test_cron_scripts_import_src_when_launched_from_repo_root(tmp_path):
+    """Le cron lance `venv/bin/python scripts/capture_financing.py` : seul
+    `scripts/` est alors dans sys.path. Le chargement du script (sans
+    exécuter main) ne doit plus lever ModuleNotFoundError."""
+    import os
+    import subprocess
+    import sys
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for script in ("capture_financing.py", "backfill_financing.py"):
+        code = f"import runpy; runpy.run_path({os.path.join(root, 'scripts', script)!r}, run_name='not_main')"
+        result = subprocess.run([sys.executable, "-c", code], cwd=str(tmp_path), capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+
+def test_backfill_day_windows_cover_range_exactly():
+    import importlib.util
+    import os
+    from datetime import datetime, timezone
+    path = os.path.join(os.path.dirname(__file__), "..", "scripts", "backfill_financing.py")
+    spec = importlib.util.spec_from_file_location("backfill_financing", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    start = datetime(2026, 8, 30, tzinfo=timezone.utc)
+    end = datetime(2026, 9, 1, 12, tzinfo=timezone.utc)
+    windows = list(module.day_windows(start, end))
+    assert windows[0][0] == start and windows[-1][1] == end and len(windows) == 3

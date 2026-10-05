@@ -22,12 +22,21 @@ trading en cours. Usage :
 """
 
 import logging
+import os
+import sys
 from datetime import datetime, timezone
 
-from src.capital_client import CapitalClient
-from src.config import load_config
-from src.db import init_db
-from src.financing_capture import capture_recent_financing
+# A4 (bilan du 05/10/2026) : lancé par cron depuis la racine du dépôt avec
+# `venv/bin/python scripts/capture_financing.py`, Python ne met que
+# `scripts/` dans sys.path — `import src...` échouait chaque nuit
+# (ModuleNotFoundError) depuis le 30/08/2026. Même correctif que
+# scripts/epoch_status.py.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.capital_client import CapitalClient  # noqa: E402
+from src.config import load_config  # noqa: E402
+from src.db import init_db  # noqa: E402
+from src.financing_capture import capture_recent_financing  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +44,8 @@ logger = logging.getLogger(__name__)
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     config = load_config()
+    if config.capital_environment != "demo":
+        raise SystemExit("REFUS : CAPITAL_ENVIRONMENT n'est pas 'demo' — aucun appel broker.")
     init_db(config.db_path)
 
     client = CapitalClient(

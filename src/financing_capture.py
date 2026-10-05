@@ -75,3 +75,25 @@ def capture_recent_financing(client: CapitalClient, db_path: str, now_iso: str) 
             )
             inserted += cursor.rowcount
     return inserted
+
+
+def capture_financing_window(client: CapitalClient, db_path: str, start_iso: str, end_iso: str, now_iso: str) -> int:
+    """A4 (bilan du 05/10/2026) : rattrapage d'une fenêtre passée via
+    `from`/`to` (fenêtre d'un jour par appel, même contrainte que
+    `/history/activity`, voir scripts/fetch_capital_history.py), au lieu de
+    `lastPeriod` plafonné aux dernières 24h. Lecture seule côté broker,
+    écriture idempotente (INSERT OR IGNORE sur `reference`). Retourne le
+    nombre de lignes réellement insérées."""
+    raw = client.get("/history/transactions", params={"from": start_iso, "to": end_iso})
+    rows = parse_swap_transactions(raw.get("transactions", []))
+    inserted = 0
+    with connection_scope(db_path) as conn:
+        for row in rows:
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO financing_transactions "
+                "(reference, instrument, size_eur, date_utc, captured_at) "
+                "VALUES (:reference, :instrument, :size_eur, :date_utc, :captured_at)",
+                {**row, "captured_at": now_iso},
+            )
+            inserted += cursor.rowcount
+    return inserted
