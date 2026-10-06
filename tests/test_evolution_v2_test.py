@@ -10,6 +10,7 @@ from src.evolution_v2_test import (
     TradeRef,
     compute_mde,
     decide_walk_forward,
+    diffs_with_baseline_time,
     evaluate_fold,
     one_sample_block_bootstrap_lower_bound,
     pair_candidate_against_baseline,
@@ -93,6 +94,17 @@ def test_pairing_candidate_without_baseline_counterpart_reported_separately():
     candidate = [_t("EURUSD", "long", "2021-03-01T10:00:00", 2.0)]
     diffs, unmatched_base, unmatched_cand = pair_candidate_against_baseline(baseline, candidate)
     assert diffs == [] and unmatched_base == [] and unmatched_cand == candidate
+
+
+def test_diffs_with_baseline_time_pairs_diff_with_baseline_entry_time():
+    baseline = [
+        _t("EURUSD", "long", "2021-03-01T10:00:00", -1.0),
+        _t("GBPUSD", "short", "2021-05-01T10:00:00", 1.0),
+    ]
+    candidate = [_t("EURUSD", "long", "2021-03-01T10:30:00", 2.0)]
+    timed, unmatched_base, unmatched_cand = diffs_with_baseline_time(baseline, candidate)
+    assert timed == [("2021-03-01T10:00:00", 3.0), ("2021-05-01T10:00:00", -1.0)]
+    assert len(unmatched_base) == 1 and unmatched_cand == []
 
 
 # ---------------------------------------------------------------------------

@@ -135,6 +135,17 @@ class FoldResult:
     n_unmatched_candidate: int
 
 
+def diffs_with_baseline_time(
+    baseline: Sequence[TradeRef], candidate: Sequence[TradeRef],
+) -> Tuple[List[Tuple[str, float]], List[TradeRef], List[TradeRef]]:
+    """Comme `pair_candidate_against_baseline`, mais associe à chaque
+    `diff_i` l'horodatage d'entrée BASELINE correspondant (pour le
+    bootstrap par blocs calendaires, qui a besoin d'une date par point)."""
+    diffs, unmatched_baseline, unmatched_candidate = pair_candidate_against_baseline(baseline, candidate)
+    timed = [(base_trade.entry_time_utc, diff) for base_trade, diff in zip(baseline, diffs)]
+    return timed, unmatched_baseline, unmatched_candidate
+
+
 def evaluate_fold(label: str, baseline: Sequence[TradeRef], candidate: Sequence[TradeRef]) -> FoldResult:
     """Un fold de test (2021 ou 2022) : appariement, moyennes, diff."""
     diffs, unmatched_baseline, unmatched_candidate = pair_candidate_against_baseline(baseline, candidate)
