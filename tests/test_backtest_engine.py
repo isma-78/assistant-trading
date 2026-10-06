@@ -341,6 +341,47 @@ def test_replay_tp1_tp2_then_final_stop_partials_sum_to_one():
     assert trade.r_multiple_total > 0.5
 
 
+def test_replay_tp1_tp2_then_stop_exposes_full_partials_trajectory():
+    """BacktestTrade.partials (07/10/2026, voir src/fidelity_measurement.py) :
+    la trajectoire complète, dans l'ordre, pour reconstituer un
+    contrefactuel TP-fixe sans rejouer le moteur."""
+    risk_engine, whitelist = _make_risk_engine()
+    bars = [
+        _bar("2026-01-01T00:00:00", 50, 50, 50, 50),
+        _bar("2026-01-02T00:00:00", 50, 50, 50, 50),
+        _bar("2026-01-03T00:00:00", 50, 50, 50, 50),
+        _bar("2026-01-04T00:00:00", 100, 101, 99, 100),
+        _bar("2026-01-05T00:00:00", 101, 106, 100, 105),
+        _bar("2026-01-06T00:00:00", 106, 111, 105, 110),
+        _bar("2026-01-07T00:00:00", 105, 105, 50, 60),
+    ]
+    signal = _FakeSignal(direction="long", entry_price=100.0, stop_price=90.0, tp1=105.0, tp2=110.0)
+    entry_fn = _trigger_on_call(3, signal)
+    result = replay_hypothesis(
+        "TEST", bars, entry_fn=entry_fn, risk_engine=risk_engine, whitelist=whitelist,
+        envelope_initial=1000.0, confidence_threshold=0.0, lookback=5,
+    )
+    trade = result.trades[0]
+    assert len(trade.partials) == 3
+    assert trade.partials[0][0] == pytest.approx(0.5)  # TP1
+    assert trade.partials[1][0] == pytest.approx(0.3)  # TP2
+    assert trade.partials[2][0] == pytest.approx(0.2)  # reliquat au stop
+    from src.risk_engine import compute_weighted_r_multiple
+    assert compute_weighted_r_multiple(list(trade.partials)) == pytest.approx(trade.r_multiple_total)
+
+
+def test_replay_single_leg_stop_trade_has_one_partial_at_full_fraction():
+    risk_engine, whitelist = _make_risk_engine()
+    bars = [_bar(f"2026-02-{i:02d}T00:00:00", 100, 100, 100, 100) for i in range(1, 4)]
+    bars.append(_bar("2026-02-04T00:00:00", 100, 101, 89, 90))  # stop direct, aucun TP
+    signal = _FakeSignal(direction="long", entry_price=100.0, stop_price=90.0)
+    result = replay_hypothesis(
+        "TEST", bars, entry_fn=_trigger_on_call(3, signal), risk_engine=risk_engine, whitelist=whitelist,
+        envelope_initial=1000.0, confidence_threshold=0.0, lookback=5,
+    )
+    assert result.trades[0].partials == ((1.0, result.trades[0].r_multiple_total),)
+
+
 def test_replay_only_one_position_at_a_time():
     risk_engine, whitelist = _make_risk_engine()
     signal = _FakeSignal(direction="long", entry_price=100.0, stop_price=90.0)

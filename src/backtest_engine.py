@@ -228,6 +228,12 @@ class BacktestTrade:
     bid_at_signal: float
     ask_at_signal: float
     spread_at_signal: float
+    # Trajectoire complète des jambes fermées ((fraction, r_multiple), ...),
+    # dans l'ordre chronologique — ajouté le 07/10/2026 pour
+    # src/fidelity_measurement.py (contrepartie TP-fixe), jamais utilisé
+    # ailleurs dans ce module. Tuple (hashable, cohérent avec un
+    # dataclass frozen), jamais une liste mutable.
+    partials: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -632,5 +638,6 @@ def _manage_open_position(
         exit_reason=action.action.value,
         bid_at_signal=open_state["bid_at_signal"], ask_at_signal=open_state["ask_at_signal"],
         spread_at_signal=round(open_state["ask_at_signal"] - open_state["bid_at_signal"], 8),
+        partials=tuple(partials),
     )
     return trade, None
