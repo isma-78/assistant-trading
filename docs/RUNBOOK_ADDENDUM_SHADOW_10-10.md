@@ -52,7 +52,7 @@ Attendu : `Fast-forward`, liste de fichiers incluant
 ```bash
 venv/bin/python -m pytest -q -p no:cacheprovider
 ```
-Attendu : `1413 passed` (ou plus), aucun `failed`.
+Attendu : `1458 passed` (ou plus), aucun `failed`.
 
 ### B3. Vérifier que les 6 exécuteurs principaux tournent déjà normalement
 ```bash
@@ -103,6 +103,37 @@ venv/bin/python scripts/shadow_milestone_alerts.py
 Attendu : une ligne par candidate, `n=0` (ou très peu), `eligible=[]`,
 `nouveaux=[]`. Aucun message Telegram à ce stade (0 jalon atteint).
 
+### B9. Installer le cron du rapport hebdomadaire shadow (lecture seule, aucun appel broker)
+```bash
+(crontab -l; echo '0 6 * * 1 cd /home/assistant/assistant-trading && venv/bin/python scripts/rapport_hebdo_shadow.py >> logs/rapport_hebdo_shadow_cron.log 2>&1') | crontab -
+```
+```bash
+venv/bin/python scripts/rapport_hebdo_shadow.py
+```
+Attendu : `Rapport écrit : .../docs/SUIVI_SHADOW/AAAA-MM-JJ.md` puis
+`Résumé Telegram envoyé.` (ou l'avertissement d'échec, sans arrêt).
+```bash
+cat docs/SUIVI_SHADOW/*.md
+```
+Attendu : une section par candidate (« Aucune époque shadow écrite » si
+le cycle B4-B6 n'a encore ouvert aucun signal, sinon les chiffres).
+
+### B10. Installer le cron de remesure mensuelle de fidélité (lecture seule, aucun appel broker)
+**Ne PAS activer avant que `data/historical/` soit rafraîchi au-delà du
+2026-09-25T18:00:00 UTC** (sinon la mesure reste bornée à la même
+fenêtre pré-E1 que celle du 07/10/2026, voir `docs/FIDELITE_07-10.md`) —
+attends le prochain rafraîchissement planifié de l'historique avant
+cette étape, ou saute-la pour l'instant et reviens-y plus tard :
+```bash
+(crontab -l; echo '0 6 1 * * cd /home/assistant/assistant-trading && venv/bin/python scripts/mesure_fidelite_continue.py >> logs/mesure_fidelite_continue_cron.log 2>&1') | crontab -
+```
+```bash
+crontab -l
+```
+Attendu : les 9 lignes désormais présentes (les 5 du runbook principal +
+cycle shadow + alertes shadow + rapport hebdo shadow + remesure
+mensuelle de fidélité).
+
 ---
 
 ## Partie C — vérifications (à refaire 1h, puis 1 jour après B6/B7)
@@ -148,10 +179,10 @@ Attendu : 4 lignes (une par candidate), `started_at` = l'heure de B4.
 ## Retour arrière (si une étape échoue, ou pour arrêter le shadow)
 
 ```bash
-crontab -l | grep -v -E "shadow_cycle|shadow_milestone" | crontab -
+crontab -l | grep -v -E "shadow_cycle|shadow_milestone|rapport_hebdo_shadow|mesure_fidelite_continue" | crontab -
 ```
-Attendu : les 2 lignes shadow disparaissent de `crontab -l`, les autres
-restent. Les tables `shadow_trades`/`shadow_partials`/`shadow_epochs`
+Attendu : les 4 lignes shadow (cycle, alertes, rapport hebdo, remesure
+mensuelle) disparaissent de `crontab -l`, les autres restent. Les tables `shadow_trades`/`shadow_partials`/`shadow_epochs`
 peuvent être laissées telles quelles (lecture seule, sans effet sur rien
 d'autre) ou vidées si souhaité :
 ```bash
