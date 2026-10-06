@@ -9,6 +9,7 @@ from src.evolution_v2_test import (
     FoldResult,
     TradeRef,
     compute_mde,
+    decide_forward_verdict,
     decide_walk_forward,
     diffs_with_baseline_time,
     evaluate_fold,
@@ -225,3 +226,34 @@ def test_decide_handles_n_pooled_exactly_two_without_division_by_zero():
     fold_b = _fold("2022", 1, 0.3, 0.0)
     verdict = decide_walk_forward("H1", fold_a, fold_b, lower_bound=0.1, expected_effect=0.24, fidelity_reliable=True)
     assert verdict.n_test_pooled == 2
+
+
+# ---------------------------------------------------------------------------
+# decide_forward_verdict
+# ---------------------------------------------------------------------------
+
+def test_forward_verdict_non_confirmed_with_too_few_trades():
+    verdict = decide_forward_verdict("H1", [_t("EURUSD", "long", "2026-10-10T00:00:00", -1.0)], [], 0.24)
+    assert verdict.status == "non confirmée" and verdict.n == 1
+
+
+def test_forward_verdict_confirmed_when_lower_bound_positive():
+    baseline = [_t("EURUSD", "long", f"2026-{m:02d}-03T00:00:00", -0.5) for m in range(1, 13)]
+    candidate = [_t("EURUSD", "long", f"2026-{m:02d}-03T00:30:00", 1.0) for m in range(1, 13)]
+    verdict = decide_forward_verdict("H1", baseline, candidate, 0.24)
+    assert verdict.status == "confirmée"
+    assert verdict.diff == pytest.approx(1.5)
+
+
+def test_forward_verdict_indemontrable_when_mde_too_large():
+    baseline = [_t("EURUSD", "long", f"2026-{m:02d}-03T00:00:00", (-1) ** m) for m in range(1, 13)]
+    candidate = []
+    verdict = decide_forward_verdict("H2", baseline, candidate, 0.13)
+    assert verdict.status in ("indémontrable sur cette fenêtre", "non confirmée")
+
+
+def test_forward_verdict_not_confirmed_when_lower_bound_negative_and_mde_small():
+    baseline = [_t("EURUSD", "long", f"2026-{m:02d}-{d:02d}T00:00:00", 0.01) for m in range(1, 13) for d in (3, 17)]
+    candidate = [_t("EURUSD", "long", f"2026-{m:02d}-{d:02d}T00:30:00", 0.01) for m in range(1, 13) for d in (3, 17)]
+    verdict = decide_forward_verdict("H3", baseline, candidate, 0.13)
+    assert verdict.status != "confirmée"

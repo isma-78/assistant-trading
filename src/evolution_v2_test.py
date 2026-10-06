@@ -211,3 +211,45 @@ def decide_walk_forward(
 
     return WalkForwardVerdict(hypothesis, fold_a.diff, fold_b.diff, diff_pooled, lower_bound, mde, n_pooled,
                               fidelity_reliable, status, reason)
+
+
+@dataclass(frozen=True)
+class ForwardVerdict:
+    source: str
+    n: int
+    diff: Optional[float]
+    lower_bound: Optional[float]
+    mde: Optional[float]
+    status: str
+    reason: str
+
+
+FORWARD_BONFERRONI_M = 44
+
+
+def decide_forward_verdict(
+    source: str, baseline: Sequence[TradeRef], candidate: Sequence[TradeRef],
+    expected_effect: float, m_correction: int = FORWARD_BONFERRONI_M,
+) -> ForwardVerdict:
+    """§6 du protocole : verdict forward d'UNE candidate, baseline = trades
+    live `_v2` depuis T0, candidate = trades shadow depuis T0, mêmes règles
+    d'appariement que le walk-forward (§5), m=44 (décision 2 du 05/10 + 4
+    candidates). Calcul pur — l'appelant fournit déjà les trades filtrés
+    depuis T0 et le jalon/8-semaines déjà vérifiés (ce module ne lit
+    aucune horloge)."""
+    timed, _, _ = diffs_with_baseline_time(baseline, candidate)
+    n = len(timed)
+    if n < 2:
+        return ForwardVerdict(source, n, None, None, None, "non confirmée", "moins de 2 trades baseline appariables")
+    diff = mean(d for _, d in timed)
+    s_diff = stdev(d for _, d in timed)
+    mde = compute_mde(s_diff, n, m_correction)
+    lower_bound = one_sample_block_bootstrap_lower_bound(timed, 0.05 / m_correction)
+
+    if lower_bound is not None and lower_bound > 0:
+        status, reason = "confirmée", f"borne basse corrigée (m={m_correction}) > 0"
+    elif mde is not None and mde > expected_effect:
+        status, reason = "indémontrable sur cette fenêtre", f"MDE ({mde:.3f} R) > effet attendu ({expected_effect:.3f} R)"
+    else:
+        status, reason = "non confirmée", "borne basse <= 0 et MDE <= effet attendu"
+    return ForwardVerdict(source, n, diff, lower_bound, mde, status, reason)
