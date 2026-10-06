@@ -20,6 +20,7 @@ EXPECTED_TABLES = {
     "post_trade_review", "causal_analysis_log", "hypotheses",
     "metrics_snapshot", "rule_changes", "logs",
     "risk_decisions", "go_nogo_events", "trade_analysis",
+    "shadow_trades", "shadow_partials", "shadow_epochs",
 }
 
 

@@ -498,6 +498,52 @@ CREATE TABLE IF NOT EXISTS hypothesis_epochs (
     started_at TEXT NOT NULL,
     description TEXT NOT NULL
 );
+
+-- Suivi forward en SHADOW des 4 candidates V2 (06/10/2026, voir
+-- docs/PROTOCOLE_EVOLUTION_V2_06-10.md §6-7). Signal virtuel : AUCUN ordre,
+-- AUCUN appel broker d'écriture, AUCUN effet sur `trades`/le plafond de
+-- cluster/le capital/risk_engine. `source` ∈ {"hypothesis_v3cand",
+-- "hypothesis2_v3cand", "hypothesis3_v3cand", "hypothesis4_v3cand"} —
+-- jamais agrégé par préfixe avec les sources "_v2" (vérifié, voir
+-- docs/APPLICATION_EVOLUTION_V2_06-10.md).
+CREATE TABLE IF NOT EXISTS shadow_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    actif TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    entry_price REAL NOT NULL,       -- prix théorique (bid/ask capturé au signal), jamais un remplissage réel
+    stop_loss_initial REAL NOT NULL,
+    stop_loss_courant REAL NOT NULL,
+    tp1 REAL,
+    tp2 REAL,
+    bid_at_signal REAL,
+    ask_at_signal REAL,
+    ouvert_at TEXT NOT NULL,
+    ferme_at TEXT,
+    statut TEXT NOT NULL,             -- "ouvert" | "ferme"
+    r_multiple_total REAL,
+    remaining_fraction REAL NOT NULL DEFAULT 1.0
+);
+
+CREATE TABLE IF NOT EXISTS shadow_partials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shadow_trade_id INTEGER NOT NULL REFERENCES shadow_trades(id),
+    palier TEXT NOT NULL,             -- "tp1" | "tp2" | "sl" | "tp"
+    fraction REAL NOT NULL,
+    exit_price REAL NOT NULL,         -- théorique, ajusté coûts (spread/slippage/financement, modèle §2.6)
+    r_multiple REAL NOT NULL,
+    exit_time_utc TEXT NOT NULL
+);
+
+-- Époque de collecte par candidate (T0 = horodatage du redéploiement
+-- effectif, jamais rétroactif) — même rôle que `hypothesis_epochs` pour
+-- les sources "_v2", mais jamais la même table (jamais mélangées).
+CREATE TABLE IF NOT EXISTS shadow_epochs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    description TEXT NOT NULL
+);
 """
 
 
