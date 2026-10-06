@@ -12,6 +12,45 @@ la plus récente en tête.
 
 ---
 
+## 2026-10-06 — Résultat du walk-forward des 4 candidates V2 (branche `evolution-06-10`, rien en production)
+
+Protocole pré-enregistré AVANT tout calcul : `docs/PROTOCOLE_EVOLUTION_V2_06-10.md`
+(commit `f8b3be1`). Moteur corrigé, coûts réels, refus de resserrement +
+plafond de cluster modélisés (A8), 2019-2022, univers déployé de chaque
+hypothèse. Détail chiffré complet : `docs/EVOLUTION_V2_06-10.md`.
+
+1. 2026-10-06 — **H1 (reprise après croisement ADX) : NON VALIDÉE
+   formellement**, bien que le résultat statistique soit positif et
+   significatif sur les deux folds (D(a)=+0,117R, D(b)=+0,016R, borne
+   basse bootstrap corrigée m=4 = +0,009R > 0, n poolé=1764) — bloquée
+   **uniquement** par la règle de fiabilité du simulateur (écart
+   live/backtest en R jamais mesuré pour H1, donc « non établi »,
+   traité par prudence comme non fiable, voir protocole §4).
+2. 2026-10-06 — **H2 (transition de confluence nouvellement établie) :
+   NON VALIDÉE formellement** — résultat le plus fort des 4 candidates
+   (D(a)=+0,303R, D(b)=+0,215R, borne basse=+0,173R, n poolé=1480),
+   bloquée par la même règle de fiabilité (jamais mesurée pour H2).
+3. 2026-10-06 — **H3 (pas de pullback en expansion de volatilité) : NON
+   VALIDÉE**, signe instable entre les deux folds (D(a)=0,000R — le
+   filtre n'a jamais agi au seuil retenu par l'apprentissage, 1,5 ;
+   D(b)=−0,029R), rapporté tel quel, sans enjolivement.
+4. 2026-10-06 — **H4 (filtre de force de tendance ADX) : INDÉMONTRABLE
+   SUR CETTE FENÊTRE** (distincte d'« invalidée ») — les deux folds sont
+   positifs (D(a)=+0,027R, D(b)=+0,086R) mais la borne basse reste
+   négative (−0,021R) et le MDE (0,105R) dépasse l'effet attendu
+   pré-enregistré le 05/10 (0,10R, brut_min).
+5. 2026-10-06 — **H5 : aucune candidate, aucune évolution** — inchangée,
+   reconduit depuis le 05/10.
+6. 2026-10-06 — **Aucune hypothèse `_v2` arrêtée, suspendue ni modifiée.**
+   Les 4 candidates restent des modules de test
+   (`hypothesis{1,2,3,4}_strategy_v3cand.py`), jamais déployées. Suivi
+   forward en shadow préparé (`src/shadow_tracking.py`, aucun ordre),
+   activation prévue après le redéploiement du 10/10 (voir
+   `docs/RUNBOOK_ADDENDUM_SHADOW_10-10.md`), jamais avant.
+
+---
+
+
 ## 2026-10-05 — Décisions actées par Ismaël sur le bilan du 05/10 (branche `bilan-05-10`, rien en production)
 
 Une ligne datée par décision (mandat « application du bilan du 05/10 ») :
