@@ -92,3 +92,36 @@ non significatif sera **indémontrable**, pas invalidé.
   idée rendrait l'effet de chacune inattribuable (même leçon que le
   23/08). Budget 4/5, ou 5/5 si une liste v3 est déployée.
 - Les pertes « stop non resserré » relèvent de l'exécution (A8/A10).
+
+---
+
+## Statuts (mis à jour le 07/10/2026, voir `docs/FIDELITE_07-10.md` —
+## justifications d'origine ci-dessus INCHANGÉES, aucune réécriture)
+
+Implémentées (`src/hypothesis{1,2,3,4}_strategy_v3cand.py`), testées en
+walk-forward 2019-2022 le 06/10, fidélité simulateur mesurée le 07/10.
+**Fidélité NON ÉTABLIE pour les 4** (données de prix locales bornées au
+25/09 18:00 UTC, avant E1/E2 — voir `docs/PROTOCOLE_FIDELITE_07-10.md`).
+Statut final : **« fidélité non établie »** pour les 4, qui prévaut sur
+tout résultat positif. Statuts provisoires (sous fidélité
+hypothétiquement établie, jamais définitifs, jamais une promotion) :
+
+- **H1 (reprise ADX)** : non validée (borne basse m=8 = −0,014 R).
+- **H2 (transition confluence)** : **« améliore la v2 sans être
+  rentable »** — différence très significative (+0,30 à +0,40 R selon
+  le fold, borne basse m=8 = +0,298 R) mais espérance ABSOLUE de la
+  candidate elle-même légèrement négative (−0,004 R poolée 2021+2022) —
+  jamais promue tant que seule la différence est positive.
+- **H3 (expansion de volatilité)** : non validée (signe instable entre
+  les deux folds).
+- **H4 (filtre ADX)** : indémontrable sur cette fenêtre (MDE 0,106 R >
+  brut_min 0,10 R).
+
+**Aucune candidate n'est promue ni ne le sera sans fidélité établie ET
+forward confirmé ET espérance absolue positive** (décision 2 du
+07/10/2026). Toutes les 4 restent en test walk-forward et en
+préparation shadow — aucune n'est retirée. Reste à faire avant tout
+nouveau verdict : mesurer la fidélité sur des données postérieures au
+25/09 (nécessite un rafraîchissement de `data/historical/`, hors de
+portée sans appel broker) et accumuler le suivi forward en shadow
+(≥8 semaines + jalons 30/40/53, après activation post-10/10).

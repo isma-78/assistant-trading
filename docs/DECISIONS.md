@@ -12,6 +12,65 @@ la plus récente en tête.
 
 ---
 
+## 2026-10-07 — Mesure de fidélité H1-H4 et statuts finaux des 4 candidates (branche `fidelite-07-10`, rien en production)
+
+Protocole pré-enregistré AVANT tout calcul : `docs/PROTOCOLE_FIDELITE_07-10.md`
+(commit `02cc47f`). Contrainte constatée avant tout chiffre :
+`data/historical/` s'arrête au 2026-09-25T18:00:00 UTC, avant E1/E2 — la
+fidélité mesurée ici porte sur la configuration ANTÉRIEURE à E1, jamais
+sur la configuration actuellement déployée. Détail chiffré complet :
+`docs/FIDELITE_07-10.md`.
+
+1. 2026-10-07 — **H1 : fidélité NON ÉTABLIE** (n=19 paires, proche du
+   seuil de 20 mais sous lui ; écart absolu moyen 0,672 R ; biais signé
+   +0,182 R, DÉJÀ au-dessus du seuil de 0,15 R même indépendamment de
+   n). n=20 estimé le 2026-10-08 à la cadence observée — cette date ne
+   garantit pas que les seuils seront alors respectés (le biais les
+   dépasse déjà).
+2. 2026-10-07 — **H2 : fidélité NON ÉTABLIE** (n=3 paires seulement,
+   très loin du seuil de 20 — l'ancien combo étant retiré depuis le
+   25/09, cette configuration ne produira plus jamais de nouvelles
+   paires ; la date projetée n'a aucune valeur prédictive et n'est pas
+   retenue).
+3. 2026-10-07 — **H3 : fidélité NON ÉTABLIE** (n=12 paires, n=20
+   estimé le 2026-10-20 ; écart absolu moyen 0,516 R, au-dessus du
+   seuil de 0,30 R).
+4. 2026-10-07 — **H4 : fidélité NON ÉTABLIE** (n=10 paires, n=20
+   estimé le 2026-10-29 ; écart absolu moyen 0,465 R, au-dessus du
+   seuil de 0,30 R).
+5. 2026-10-07 — **Cause dominante partout : structure de sortie
+   (TP-fixe-involontaire)**, 38-109% de l'écart absolu selon
+   l'hypothèse (mesure instable pour H2, n=3). **Décision : NE PAS
+   modéliser cette cause** — elle reflète un bug déjà corrigé depuis le
+   25/09 (Option B) ; la modéliser calibrerait le simulateur sur une
+   configuration obsolète, contre-productif pour le forward. Le refus
+   de resserrement (seule autre cause ≥20%, pour H3/H4) est déjà
+   modélisé depuis le 05/10 (A8) — aucune nouveauté. **Aucune
+   modification du simulateur dans ce mandat.**
+6. 2026-10-07 — **Bornes basses recalculées à m=8** (règle 4,
+   comparabilité), rejeu de la période de test SEULEMENT avec les
+   variantes déjà retenues le 06/10 (aucune nouvelle sélection) :
+   H1 +0,009→**−0,014** ; H2 +0,173→**+0,298** ; H3 −0,035→**−0,034** ;
+   H4 −0,021→**−0,036**. Écarts dus à la stochasticité propre de
+   `StopRefusalModel` (graine par instance, pas globale), jamais une
+   divergence de logique.
+7. 2026-10-07 — **Statuts finaux des 4 candidates : « fidélité non
+   établie » pour les 4** (prévaut sur tout statut positif, règle 3).
+   Statuts PROVISOIRES (sous fidélité hypothétiquement établie, jamais
+   définitifs) : H1 non validée ; **H2 « améliore la v2 sans être
+   rentable »** (différence très significative, +0,30R à +0,40R selon
+   le fold, mais espérance ABSOLUE de la candidate elle-même légèrement
+   négative, −0,004R poolée) ; H3 non validée (signe instable) ; H4
+   indémontrable sur cette fenêtre (MDE > brut_min). **Aucune candidate
+   promue, aucune ne le sera sans fidélité établie ET forward confirmé
+   (décision 2).**
+8. 2026-10-07 — **Aucune nouvelle candidate pour H3 ce cycle** (décision
+   3) — reste en shadow. **H5 inchangée** (décision 3). **Aucune
+   hypothèse arrêtée, suspendue ni retirée** (décision 5).
+
+---
+
+
 ## 2026-10-06 — Résultat du walk-forward des 4 candidates V2 (branche `evolution-06-10`, rien en production)
 
 Protocole pré-enregistré AVANT tout calcul : `docs/PROTOCOLE_EVOLUTION_V2_06-10.md`
