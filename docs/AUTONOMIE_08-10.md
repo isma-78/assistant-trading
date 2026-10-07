@@ -59,3 +59,33 @@ jamais modifié par ce journal.
   ligne exclue par `pragma: no cover` : l'instanciation du vrai
   `CapitalClient` (jamais exercée par des tests qui mockent le broker
   par construction).
+
+## Étape 2 — exécution réelle
+
+27/27 combinaisons `ok`, 0 abandon d'intégrité, 0 429, 27/200 appels.
+Rien à signaler.
+
+## Étape 3 — scripts/_fidelite_h1h4_08-10.py
+
+- Suit le patron de `_fidelite_h1h4_07-10.py` (jamais réutilisé ni
+  agrégé avec cette mesure — séries distinctes), avec la fenêtre et la
+  règle CHFJPY du nouveau protocole (§1).
+- **Pas d'accès VPS dans cette Partie 1** : le live est lu sur
+  `data/snapshots/prod_07-10.db`, l'instantané local le plus récent
+  disponible (relevé 06/10/2026 ~19:51, pas la base de production
+  actuelle du VPS qui a continué à tourner depuis). Conséquence
+  documentée en §6 du rapport final : les n rapportés ici sont une
+  borne basse à la date de l'instantané, pas à la date de ce mandat.
+- **Aucune modélisation** d'une cause ≥20% (contrairement au protocole
+  du 07/10 qui l'autorisait à l'étape 2 suivante) — ce mandat se limite
+  à mesurer et proposer à un mandat séparé, conformément à l'invariant
+  "aucune modification du simulateur" du protocole du 08/10.
+- Coûts/financement (second volet de l'étape 3) mesurés par requête SQL
+  directe sur `trade_causal_decomposition`/`financing_transactions`
+  (pas un nouveau module) — couverture quasi complète pour
+  entrée/sortie (37/37 et 34/37 sur les 37 trades éligibles poolés),
+  **0/37 pour le financement** : les 12 lignes connues de
+  `financing_transactions` datent toutes du 28-29/08/2026, avant le
+  plancher de population (25/09 19:35) — cohérent avec le constat du
+  bilan du 05/10 (A4 non corrigé, cron en échec quotidien). Pas de
+  rattrapage tenté (hors périmètre, "ne comble pas").
