@@ -3,6 +3,21 @@
 Branche `couples-v2-08-10` depuis `couples-08-10`. Aucun appel broker,
 aucun push, aucun déploiement, aucune action VPS.
 
+## Verdict en 5 lignes
+
+Fenêtre scellée respectée : **oui** (étiquette seule, aucune lecture
+hors fenêtre — vérifié par recalcul, pas seulement par lecture du
+code). Période neuve disponible : **non** — le bloc candidat
+2024-06-15→2026-08-29 est déjà intégralement « fenêtre brûlée »
+(comparaisons de structures de sortie, sigma H1/H3, entonnoir de
+signaux H2 M15, corrélations). Hypothèses validées/non validées/
+indémontrables sur 5 : **sans objet** (étapes 3/4 sautées faute de
+période neuve, conformément à l'étape 2.3 du mandat). Shadow étendu à
+tous les couples (45, étape 5), non branché au déploiement. Re-test
+forward pré-enregistré (étape 6), dates estimées très lointaines sur la
+seule cadence live — l'activation du shadow est la condition pratique
+pour le rendre atteignable.
+
 ## Étape 1 — Contrôle de la fenêtre scellée
 
 **Verdict : étiquette seule, aucune lecture hors fenêtre.**
@@ -146,3 +161,34 @@ cadence shadow réelle.
 Conclusion honnête : **sans l'activation du shadow_couples, le re-test
 forward n'est pas atteignable à un horizon pertinent.** C'est
 précisément la justification de l'étape 5.
+
+## Étapes 3 et 4 — sans objet
+
+Non exécutées : l'étape 2 a conclu à l'absence de toute période neuve,
+ce qui, selon l'étape 2.3 du mandat, saute directement à l'étape 5.
+Aucun tableau par hypothèse (actifs éligibles, corrélation, p corrigé,
+statut), aucun couple « à surveiller » issu d'un passage unique sur une
+période neuve — ces livrables n'existent pas pour cette Partie 4 (ils
+existent déjà pour la fenêtre 2019-2022, voir `docs/COUPLES_08-10.md`
+de la Partie 3, jamais rejouée ici).
+
+## Ce que je n'ai pas pu faire ou vérifier, et pourquoi
+
+1. **Bornes exactes de la « fenêtre brûlée »** : les citations trouvées
+   dans `docs/DECISIONS.md` donnent des dates de fin variables
+   (2025-12-01, 2026-08-26, 2026-08-28, « aujourd'hui ») selon la
+   session — je n'ai pas reconstruit un inventaire jour par jour de
+   quelle sous-période précise a servi à quelle mesure (hors périmètre :
+   la conclusion « tout le bloc est brûlé » ne change pas selon ce
+   détail, même logique que la fenêtre scellée d'origine).
+2. **Dates du re-test forward (étape 6)** : estimées sur la seule
+   cadence LIVE actuelle (aucune donnée shadow_couples disponible, le
+   suivi n'étant pas encore activé) — un majorant très pessimiste,
+   explicitement signalé comme tel, pas une prévision fiable.
+3. **`is_donchian_trailing=True` pour H5 dans `SHADOW_COUPLES`** :
+   repris de la même déduction (docstring du module) que la Partie 3,
+   jamais revérifié par une autre source indépendante dans ce mandat.
+4. **Aucune exécution réelle de `run_shadow_couples_cycle.py`** contre
+   un broker (même en lecture) dans ce mandat — vérifié uniquement par
+   tests unitaires (mocks complets), conformément aux limites de ce
+   mandat (aucun appel broker autorisé).
