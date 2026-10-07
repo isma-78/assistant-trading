@@ -89,3 +89,46 @@ Rien à signaler.
   plancher de population (25/09 19:35) — cohérent avec le constat du
   bilan du 05/10 (A4 non corrigé, cron en échec quotidien). Pas de
   rattrapage tenté (hors périmètre, "ne comble pas").
+
+## Étape 4 — scripts/_execution_metrics_08-10.py
+
+- Taux de refus FINAL de resserrement de stop : non remesurable sur
+  cette population. Lu le code avant de tenter un calcul
+  (`src/executor.py`, fonction de mise à jour du stop) : un refus de
+  resserrement n'est journalisé que par log applicatif dans les
+  fichiers du VPS, jamais dans la base ni dans la table `logs` (vide
+  sur cet instantané — la trace dédiée en base reste une proposition
+  non déployée). Aucun accès VPS dans cette Partie 1 : les seuls
+  chiffres disponibles restent ceux de `docs/BILAN_05-10.md` §2.3
+  (mesurés depuis les fichiers de log pendant une session avec accès
+  VPS), repris tels quels dans le rapport final, jamais présentés comme
+  remesurés ici.
+- Le motif dédié `limite_refusee` (A3) est déjà déployé dans le code
+  (`executor._classify_placement_failure`) — mais 0 occurrence sur
+  cette population : les 76 échecs de placement poolés sont tous
+  `autre_echec_placement`. Le motif dominant du 05/10 (limit.price) ne
+  semble donc plus être la cause principale sur cette fenêtre ; cause
+  exacte non disambiguée sans accès aux logs VPS.
+- Délai de remplissage non mesurable au sens voulu avec le schéma
+  actuel : `trades` n'a pas de colonne distincte pour l'instant de
+  placement. L'approximation tentée (ouverture moins snapshot de
+  marché du signal) rend systématiquement ~0s sur les 45 trades remplis
+  — signe que la colonne d'ouverture est fixée au moment de la création
+  de la ligne, pas à la confirmation réelle de remplissage. Rapporté
+  comme non mesurable, jamais comme un délai nul.
+- Écart de spread signal vs référence horaire : jamais poolé en valeur
+  brute entre actifs (échelles de prix incomparables). Corrigé avant
+  publication du résultat : rapporté par actif uniquement.
+- Seule métrique poolée atteignant n>=30 : le taux de remplissage
+  poolé (n=53, 84,9%). Toutes les autres cellules (hypothèse, actif)
+  restent sous le seuil, rapportées comme observation brute, jamais
+  comme un verdict.
+- `brut_min` par hypothèse : MDE0 réutilisé tel quel du jalon n=30,
+  sigma proche de 1R de `docs/BILAN_05-10.md` paragraphe 4 (0,69 R)
+  pour les 4 hypothèses, aucune valeur recalculée.
+- E1/E3/E4 non définis ailleurs dans le dépôt (recherche explicite
+  avant d'écrire quoi que ce soit : seul E2 est défini dans le
+  protocole §4). Lecture prudente retenue : E1/E3/E4 traités comme des
+  étiquettes de protocole pour les 3 frictions non-E2 les plus
+  coûteuses identifiées par cette étape, jamais comme des mécanismes
+  préexistants mal cherchés. Détail dans le rapport final.
