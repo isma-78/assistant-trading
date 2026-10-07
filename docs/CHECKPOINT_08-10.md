@@ -81,3 +81,12 @@ du 05/10). Sortie : `data/snapshots/execution_metrics_08-10.json`.
 
 Mandat de reprise du 08/10/2026 clos (rapport final
 `docs/AUTONOMIE_08-10_REPRISE.md`).
+
+---
+
+## Mode application autonome (démo) — 07/10/2026 soir
+
+- Étape 1 (nettoyage) : **FAIT** — `--apply` exécuté avec succès (barrière
+  n'a pas bloqué cette fois), 29/40 appels, combo H2 retiré + 3
+  orphelines fermées, aucune position ouverte non réconciliée restante.
+- Étape 2 (correctif A1/A2) : EN COURS (branche `a1a2-08-10`).
