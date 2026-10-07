@@ -1,0 +1,53 @@
+Diff proposé (NON appliqué) — branchement de E2 au seul point d'appel
+du resserrement de stop dans src/executor.py (_push_stop_to_broker),
+voir docs/PROTOCOLE_AUTONOME_08-10.md §4/§8 et docs/AUTONOMIE_08-10.md
+étape 5. Interrupteur system_state.e2_enabled reste à OFF par défaut :
+tant qu'il n'est pas activé, attempt_with_retry() se comporte comme un
+appel direct unique, exceptions propagées à l'identique — ce patch ne
+change RIEN au comportement actuel avant une activation explicite
+(Partie 2, hors périmètre de cette Partie 1). Vérifié par
+`git apply --check` contre le commit courant de la branche
+fidelite-08-10 (à régénérer si src/executor.py change avant application).
+
+--- a/src/executor.py
++++ b/src/executor.py
+@@ -73,6 +73,7 @@
+ )
+ from src.db import connection_scope
+ from src.envelope_store import load_or_create_envelope, load_reserve_total, persist_trade_result
++from src.execution.stop_tightening_retry import attempt_with_retry
+ from src.go_nogo import GoNoGoStatus
+ from src.market_data import Candle, compute_atr, get_candles, get_price_snapshot
+ from src.retry import retry_with_backoff
+@@ -2137,10 +2138,27 @@
+     succeeded = 0
+     for deal_id in targets:
+         try:
+-            client.update_position_stop(
+-                deal_id, new_stop_price, guaranteed_stop=state.guaranteed_stop,
+-                direction=state.direction, current_stop_level=state.stop_price,
+-            )
++            def _attempt(deal_id=deal_id):
++                client.update_position_stop(
++                    deal_id, new_stop_price, guaranteed_stop=state.guaranteed_stop,
++                    direction=state.direction, current_stop_level=state.stop_price,
++                )
++            # E2 (docs/PROTOCOLE_AUTONOME_08-10.md §4) : OFF par défaut
++            # (system_state.e2_enabled) -- comportement IDENTIQUE à avant
++            # ce patch tant qu'il n'est pas activé explicitement (un seul
++            # appel, exceptions propagées normalement). risk_engine absent
++            # (certains appelants) : jamais route vers E2, comme avant ce
++            # patch, seul _attempt() direct.
++            if risk_engine is not None:
++                outcome = attempt_with_retry(
++                    _attempt, db_path=db_path, current_stop=state.stop_price,
++                    target_stop=new_stop_price, direction=state.direction,
++                    risk_engine=risk_engine, trade_id=state.trade_id,
++                )
++                if not outcome.succeeded:
++                    raise CapitalApiError(outcome.last_error or "E2 : toutes les tentatives ont échoué")
++            else:
++                _attempt()
+             succeeded += 1
+         except CapitalApiError as exc:
+             last_error = exc
