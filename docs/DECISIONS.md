@@ -12885,3 +12885,23 @@ broker — jamais réconciliées en base (aucune ligne `trades` n'a jamais
 existé pour elles, cohérent avec le défaut A1/A2, corrigé pour l'avenir
 à l'étape 2 de ce mandat, pas rétroactivement). 29/40 appels consommés,
 0 429. Plus aucune position ouverte non réconciliée constatée.
+
+## 2026-10-07 (soir, reprise) — A1/A2 : investigation faite, correctif PAS encore écrit (budget de session épuisé)
+
+Constat avant tout code : `src/executor.py::_rescue_uncancelled_leg_orders`
+(déjà présente, lignes ~937-1020, appelée depuis `open_signal` aux
+lignes ~1278/~1370) couvre DÉJÀ le cas où l'annulation d'un ordre de
+palier échoue en 404 après l'échec du placement d'un AUTRE palier du
+même trade. Elle NE couvre PAS le cas constaté sur H2/US100 (et
+vraisemblablement US30/GOLD) : la réponse du PREMIER appel
+`client.place_limit_order()` lui-même se perd (timeout/coupure) avant
+que son `deal_id` soit capturé dans `placed` — `_place_limit_orders`
+lève alors une exception avec `uncancelled_orders=[]` (rien à annuler,
+rien à rechercher), alors que l'ordre a pu être accepté côté broker.
+Le correctif demandé (étape 2 du mandat) nécessite donc une
+réconciliation GÉNÉRALE (toute position broker sans `deal_id`/
+`workingOrderId` connu de la base, pas seulement les ordres déjà
+suivis comme "non annulés"), probablement un nouveau passage périodique
+analogue à `check_pending_fills`, jamais écrit faute de budget de
+session restant. Aucune ligne d'`executor.py` modifiée. Branche
+`a1a2-08-10` créée, vide de tout changement de code.
