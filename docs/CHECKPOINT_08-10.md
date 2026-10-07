@@ -89,4 +89,13 @@ Mandat de reprise du 08/10/2026 clos (rapport final
 - Étape 1 (nettoyage) : **FAIT** — `--apply` exécuté avec succès (barrière
   n'a pas bloqué cette fois), 29/40 appels, combo H2 retiré + 3
   orphelines fermées, aucune position ouverte non réconciliée restante.
-- Étape 2 (correctif A1/A2) : EN COURS (branche `a1a2-08-10`).
+- Étape 2 (correctif A1/A2) : **STOPPÉ, budget de session épuisé** —
+  investigation faite (voir DECISIONS.md), AUCUN code écrit/modifié
+  dans `executor.py`. Branche `a1a2-08-10` existe, vide de changement.
+  Prochaine session : écrire une réconciliation générale (pas seulement
+  `_rescue_uncancelled_leg_orders`, qui ne couvre pas la perte de
+  réponse au premier appel de placement), avec tests (404, position hors
+  base, jambe sœur déjà en base), non-régression, impossibilité
+  d'élargir, 100% de couverture.
+- Étapes 3 (E2), 4 (fusion/sauvegarde), 5 (déploiement/activations), 6
+  (décision 7) : **NON COMMENCÉES**.
