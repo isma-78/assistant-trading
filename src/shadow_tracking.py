@@ -37,6 +37,12 @@ from src.hypothesis1_strategy_v3cand import evaluate_entry as h1_cand_entry
 from src.hypothesis2_strategy_v3cand import evaluate_entry as h2_cand_entry
 from src.hypothesis3_strategy_v3cand import evaluate_entry as h3_cand_entry
 from src.hypothesis4_strategy_v3cand import evaluate_entry as h4_cand_entry
+from src.hypothesis1_strategy_v2 import evaluate_entry as h1_v2_entry
+from src.hypothesis2_strategy_v2 import evaluate_entry as h2_v2_entry
+from src.hypothesis3_strategy_v2 import evaluate_entry as h3_v2_entry
+from src.hypothesis4_strategy_v2 import evaluate_entry as h4_v2_entry
+from src.hypothesis5_strategy_v2 import evaluate_entry as h5_v2_entry
+from src.asset_whitelist import ASSET_WHITELIST
 from src.market_data import Candle, get_candles, get_price_snapshot
 from src.risk_engine import RiskEngine
 from src.simulator_fidelity import StopRefusalModel
@@ -57,6 +63,25 @@ SHADOW_CANDIDATES: Dict[str, dict] = {
     "hypothesis4_v3cand": {"entry_fn": h4_cand_entry, "assets": ASSETS_H234, "extras": [], "donchian": False},
 }
 RESOLUTION = "HOUR"
+
+# Partie 4 (08/10/2026, docs/COUPLES_V2_08-10.md étape 5) : étend le
+# suivi shadow à CHAQUE couple (hypothèse _v2 ACTUELLEMENT déployée ×
+# actif de la liste blanche courante, `src.asset_whitelist.ASSET_
+# WHITELIST` — 9 actifs, CHFJPY comprise), étiquette `_shadow_couples`
+# (même suffixe-convention que `_v3cand`), même mécanique générique
+# (`run_shadow_cycle`, AUCUNE logique nouvelle). Couvre aussi les
+# couples dont l'exécution RÉELLE serait bloquée par le plafond de
+# cluster : le suivi virtuel ne consulte jamais ce plafond (comme pour
+# `SHADOW_CANDIDATES` déjà existant), donc rien de spécial à faire pour
+# les inclure — ils le sont par construction.
+_WHITELIST_ASSETS = sorted(ASSET_WHITELIST.keys())
+SHADOW_COUPLES: Dict[str, dict] = {
+    "hypothesis_v2_shadow_couples": {"entry_fn": h1_v2_entry, "assets": _WHITELIST_ASSETS, "extras": [], "donchian": False},
+    "hypothesis2_v2_shadow_couples": {"entry_fn": h2_v2_entry, "assets": _WHITELIST_ASSETS, "extras": ["HOUR_4", "DAY"], "donchian": False},
+    "hypothesis3_v2_shadow_couples": {"entry_fn": h3_v2_entry, "assets": _WHITELIST_ASSETS, "extras": [], "donchian": False},
+    "hypothesis4_v2_shadow_couples": {"entry_fn": h4_v2_entry, "assets": _WHITELIST_ASSETS, "extras": [], "donchian": False},
+    "hypothesis5_v2_shadow_couples": {"entry_fn": h5_v2_entry, "assets": _WHITELIST_ASSETS, "extras": ["DAY"], "donchian": True},
+}
 
 
 def historical_bar_from_candle(candle: Candle, spread: float) -> HistoricalBar:

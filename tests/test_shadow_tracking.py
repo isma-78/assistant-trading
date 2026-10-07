@@ -335,3 +335,45 @@ def test_run_shadow_cycle_h2_style_candidate_needs_extra_resolutions(tmp_path, m
                      candidates={"hypothesis2_v3cand": {"entry_fn": fake_entry, "assets": ["GOLD"],
                                                          "extras": ["HOUR_4", "DAY"], "donchian": False}})
     assert _rows(db_path, "SELECT * FROM shadow_trades") == []
+
+
+# ---------------------------------------------------------------------------
+# SHADOW_COUPLES — Partie 4 (08/10/2026) : tous les couples hypothèse_v2 x
+# actif de la liste blanche, étiquette "_shadow_couples".
+# ---------------------------------------------------------------------------
+
+def test_shadow_couples_covers_every_whitelist_asset_per_hypothesis():
+    from src.asset_whitelist import ASSET_WHITELIST
+    from src.shadow_tracking import SHADOW_COUPLES
+
+    assert len(SHADOW_COUPLES) == 5
+    for source, cfg in SHADOW_COUPLES.items():
+        assert source.endswith("_shadow_couples")
+        assert set(cfg["assets"]) == set(ASSET_WHITELIST.keys())
+        assert callable(cfg["entry_fn"])
+
+
+def test_shadow_couples_h1_runs_end_to_end_without_broker_writes(tmp_path, monkeypatch):
+    """Preuve par test (pas seulement par lecture du code) qu'un couple
+    réel de SHADOW_COUPLES (H1 x GOLD, la stratégie _v2 ACTUELLEMENT
+    déployée) ne déclenche jamais de méthode d'écriture broker, même
+    pour un actif dont le plafond de cluster bloquerait l'exécution
+    réelle (jamais consulté ici, comme pour SHADOW_CANDIDATES)."""
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    import src.shadow_tracking as mod
+    from src.shadow_tracking import SHADOW_COUPLES
+
+    flat_candles = [_candle(i, 101, 99, 100) for i in range(220)]
+    monkeypatch.setattr(mod, "get_candles", lambda client, epic, resolution, count: flat_candles)
+    monkeypatch.setattr(mod, "get_price_snapshot",
+                        lambda client, epic: PriceSnapshot(epic, 99.9, 100.1, 100.0, "TRADEABLE", None))
+    client = MagicMock()
+
+    cfg = SHADOW_COUPLES["hypothesis_v2_shadow_couples"]
+    run_shadow_cycle(db_path, client, _engine(),
+                     candidates={"hypothesis_v2_shadow_couples": {**cfg, "assets": ["GOLD"]}})
+
+    for forbidden in ("place_limit_order", "open_position", "close_position", "update_position_stop",
+                      "cancel_working_order"):
+        assert getattr(client, forbidden).called is False

@@ -68,5 +68,81 @@ déclaré « brûlé » dans ce projet — même logique que la fenêtre scellé
 d'origine (2023-01-01→2024-06-14) : une fois qu'un résultat de
 stratégie en a été tiré et publié, tout le bloc est fermé, pas
 seulement les jours exacts touchés. **Conformément à l'étape 2.3,
-saut direct à l'étape 5** — étapes 3, 4 et 6 non exécutées (sans objet,
-aucune période sur laquelle les appliquer).
+saut direct à l'étape 5** — étapes 3 et 4 non exécutées (sans objet,
+aucune période sur laquelle les appliquer). Étape 6 (re-test FORWARD,
+indépendante de l'existence d'une période neuve PASSÉE) exécutée
+ci-dessous.
+
+## Étape 5 — Shadow de tous les couples
+
+Étendu `src/shadow_tracking.py` (jamais dupliqué, la mécanique
+générique `run_shadow_cycle` déjà 100% couverte est réutilisée telle
+quelle) : nouveau registre `SHADOW_COUPLES`, un couple par (hypothèse
+`_v2` ACTUELLEMENT déployée × actif de `src.asset_whitelist.ASSET_
+WHITELIST`, 9 actifs CHFJPY comprise) = **45 couples**, étiquette
+`<source>_shadow_couples` (ex. `hypothesis2_v2_shadow_couples`). Couvre
+par construction les couples qui seraient bloqués par le plafond de
+cluster en réel : le suivi virtuel ne le consulte jamais (même principe
+que `SHADOW_CANDIDATES`, déjà établi).
+
+- `src/couples_forward_report.py` (nouveau, 100% de couverture, 10
+  tests) : par couple, n shadow/réel (trades fermés, réconciliés), IC
+  bootstrap à 95% par blocs calendaires (semaine ISO) de chaque côté,
+  avancement vers n=30/50/100 (shadow+réel combinés), taux de rejet par
+  plafond de cluster PAR COUPLE (jamais un seul taux global).
+- `scripts/run_shadow_couples_cycle.py` (nouveau, lecture seule côté
+  broker, aucune méthode d'écriture jamais appelée — vérifié par test,
+  pas seulement par lecture du code) : un cycle shadow pour les 45
+  couples, réutilise `run_shadow_cycle` sans modification.
+- `scripts/rapport_couples_forward.py` (nouveau, lecture seule, 5
+  tests, 100% de couverture) : rapport hebdomadaire (prévu chaque
+  lundi), écrit `docs/SUIVI_COUPLES/AAAA-MM-JJ.md`, aucune action
+  automatique.
+- **Non branché au déploiement.** Activation ajoutée à
+  `docs/CHECKLIST_10-10_UNIQUE.md` (qui n'existait pas encore — ce
+  mandat l'a créé, avec une note honnête sur l'état réel du
+  déploiement de la Partie 2, jamais entamé faute d'autorisation
+  d'écriture broker accordée à l'agent), conditionnée explicitement à
+  la validation préalable de la surveillance de 60 minutes du
+  déploiement principal ET du shadow `_v3cand` déjà existant.
+
+## Étape 6 — Re-test forward pré-enregistré
+
+**Règle écrite maintenant, avant toute donnée forward :** le test
+structurel (mêmes caractéristiques et sens attendus que
+`docs/PROTOCOLE_COUPLES_08-10.md` §0bis, même corrélation de Spearman +
+permutation à 10 000 tirages, Bonferroni m=5) sera rejoué **UNE SEULE
+FOIS** par hypothèse sur les trades FORWARD (réels + shadow
+`_shadow_couples` combinés, mêmes actifs) quand :
+1. au moins **6 actifs** atteignent le seuil de n≥100 trades combinés
+   (réel+shadow) pour cette hypothèse, **ET**
+2. au moins **8 semaines** se sont écoulées depuis l'activation
+   effective de `scripts/run_shadow_couples_cycle.py` (T0, voir
+   `shadow_epochs`),
+le plus tardif des deux conditions. **Aucun regard avant.** Si l'une
+des deux conditions n'est jamais remplie : jamais de test, jamais de
+regard anticipé, consigné comme tel au prochain mandat qui vérifierait
+l'état.
+
+**Dates estimées (ordre de grandeur, cadence LIVE SEULE — shadow pas
+encore activé, aucune donnée shadow disponible pour affiner)** :
+projection linéaire depuis les n live connus de l'étape 4 de
+`docs/COUPLES_08-10.md` (Partie 3), extrapolés à n=100 par actif — un
+seuil bien plus élevé que les n=30 déjà estimés à plusieurs mois.
+**Avertissement explicite** : ces dates sont un majorant pessimiste —
+l'activation du shadow sur 45 couples (étape 5) ajoutera un volume de
+signaux bien supérieur au live seul, et raccourcira ces délais de façon
+non quantifiable avant d'avoir observé au moins quelques semaines de
+cadence shadow réelle.
+
+| Hyp. | Actif le plus avancé (n live) | n=100 estimé (live seul, ordre de grandeur) |
+|---|---|---|
+| H1 | GOLD/US100 (n=3) | > 2030 (cadence live actuelle trop faible) |
+| H2 | GOLD (n=6) | ~2028-2029 |
+| H3 | BTCUSD (n=3) | > 2030 |
+| H4 | GOLD/ETHUSD (n=3) | > 2030 |
+| H5 | ETHUSD (n=3) | > 2030 |
+
+Conclusion honnête : **sans l'activation du shadow_couples, le re-test
+forward n'est pas atteignable à un horizon pertinent.** C'est
+précisément la justification de l'étape 5.
