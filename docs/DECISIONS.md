@@ -12874,3 +12874,14 @@ séparée : une réconciliation périodique basée sur `/history/activity`
 fermerait la boucle plus fermement — proposé comme piste, pas construit
 ici.
 
+
+## 2026-10-07 (soir, reprise) — Nettoyage broker exécuté avec succès (--apply autorisé par la barrière cette fois)
+
+`scripts/nettoyage_broker_08-10.py --apply` : combo H2 retiré (14877
+CHFJPY, 15948 BTCUSD, 16329 GBPUSD fermées broker + réconciliées en
+base `ferme`/`tp1_cloture_totale_broker` ; 15954 déjà absente) et 3
+orphelines confirmées (H2 US30/US100/GOLD, âge >=120min) fermées côté
+broker — jamais réconciliées en base (aucune ligne `trades` n'a jamais
+existé pour elles, cohérent avec le défaut A1/A2, corrigé pour l'avenir
+à l'étape 2 de ce mandat, pas rétroactivement). 29/40 appels consommés,
+0 429. Plus aucune position ouverte non réconciliée constatée.
