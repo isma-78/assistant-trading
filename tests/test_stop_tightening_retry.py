@@ -179,6 +179,26 @@ def test_e2_on_stop_widening_blocked_even_if_risk_engine_wrongly_approves(tmp_pa
     assert fn.calls == 0
 
 
+def test_e2_on_widening_blocked_logs_critical_row_before_raising(tmp_path):
+    db_path = str(tmp_path / "db.sqlite")
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE system_state (key TEXT, value TEXT)")
+    conn.execute("INSERT INTO system_state VALUES ('e2_enabled', 'true')")
+    conn.execute("CREATE TABLE logs (timestamp TEXT, level TEXT, module TEXT, message TEXT)")
+    conn.commit()
+    conn.close()
+
+    fn = CallRecorder([])
+    with pytest.raises(e2.StopWideningBlocked):
+        e2.attempt_with_retry(fn, db_path=db_path, current_stop=100.0, target_stop=95.0,
+                               direction="long", risk_engine=ApprovingRiskEngine(), trade_id=7)
+
+    rows = sqlite3.connect(db_path).execute("SELECT level, message FROM logs").fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "CRITICAL"
+    assert e2.WIDENING_BLOCKED_MARKER in rows[0][1] and "trade_id=7" in rows[0][1]
+
+
 def test_e2_on_logs_outcome_when_logs_table_exists(tmp_path):
     db_path = str(tmp_path / "db.sqlite")
     conn = sqlite3.connect(db_path)

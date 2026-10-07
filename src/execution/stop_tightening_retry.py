@@ -114,6 +114,30 @@ def _log_outcome(db_path: str, trade_id: Optional[int], outcome: "StopTightening
         logger.exception("E2 : écriture de la trace d'issue impossible pour le trade %s", trade_id)
 
 
+WIDENING_BLOCKED_MARKER = "ELARGISSEMENT_BLOQUE"  # marqueur grep-able pour scripts/mesure_effet_e2.py
+
+
+def _log_widening_blocked(db_path: str, trade_id: Optional[int], detail: str) -> None:
+    """Trace dédiée, AVANT de relever l'exception (jamais à la place) —
+    seul moyen pour `scripts/mesure_effet_e2.py` de détecter ce critère
+    d'arrêt automatique sans accès aux fichiers de log du VPS. Même
+    régime fail-safe que `_log_outcome` : une erreur d'écriture
+    n'empêche jamais `StopWideningBlocked` de remonter normalement."""
+    try:
+        conn = get_connection(db_path)
+        try:
+            conn.execute(
+                "INSERT INTO logs (timestamp, level, module, message) VALUES (?, 'CRITICAL', ?, ?)",
+                (datetime.now(timezone.utc).isoformat(), "execution.stop_tightening_retry",
+                 f"{WIDENING_BLOCKED_MARKER} trade_id={trade_id} detail={detail}"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("E2 : écriture de la trace d'élargissement bloqué impossible pour le trade %s", trade_id)
+
+
 def _is_less_protective(candidate: float, previous: float, direction: str) -> bool:
     """Même convention que `risk_engine.evaluate_stop_update` : pour un
     "long", plus protecteur = plus haut ; pour un "short", plus
@@ -203,7 +227,8 @@ def attempt_with_retry(
 
     try:
         outcome = _retry_guarded(update_fn, current_stop, target_stop, direction, risk_engine, sleep_fn)
-    except StopWideningBlocked:
+    except StopWideningBlocked as exc:
+        _log_widening_blocked(db_path, trade_id, str(exc))
         raise
     except Exception as exc:
         logger.exception("E2 : erreur inattendue du module — repli sur une seule tentative (comportement d'avant E2)")
