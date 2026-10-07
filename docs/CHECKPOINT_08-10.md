@@ -60,3 +60,21 @@ du 05/10). Sortie : `data/snapshots/execution_metrics_08-10.json`.
 
 **Prochaine étape : rédaction du rapport final
 `docs/AUTONOMIE_08-10_PARTIE1.md`, puis fin de la Partie 1.**
+
+---
+
+## Reprise du 08/10/2026 — état du nettoyage, checklist, déploiement
+
+- Étape 1 (reprise) : TERMINÉE — règle des 120 min ajoutée (12 tests),
+  état constaté : CHFJPY/14877 + BTCUSD/15948 ouvertes, H2/US30 +
+  H2/GOLD confirmées orphelines, H2/US100 trop récente, catégorie (a)
+  résolue. `--apply` refusé par le classificateur, marqué « à lancer
+  par Ismaël ».
+- Étape 2 (reprise) : TERMINÉE — `docs/CHECKLIST_10-10_UNIQUE.md`
+  réécrit en entier (9 étapes).
+- Étape 3 (reprise, fusion+tests) : EN COURS.
+- Étape 4 (reprise, déploiement) : conditionnée au nettoyage réel par
+  Ismaël — non effectuée par l'agent (nettoyage pas « fait »).
+
+**Prochaine étape : fusion locale des branches + suite de tests
+complète.**
