@@ -72,9 +72,12 @@ du 05/10). Sortie : `data/snapshots/execution_metrics_08-10.json`.
   par Ismaël ».
 - Étape 2 (reprise) : TERMINÉE — `docs/CHECKLIST_10-10_UNIQUE.md`
   réécrit en entier (9 étapes).
-- Étape 3 (reprise, fusion+tests) : EN COURS.
-- Étape 4 (reprise, déploiement) : conditionnée au nettoyage réel par
-  Ismaël — non effectuée par l'agent (nettoyage pas « fait »).
+- Étape 3 (reprise, fusion+tests) : TERMINÉE — les 5 branches à fusionner
+  sont déjà des ancêtres linéaires de `couples-v2-08-10` (rien à fusionner
+  réellement, aucun conflit). Suite complète : **1592 passed**, 0 échec.
+- Étape 4 (reprise, déploiement) : **non effectuée** — l'étape 1 n'a pas
+  donné « nettoyage fait » (positions encore ouvertes/orphelines). Séquence
+  complète à suivre : `docs/CHECKLIST_10-10_UNIQUE.md`.
 
-**Prochaine étape : fusion locale des branches + suite de tests
-complète.**
+Mandat de reprise du 08/10/2026 clos (rapport final
+`docs/AUTONOMIE_08-10_REPRISE.md`).
