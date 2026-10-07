@@ -132,3 +132,19 @@ Rien à signaler.
   étiquettes de protocole pour les 3 frictions non-E2 les plus
   coûteuses identifiées par cette étape, jamais comme des mécanismes
   préexistants mal cherchés. Détail dans le rapport final.
+
+## Reprise du 08/10/2026 — état du nettoyage, checklist, déploiement
+
+- **Règle des 120 minutes ajoutée** à `scripts/nettoyage_broker_08-10.py`
+  (`ORPHAN_MIN_AGE_MINUTES=120`, `position_age_minutes`/`is_confirmed_
+  orphan`, 12 tests nouveaux) : une position (b)/(d) hors base n'est
+  fermée que si son âge dépasse 120 minutes — cas réel observé (H2
+  US100, 81 minutes au moment de la lecture) correctement écarté de
+  toute action.
+- `--apply` tenté une fois comme demandé, refusé par le classificateur
+  de sécurité du harnais — jamais contourné, marqué « à lancer par
+  Ismaël » avec la commande exacte dans `docs/CHECKLIST_10-10_UNIQUE.md`.
+- `docs/CHECKLIST_10-10_UNIQUE.md` : le mandat supposait ce fichier
+  absent ; il existait déjà (créé Partie 4, section shadow_couples
+  seule). Réécrit en entier avec la séquence complète des 9 étapes,
+  en conservant/renumérotant la section déjà écrite (étape 7).

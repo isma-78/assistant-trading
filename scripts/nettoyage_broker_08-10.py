@@ -36,6 +36,7 @@ import sqlite3
 import sys
 import time
 from datetime import datetime, timezone
+from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -55,6 +56,38 @@ UNCANCELLED_LEG_ORDERS = {
     "00000000-66b1-8d2e-048d-62f90015549e": "hypothesis4_v2",
 }
 RETIRED_COMBO_TRADE_IDS = (14877, 15948, 15954, 16329)
+
+# Reprise du 08/10/2026 : une position (b)/(d) hors base n'est "confirmée
+# orpheline" (éligible à une fermeture) que si elle est âgée d'au moins
+# ORPHAN_MIN_AGE_MINUTES — une position plus récente peut être un simple
+# retard normal de réconciliation (cas réel constaté : H2 US100, créée
+# ~26 min avant une lecture, toujours absente de la base à ce moment-là,
+# réapparue réconciliée peu après). Jamais fermée sur cette seule
+# présomption ; re-signalée, jamais actionnée, tant que l'âge n'est pas
+# atteint.
+ORPHAN_MIN_AGE_MINUTES = 120.0
+
+
+def position_age_minutes(pos: dict, now: datetime) -> Optional[float]:
+    """Âge en minutes depuis `createdDateUTC` (broker) — `None` si absent
+    (jamais un âge deviné)."""
+    created = pos.get("createdDateUTC")
+    if not created:
+        return None
+    created_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return (now - created_at).total_seconds() / 60.0
+
+
+def is_confirmed_orphan(pos: dict, now: datetime, min_age_minutes: float = ORPHAN_MIN_AGE_MINUTES) -> bool:
+    """Vrai seulement si l'âge est connu ET >= `min_age_minutes` — une
+    position sans `createdDateUTC` n'est JAMAIS présumée orpheline par
+    défaut (fail-safe, jamais l'inverse)."""
+    age = position_age_minutes(pos, now)
+    return age is not None and age >= min_age_minutes
 
 
 class RateLimited(RuntimeError):
@@ -223,8 +256,10 @@ def main() -> int:
         f"par la base, catégorie e) : {occupation_before}€")
 
     # --- Classement ---
-    to_close_step1 = []  # (b)/(d) sans stop
-    to_close_step4 = []  # (b)/(d) avec stop
+    now = datetime.now(timezone.utc)
+    to_close_step1 = []  # (b)/(d) sans stop, confirmées orphelines (âge >= 120 min)
+    to_close_step4 = []  # (b)/(d) avec stop, confirmées orphelines
+    too_recent = []  # (b)/(d) mais < 120 min : jamais actionnées, re-signalées seulement
     risk_no_stop_eur = 0.0
     for label, state in state_before.items():
         for item in state["positions"]:
@@ -232,7 +267,12 @@ def main() -> int:
             pos = item.get("position", {})
             if category not in ("b", "d"):
                 continue
-            entry = (label, pos.get("dealId"), pos.get("epic") or item.get("market", {}).get("epic"))
+            epic = pos.get("epic") or item.get("market", {}).get("epic")
+            age = position_age_minutes(pos, now)
+            entry = (label, pos.get("dealId"), epic)
+            if not is_confirmed_orphan(pos, now):
+                too_recent.append((*entry, age))
+                continue
             if pos.get("stopLevel") is None:
                 to_close_step1.append(entry)
                 level, size = pos.get("level"), pos.get("size")
@@ -247,12 +287,16 @@ def main() -> int:
             else:
                 to_close_step4.append(entry)
 
-    log(f"\nRisque approximatif des positions SANS stop (catégories b/d) : ~{round(risk_no_stop_eur, 2)}€ "
-        "(hypothèse : 2% du notionnel, faute de distance de stop connue — jamais un calcul exact)")
+    log(f"\nRisque approximatif des positions SANS stop (catégories b/d, confirmées orphelines) : "
+        f"~{round(risk_no_stop_eur, 2)}€ (hypothèse : 2% du notionnel, faute de distance de stop connue — "
+        "jamais un calcul exact)")
     log(f"Catégorie (a) ordres de palier non annulés à vérifier : {len(UNCANCELLED_LEG_ORDERS)}")
     log(f"Catégorie (c) positions du combo H2 retiré à vérifier : {len(RETIRED_COMBO_TRADE_IDS)}")
-    log(f"Étape 1 (b/d sans stop) à fermer : {to_close_step1}")
-    log(f"Étape 4 (b/d avec stop) à fermer : {to_close_step4}")
+    log(f"Étape 1 (b/d sans stop, âge >= {ORPHAN_MIN_AGE_MINUTES:.0f} min) à fermer : {to_close_step1}")
+    log(f"Étape 4 (b/d avec stop, âge >= {ORPHAN_MIN_AGE_MINUTES:.0f} min) à fermer : {to_close_step4}")
+    if too_recent:
+        log(f"TROP RÉCENTES (< {ORPHAN_MIN_AGE_MINUTES:.0f} min ou âge inconnu), JAMAIS actionnées cette fois : "
+            f"{too_recent}")
 
     if not args.apply:
         log("\n[SIMULATION] --apply absent : aucune action broker. Relancer avec --apply pour agir réellement.")
