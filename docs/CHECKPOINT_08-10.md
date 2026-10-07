@@ -25,11 +25,38 @@ avant->après) dans la sortie du script, résumé dans
 Fichiers `data/historical/*.json` modifiés en place (append-only,
 jamais commités — `data/historical/` est dans `.gitignore`).
 
-**Prochaine étape : Étape 3** — mesure de fidélité H1-H4 (config.
-actuelle, données rafraîchies), population `ouvert_at >=
-2026-09-25T19:35:00` jusqu'à `2026-10-07T04:00:00`, CHFJPY à part pour
-les 4 hypothèses. Live déjà compté sur le snapshot `prod_07-10.db` :
-H1=8, H2=12, H3=7, H4=10 trades éligibles (0 CHFJPY) — tous < n=20, donc
-« non établie (n insuffisant) » attendu pour les 4 sauf données live plus
-fraîches non disponibles localement (pas d'accès VPS dans ce mandat,
-limite à documenter en §6 du rapport final).
+## Étape 3 — TERMINÉE
+
+`scripts/_fidelite_h1h4_08-10.py` (lecture seule). Résultat : **4/4
+hypothèses "non établie (n insuffisant)"** — n paires H1=6, H2=4, H3=5,
+H4=6. Causes dominantes : sortie (timing/étiquette) ≥20% pour les 4 ;
+refus de resserrement ≥20% pour H2 (65%) ; aucune modélisée (hors
+périmètre de ce mandat). Causalité entrée/sortie : couverture quasi
+complète (37/37, 34/37) ; financement 0/37 (A4 non corrigé, hors
+plancher de population). Sortie : `data/snapshots/fidelity_results_08-10.json`.
+
+## Étape 4 — TERMINÉE
+
+`scripts/_execution_metrics_08-10.py` (lecture seule). Taux de
+remplissage poolé (n=53) = 84,9%. Taux de refus de resserrement : non
+remesurable (pas d'accès VPS, table `logs` vide). A3 déployé, 0
+occurrence sur cette population. Délai de remplissage : non mesurable
+avec le schéma actuel. `brut_min` par hypothèse calculé (MDE0 réutilisé
+du 05/10). Sortie : `data/snapshots/execution_metrics_08-10.json`.
+
+## Étape 5 — TERMINÉE
+
+- `src/execution/stop_tightening_retry.py` (E2, OFF par défaut), 18
+  tests, 100% de couverture.
+- `docs/REFERENCE_E2_08-10.md` : 19,75% de refus poolé pré-activation
+  (BILAN_05-10 §2.3, réutilisé).
+- `scripts/mesure_effet_e2.py` (surveillance lecture seule, arrêt
+  automatique), 21 tests, 100% de couverture.
+- `docs/PATCH_EXECUTOR_E2_PROPOSE.diff` (NON appliqué, vérifié par
+  `git apply --check` + `py_compile` + 125 tests `test_executor.py` sur
+  une copie temporaire, supprimée).
+- Suite complète relancée (commande `pytest -q`) : voir rapport final
+  pour le résultat brut.
+
+**Prochaine étape : rédaction du rapport final
+`docs/AUTONOMIE_08-10_PARTIE1.md`, puis fin de la Partie 1.**
