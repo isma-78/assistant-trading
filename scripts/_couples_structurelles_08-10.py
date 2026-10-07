@@ -44,8 +44,14 @@ FOLD_WINDOWS = {
 
 
 def load_bars(asset: str, resolution: str, start: str, end: str) -> list:
+    """Incident du 08/10/2026 (étiquette seule, voir docs/DECISIONS.md) :
+    assertion de bornes EXPLICITE ajoutée ici (pas seulement dans le
+    filtre de la liste, qui pourrait être modifié sans qu'on s'en
+    aperçoive) — `start`/`end` sont des bornes [incluse, exclue[,
+    jamais interprétées autrement par l'appelant."""
     raw = json.loads((HIST / f"{asset}_{resolution}.json").read_text(encoding="utf-8"))
     bars = [b for b in (bar_from_raw(p) for p in raw) if b is not None and start <= b.time_utc < end]
+    assert all(start <= b.time_utc < end for b in bars), f"bougie hors bornes [{start}, {end}[ chargée"
     assert not any(SEALED_START <= b.time_utc < SEALED_END for b in bars), "fenêtre scellée chargée"
     assert all(b.time_utc >= MIN_DATE for b in bars), "bougie antérieure au 2019-01-01 chargée"
     return bars

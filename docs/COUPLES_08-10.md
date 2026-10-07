@@ -15,7 +15,7 @@ en approcher un (7 éligibles en sens1, mais seulement 3 en sens2) ; les
 directe du protocole §7 : **aucune évolution, étiquetage seul**, aucune
 liste `_v3` préparée.
 
-## 2. Tableau actif × caractéristiques (fenêtre descriptive 2019-01-01 → 2023-01-01)
+## 2. Tableau actif × caractéristiques (fenêtre descriptive 2019-01-01 → 2023-01-01 EXCLU, soit 2019-2022 inclus — titre corrigé le 08/10/2026, voir docs/DECISIONS.md : étiquette seule, aucune valeur recalculée)
 
 | Actif | n bougies HOUR | coût/ATR | persistance (VR8) | regroupement de volatilité |
 |---|---|---|---|---|

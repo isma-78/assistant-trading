@@ -12,6 +12,43 @@ la plus récente en tête.
 
 ---
 
+## 2026-10-08 — Contrôle de la fenêtre du tableau descriptif COUPLES_08-10 : étiquette imprécise, PAS de lecture hors fenêtre (branche `couples-v2-08-10`, rien en production)
+
+Constat d'Ismaël : le tableau des caractéristiques de
+`docs/COUPLES_08-10.md` §2 est titré « fenêtre descriptive
+2019-01-01 → 2023-01-01 », alors que le protocole
+(`docs/PROTOCOLE_COUPLES_08-10.md` §2) prévoyait « 2019-2022 ».
+Vérifié par relecture du code ET recalcul comparatif (jamais supposé) :
+
+- `scripts/_couples_structurelles_08-10.py::DESCRIPTIVE_WINDOW` utilise
+  déjà `("2019-01-01", "2023-01-01")` avec une borne de FIN EXCLUSIVE
+  (`start <= b.time_utc < end`) — aucune bougie du 1er janvier 2023 ou
+  après n'a jamais été chargée. Confirmé empiriquement : la bougie la
+  plus récente effectivement utilisée est datée du **2022-12-30**
+  (actifs fermés le week-end) ou du **2022-12-31** (BTCUSD/ETHUSD,
+  cotés 7j/7) — jamais 2023.
+- **Un premier essai de comparaison a lui-même produit un faux
+  positif** : relancer avec une borne de fin `"2022-12-31"` (au lieu de
+  `"2023-01-01"`) exclut à tort le 31 décembre 2022 LUI-MÊME (qui fait
+  pourtant partie de l'année 2022), ce qui a fait apparaître un écart
+  sur BTCUSD/ETHUSD (n passant de 34846/34843 à 34824/34821, coût/ATR
+  variant de ~0,5% à ~2,7% selon l'actif). Cet écart est un artefact de
+  la borne de comparaison elle-même (off-by-one), **pas une lecture
+  hors fenêtre du calcul original** — consigné ici pour la même raison
+  que l'écart aurait été consigné s'il avait été réel : ne jamais
+  cacher un faux pas, même auto-corrigé avant publication.
+- **Verdict : étiquette seule.** Le calcul original est correct et n'a
+  jamais lu de bougie de 2023 ou de la fenêtre scellée. Seul le libellé
+  du titre du tableau (« 2023 » au lieu de « jusqu'au 2023-01-01 exclu,
+  c'est-à-dire 2019-2022 inclus ») était ambigu. Corrigé dans
+  `docs/COUPLES_08-10.md` (titre reformulé, aucune valeur changée).
+- Assertion de date ajoutée explicitement dans
+  `scripts/_couples_structurelles_08-10.py` pour le calcul descriptif
+  (`assert all(b.time_utc < "2023-01-01" ...)`), en plus des gardes
+  déjà présentes (fenêtre scellée, 2019-01-01).
+
+---
+
 ## 2026-10-07 — Mesure de fidélité H1-H4 et statuts finaux des 4 candidates (branche `fidelite-07-10`, rien en production)
 
 Protocole pré-enregistré AVANT tout calcul : `docs/PROTOCOLE_FIDELITE_07-10.md`
