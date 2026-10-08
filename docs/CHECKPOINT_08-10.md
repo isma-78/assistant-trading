@@ -99,3 +99,46 @@ Mandat de reprise du 08/10/2026 clos (rapport final
   d'élargir, 100% de couverture.
 - Étapes 3 (E2), 4 (fusion/sauvegarde), 5 (déploiement/activations), 6
   (décision 7) : **NON COMMENCÉES**.
+
+---
+
+## Reprise 2 du 08/10/2026 — vérification nettoyage, A1/A2, E2, pré-déploiement
+
+- Étape 1 (vérification du nettoyage du 07/10) : TERMINÉE — 0 écart
+  actionnable. Le libellé "orphelines jamais réconciliées" du rapport
+  du 07/10 était imprécis pour le combo H2 (trades suivis depuis des
+  semaines, anomalie connue `tp1_cloture_totale_broker`) mais sans
+  conséquence. Snapshot frais du 08/10, lecture broker réelle sur les
+  5 comptes : réconciliation parfaite (21 positions = 21 jambes
+  `trade_legs`), aucun cluster au-dessus du plafond de 50€.
+- Étape 2 (A1/A2) : TERMINÉE et APPLIQUÉE —
+  `reconcile_untracked_broker_positions` (nouvelle fonction), câblée
+  dans les 4 boucles H2-H5 (pas sur le compte partagé Station X/H1,
+  limite assumée). 16 tests, 100% de couverture sur le code
+  nouveau/modifié.
+- Étape 3 (E2) : TERMINÉE et APPLIQUÉE — `docs/PATCH_EXECUTOR_E2_PROPOSE.diff`
+  appliqué pour de vrai dans `_push_stop_to_broker`. `system_state.e2_enabled`
+  absent → E2 reste OFF. 3 tests d'intégration (OFF identique à avant,
+  impossibilité d'élargir même si `risk_engine` se trompe, repli sur
+  erreur inattendue).
+- Étape 4 (fusion/sauvegarde/pré-conditions) : TERMINÉE —
+  bilan-05-10/evolution-06-10/fidelite-07-10/fidelite-08-10/
+  couples-08-10/couples-v2-08-10 confirmées ancêtres linéaires de
+  a1a2-08-10 (rien à fusionner réellement). `main` avancé en
+  fast-forward jusqu'au tip de `a1a2-08-10` (commit `6a9557a`). Suite
+  complète : **1611/1611 verts**. Sauvegarde VPS fraîche vérifiée
+  (`assistant_trading_20261008T181726Z.db`, 25,6 Mo, `PRAGMA
+  integrity_check` = ok, 13188 trades lus). Tag de repli local
+  `deploy-rollback-10-10` = `e27b626` (commit actuellement déployé sur
+  le VPS). **Push vers origin (GitHub) en échec — authentification
+  expirée**, à relancer par Ismaël (`gh auth login` ou jeton renouvelé) ;
+  n'empêche pas le déploiement VPS (possible en direct par SSH).
+- Étape 5 (déploiement/activations réelles) : **NON COMMENCÉE,
+  intentionnellement** — implique d'arrêter/redémarrer les 6 exécuteurs
+  en production (même en démo) et une surveillance active de 60 minutes
+  avec critères de retour arrière, ce qu'une seule session interactive
+  ne peut pas tenir de façon fiable sans présence soutenue. Laissée à
+  une session dédiée (copilote ou autonome avec supervision), voir
+  `docs/CHECKLIST_10-10_UNIQUE.md` étapes 2 à 9 pour la suite exacte.
+- Étape 6 (décision 7 H5) : TERMINÉE — défaut appliqué, voir
+  `docs/DECISIONS.md` (une ligne, ci-dessous).

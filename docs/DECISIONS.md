@@ -13026,3 +13026,6 @@ session restant. Aucune ligne d'`executor.py` modifiée. Branche
     (comportement d'avant E2) — le resserrement légitime aboutit quand
     même, rien n'est perdu.
 - Suite complète : **1611/1611 verts** (1608 + 3 nouveaux).
+## 2026-10-08 (reprise 2) — Étape 6 : décision 7 H5, défaut maintenu
+
+n insuffisant pour trancher (MDE ≈ 2R à n=40, non atteint) — défaut appliqué : MAINTENIR la règle actuelle de l'Hypothèse #5, aucun changement de paramètre.
