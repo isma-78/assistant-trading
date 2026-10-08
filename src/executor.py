@@ -73,6 +73,7 @@ from src.circuit_breaker import (
 )
 from src.db import connection_scope
 from src.envelope_store import load_or_create_envelope, load_reserve_total, persist_trade_result
+from src.execution.stop_tightening_retry import attempt_with_retry
 from src.go_nogo import GoNoGoStatus
 from src.market_data import Candle, compute_atr, get_candles, get_price_snapshot
 from src.retry import retry_with_backoff
@@ -2309,10 +2310,28 @@ def _push_stop_to_broker(
     succeeded = 0
     for deal_id in targets:
         try:
-            client.update_position_stop(
-                deal_id, new_stop_price, guaranteed_stop=state.guaranteed_stop,
-                direction=state.direction, current_stop_level=state.stop_price,
-            )
+            def _attempt(deal_id=deal_id):
+                client.update_position_stop(
+                    deal_id, new_stop_price, guaranteed_stop=state.guaranteed_stop,
+                    direction=state.direction, current_stop_level=state.stop_price,
+                )
+            # E2 (docs/PROTOCOLE_AUTONOME_08-10.md §4, branché 08/10/2026
+            # — voir docs/DECISIONS.md) : OFF par défaut
+            # (`system_state.e2_enabled`) -- comportement IDENTIQUE à avant
+            # ce branchement tant qu'il n'est pas activé explicitement (un
+            # seul appel, exceptions propagées normalement). `risk_engine`
+            # absent (certains appelants) : jamais routé vers E2, comme
+            # avant, seul `_attempt()` direct.
+            if risk_engine is not None:
+                outcome = attempt_with_retry(
+                    _attempt, db_path=db_path, current_stop=state.stop_price,
+                    target_stop=new_stop_price, direction=state.direction,
+                    risk_engine=risk_engine, trade_id=state.trade_id,
+                )
+                if not outcome.succeeded:
+                    raise CapitalApiError(outcome.last_error or "E2 : toutes les tentatives ont échoué")
+            else:
+                _attempt()
             succeeded += 1
         except CapitalApiError as exc:
             last_error = exc

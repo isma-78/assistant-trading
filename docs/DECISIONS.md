@@ -12998,3 +12998,31 @@ session restant. Aucune ligne d'`executor.py` modifiée. Branche
   sizing/ordre d'ouverture existante touchée).
 - Appliqué directement (suite 100% verte) — pas de
   `docs/PATCH_A1A2_PROPOSE.diff` nécessaire.
+
+## 2026-10-08 (reprise 2) — Étape 3 : E2 branché au point d'appel du resserrement, interrupteur OFF
+
+- Patch de `docs/PATCH_EXECUTOR_E2_PROPOSE.diff` appliqué pour de vrai
+  (contexte toujours valide malgré le décalage de lignes causé par
+  l'étape 2) : `_push_stop_to_broker` route chaque appel
+  `client.update_position_stop` via
+  `src.execution.stop_tightening_retry.attempt_with_retry` quand
+  `risk_engine` est fourni, sinon appel direct inchangé (comme avant).
+  **`system_state.e2_enabled` absent après ce déploiement → E2 reste
+  OFF** (lecture fail-safe du module, comportement par défaut
+  rigoureusement identique à avant ce branchement — vérifié : avec E2
+  OFF, `risk_engine.evaluate_stop_update` n'est même pas appelé).
+- **3 nouveaux tests d'intégration**
+  (`tests/test_executor_e2_integration.py`), au point d'appel réel
+  (pas seulement le module `stop_tightening_retry` isolé, déjà testé
+  ailleurs) :
+  - E2 OFF : comportement identique à un appel direct unique.
+  - **Impossibilité d'élargir** : même si le `risk_engine` fourni
+    approuve À TORT un candidat moins protecteur, le garde-fou redondant
+    de `_retry_guarded` lève `StopWideningBlocked`, propagée jusqu'à
+    l'appelant — `stop_loss_courant` en base reste inchangé, aucun appel
+    broker émis.
+  - **Repli sur erreur** : une erreur inattendue DANS le module E2
+    (ex. `risk_engine` qui lève) retombe sur un seul appel direct
+    (comportement d'avant E2) — le resserrement légitime aboutit quand
+    même, rien n'est perdu.
+- Suite complète : **1611/1611 verts** (1608 + 3 nouveaux).
