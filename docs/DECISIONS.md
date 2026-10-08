@@ -12947,3 +12947,54 @@ session restant. Aucune ligne d'`executor.py` modifiée. Branche
 - **Conclusion étape 1 : aucun écart actionnable aujourd'hui, aucun
   script de réconciliation correctif à préparer** (le nettoyage du
   07/10 est resté stable, rien à refermer). Repris à l'étape 2 (A1/A2).
+
+## 2026-10-08 (reprise 2) — Étape 2 : correctif A1/A2 écrit, testé, appliqué
+
+- **`src/executor.py::reconcile_untracked_broker_positions`** (nouvelle
+  fonction, aucune fonction existante modifiée) : réconciliation
+  GÉNÉRALE périodique — toute position broker sans AUCUNE trace en base
+  (`trades.deal_id` NI `trade_legs.order_deal_id`/`position_deal_id`,
+  tous statuts confondus) est retrouvée et enregistrée après un délai
+  de grâce de 10 minutes (`UNTRACKED_POSITION_GRACE_SECONDS`). Couvre
+  le cas que `_rescue_uncancelled_leg_orders` (A2) ne couvre pas : la
+  réponse du TOUT PREMIER appel `place_limit_order()` se perd avant que
+  son `deal_id` soit capturé — `uncancelled_orders=[]`, rien à
+  rechercher côté A2.
+  - Idempotente par dealId (toute référence existante, quel que soit le
+    statut, fait sauter l'enregistrement).
+  - « Jambe sœur déjà en base » : si un trade `statut='ouvert'` du même
+    (actif, source) existe, ouvert dans la même fenêtre de grâce, avec
+    un palier manquant, la position est rattachée comme jambe (risque
+    additionné) plutôt que de créer un second trade pour la même
+    ouverture d'origine.
+  - Position sans actif reconnu (liste blanche)/sans stop/niveau/taille
+    connus : JAMAIS enregistrée automatiquement, seulement journalisée
+    et notifiée (fail-safe, invariant #7).
+  - Ne touche JAMAIS `stop_loss_initial`/`stop_loss_courant` d'un trade
+    existant — aucun chemin de code ne les modifie, donc aucun stop ne
+    peut être élargi par cette fonction.
+  - Câblée dans `technical_strategy_executor.run_technical_strategy_loop`
+    (H2-H5, comptes dédiés, source non ambiguë) juste après
+    `reconcile_ghost_positions`. **Volontairement PAS câblée dans
+    `executor.run_executor_loop`** (compte PARTAGÉ Station X/H1) : une
+    position retrouvée sur ce compte ne pourrait pas être attribuée à
+    l'une ou l'autre source sans deviner — limite assumée, à lever
+    seulement si un cas réel l'exige un jour.
+- **16 nouveaux tests** (`tests/test_executor_reconcile_untracked.py`) :
+  enregistrement simple, délai de grâce, idempotence (via `trades` et
+  via `trade_legs`), jambe sœur attachée, non-élargissement du stop,
+  actif hors liste blanche, stop/niveau/taille/horodatage manquants,
+  comptage multiple, non-doublon sur le plafond de cluster (clé du
+  mandat : `get_cluster_open_risk_eur` reflète exactement le risque
+  réconcilié, ni compté deux fois en rejouant, ni absent), cas
+  d'horodatage non interprétable ou hors fenêtre pour la recherche de
+  jambe sœur, trade sœur déjà à 3 paliers (repli sur un nouveau trade).
+  **100% de couverture sur tout le code nouveau/modifié** (aucune ligne
+  du diff dans les lignes manquantes du rapport de couverture).
+- **Suite complète : 1608/1608 verts** (aucune régression — diff limité
+  à l'ajout des deux nouvelles fonctions + 1 import + 1 constante dans
+  `executor.py`, et à l'ajout d'un appel + import dans
+  `technical_strategy_executor.py` ; aucune fonction d'entrée/sortie/
+  sizing/ordre d'ouverture existante touchée).
+- Appliqué directement (suite 100% verte) — pas de
+  `docs/PATCH_A1A2_PROPOSE.diff` nécessaire.

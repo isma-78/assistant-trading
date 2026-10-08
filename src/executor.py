@@ -78,6 +78,7 @@ from src.market_data import Candle, compute_atr, get_candles, get_price_snapshot
 from src.retry import retry_with_backoff
 from src.session_marker import compute_market_session
 from src.risk_engine import (
+    AssetSpec,
     ExistingPosition,
     RiskCaps,
     RiskDecision,
@@ -101,6 +102,14 @@ logger = logging.getLogger(__name__)
 # réaliste sans pour autant laisser un ordre traîner indéfiniment. Voir
 # docs/DECISIONS.md (le CDC ne fixe pas de chiffre).
 LIMIT_ORDER_EXPIRY_SECONDS = 15 * 60
+
+# A1 (mandat de reprise du 08/10/2026, voir docs/DECISIONS.md) : délai de
+# grâce avant qu'une position broker sans trace en base soit enregistrée
+# par `reconcile_untracked_broker_positions` — l'enregistrement normal
+# (open_signal/_rescue_uncancelled_leg_orders) peut être retardé de
+# plusieurs minutes (constaté le 07/10/2026), l'enregistrer trop tôt
+# créerait un doublon transitoire.
+UNTRACKED_POSITION_GRACE_SECONDS = 10 * 60
 
 DIRECTION_TO_API = {"long": "BUY", "short": "SELL"}
 
@@ -1018,6 +1027,169 @@ def _rescue_uncancelled_leg_orders(
             f"{len(pending)} encore en attente — enregistré(s) en base, taille ramenée à {kept}."
         ))
     return filled[0][1] if filled else pending[0][1]
+
+
+def _parse_broker_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def reconcile_untracked_broker_positions(
+    db_path: str, client: CapitalClient, source: str, whitelist: dict,
+    grace_period_seconds: int = UNTRACKED_POSITION_GRACE_SECONDS,
+    risk_percent_default: float = 2.0,
+    bot_token: Optional[str] = None, chat_id: Optional[str] = None,
+) -> int:
+    """A1 (mandat de reprise du 08/10/2026, voir docs/DECISIONS.md) :
+    réconciliation GÉNÉRALE, périodique — toute position broker SANS
+    AUCUNE trace en base (ni `trades.deal_id`, ni
+    `trade_legs.order_deal_id`/`position_deal_id`, quel que soit leur
+    statut) est retrouvée et enregistrée. Couvre le cas que
+    `_rescue_uncancelled_leg_orders` (A2) ne couvre PAS : la réponse du
+    TOUT PREMIER appel `client.place_limit_order()` d'un trade se perd
+    avant que son `deal_id` soit capturé — `_place_limit_orders` lève
+    alors avec `uncancelled_orders=[]` (rien à annuler, rien à
+    rechercher), le trade correspondant n'existe jamais en base.
+
+    Idempotente par dealId : un identifiant déjà référencé N'EST JAMAIS
+    réenregistré, quel que soit le statut du trade/de la jambe qui le
+    référence. Délai de grâce (`grace_period_seconds`, §A1 du mandat du
+    08/10/2026) avant tout enregistrement — l'enregistrement normal peut
+    être retardé de plusieurs minutes (constaté le 07/10/2026),
+    l'enregistrer trop tôt créerait un doublon transitoire.
+
+    Une position dont l'actif (`market.epic`) n'est pas dans `whitelist`,
+    ou sans stop/niveau/taille connus côté broker, n'est JAMAIS enregistrée
+    automatiquement (fail-safe, invariant #7) — seulement journalisée et
+    notifiée, pour une vérification manuelle.
+
+    « Jambe sœur déjà en base » : si un trade `statut='ouvert'` du même
+    (actif, source) existe déjà, ouvert dans la même fenêtre de grâce,
+    avec moins de 3 jambes connues, la position retrouvée est rattachée
+    à ce trade comme la jambe manquante (son `risque_eur` est augmenté
+    d'autant) plutôt que de créer un second trade pour la même ouverture
+    d'origine. Sinon un nouveau trade est créé. Ni l'un ni l'autre chemin
+    ne modifie jamais `stop_loss_courant`/`stop_loss_initial` d'un trade
+    existant — un stop ne peut jamais être élargi par cette fonction, qui
+    ne les touche tout simplement jamais.
+
+    Retourne le nombre de positions enregistrées (nouveau trade ou jambe
+    rattachée)."""
+    positions = client.get_open_positions()
+
+    with connection_scope(db_path) as conn:
+        known_deal_ids = {row[0] for row in conn.execute("SELECT deal_id FROM trades WHERE deal_id IS NOT NULL")}
+        known_deal_ids |= {
+            row[0] for row in conn.execute(
+                "SELECT order_deal_id FROM trade_legs WHERE order_deal_id IS NOT NULL"
+            )
+        }
+        known_deal_ids |= {
+            row[0] for row in conn.execute(
+                "SELECT position_deal_id FROM trade_legs WHERE position_deal_id IS NOT NULL"
+            )
+        }
+
+    now = datetime.now(timezone.utc)
+    registered = 0
+
+    for item in positions:
+        pos = item.get("position", {})
+        market = item.get("market", {})
+        deal_id = pos.get("dealId")
+        working_order_id = pos.get("workingOrderId")
+        if deal_id in known_deal_ids or (working_order_id is not None and working_order_id in known_deal_ids):
+            continue
+
+        created = pos.get("createdDateUTC")
+        if not created:
+            logger.warning("Position broker %s sans createdDateUTC — délai de grâce impossible à évaluer, ignorée.", deal_id)
+            continue
+        created_at = _parse_broker_timestamp(created)
+        if (now - created_at).total_seconds() < grace_period_seconds:
+            continue
+
+        asset = market.get("epic")
+        asset_spec: Optional[AssetSpec] = whitelist.get(asset) if asset else None
+        stop_level = pos.get("stopLevel")
+        level = pos.get("level")
+        size = pos.get("size")
+        direction_api = pos.get("direction")
+        if asset_spec is None or stop_level is None or level is None or not size or direction_api not in DIRECTION_TO_API.values():
+            logger.warning(
+                "Position broker non suivie %s (actif=%s) hors enregistrement automatique "
+                "(actif/stop/niveau/taille/direction manquant ou non reconnu) — vérification manuelle requise.",
+                deal_id, asset,
+            )
+            if bot_token and chat_id:
+                send_notification(bot_token, chat_id, (
+                    f"⚠️ Position broker {deal_id} ({asset}) non suivie en base, données insuffisantes pour "
+                    "un enregistrement automatique sûr — à vérifier à la main."
+                ))
+            continue
+
+        direction = "long" if direction_api == "BUY" else "short"
+        leg_risque_eur = round(abs(level - stop_level) * size * asset_spec.pip_value_per_unit, 2)
+        created_iso = created_at.isoformat()
+
+        with connection_scope(db_path) as conn:
+            sibling = conn.execute(
+                "SELECT id, ouvert_at FROM trades WHERE actif = ? AND source = ? AND statut = 'ouvert'",
+                (asset, source),
+            ).fetchall()
+            attached = False
+            for row in sibling:
+                try:
+                    sibling_opened_at = _parse_broker_timestamp(row["ouvert_at"])
+                except ValueError:
+                    continue
+                if abs((created_at - sibling_opened_at).total_seconds()) > grace_period_seconds:
+                    continue
+                existing_legs = conn.execute(
+                    "SELECT palier FROM trade_legs WHERE trade_id = ?", (row["id"],)
+                ).fetchall()
+                used_paliers = {leg_row["palier"] for leg_row in existing_legs}
+                remaining_paliers = [p for p in LEG_PALIERS if p not in used_paliers]
+                if not remaining_paliers:
+                    continue
+                conn.execute(
+                    "INSERT INTO trade_legs (trade_id, palier, taille, position_deal_id, statut, prix_entree_reel) "
+                    "VALUES (?, ?, ?, ?, 'ouvert', ?)",
+                    (row["id"], remaining_paliers[0], size, deal_id, level),
+                )
+                conn.execute(
+                    "UPDATE trades SET risque_eur = risque_eur + ? WHERE id = ?",
+                    (leg_risque_eur, row["id"]),
+                )
+                attached = True
+                break
+            if not attached:
+                conn.execute(
+                    "INSERT INTO trades (deal_id, source, actif, mode, direction, taille_initiale, "
+                    "prix_entree_reel, guaranteed_stop, stop_loss_initial, stop_loss_courant, risque_eur, "
+                    "pourcentage_risque_applique, ouvert_at, statut) "
+                    "VALUES (?, ?, ?, 'demo', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ouvert')",
+                    (
+                        deal_id, source, asset, direction, size, level,
+                        1 if pos.get("guaranteedStop") else 0, stop_level, stop_level,
+                        leg_risque_eur, risk_percent_default, created_iso,
+                    ),
+                )
+        registered += 1
+        logger.error(
+            "Position broker %s (%s, %s) sans trace en base retrouvée après %ds — enregistrée (%s).",
+            deal_id, asset, source, grace_period_seconds, "jambe rattachée" if attached else "nouveau trade",
+        )
+        if bot_token and chat_id:
+            send_notification(bot_token, chat_id, (
+                f"⚠️ Position broker {deal_id} ({asset}, {source}) retrouvée sans trace en base — "
+                f"enregistrée ({'jambe rattachée à un trade existant' if attached else 'nouveau trade'}), "
+                f"risque≈{leg_risque_eur}€."
+            ))
+
+    return registered
 
 
 def open_signal(
