@@ -12905,3 +12905,45 @@ suivis comme "non annulés"), probablement un nouveau passage périodique
 analogue à `check_pending_fills`, jamais écrit faute de budget de
 session restant. Aucune ligne d'`executor.py` modifiée. Branche
 `a1a2-08-10` créée, vide de tout changement de code.
+
+## 2026-10-08 (reprise 2) — Étape 1 : vérification du nettoyage du 07/10, aucune incohérence actionnable
+
+- **Combo H2 (14877 CHFJPY/15948 BTCUSD/16329 GBPUSD)** : contrairement au
+  libellé "orphelines... jamais réconciliées en base" du rapport du
+  07/10 soir, ces 3 trades ÉTAIENT suivis en base depuis plusieurs
+  semaines (ouverts 08-24/09/2026) — ce n'étaient pas des orphelins,
+  mais des trades frappés par l'anomalie déjà connue et déjà exclue des
+  stats `anomalie_technique='tp1_cloture_totale_broker'` (clôture totale
+  involontaire côté broker au TP1, cassant le cycle tp1/tp2/runner et
+  laissant `trades.statut='ouvert'` indéfiniment). Fermés par le script
+  à 20:10:37-48 UTC le 07/10, *exactement* au moment du commit `17a9572`
+  (22:11:12 CEST = 20:11:12 UTC) qui rapporte le succès — c'est la MÊME
+  action, pas deux événements contradictoires. Libellé imprécis du
+  rapport du 07/10 à corriger mentalement, aucune conséquence (déjà
+  exclus des stats par le mécanisme existant).
+- **"3 orphelines H2 US30/US100/GOLD"** : étaient des positions
+  distinctes des trades 16885/16891/16906 actuels (normalement suivis,
+  ouverts le 07/10 avant 20h, gérés normalement depuis — 16906/US100
+  déjà fermé par son propre stop le 08/10 à 10:30 UTC). Aucun log brut
+  horodaté de l'`--apply` n'a été conservé (stdout non redirigé vers un
+  fichier) — reconstitué uniquement via les timestamps `trades.ferme_at`
+  et le commit, pas de détail par dealId récupérable rétroactivement.
+- **Snapshot FRAIS du 08/10 ~19:34 UTC, lecture broker réelle sur les 5
+  comptes (main/StationX+H1, H2, H3, H4, H5)** via
+  `scripts/_verif_etat_broker_08-10.py` (nouveau, lecture seule, 15
+  appels HTTP consommés sur le budget de session) : **21 positions
+  ouvertes au broker = 21 jambes `trade_legs.statut='ouvert'` en base,
+  correspondance 1:1 parfaite, 0 écart dans les deux sens.** Le script
+  initial comparait au seul `trades.deal_id` (qui ne pointe que sur la
+  jambe tp1 d'origine) et remontait 17 "non suivies" + 5 "fantômes" —
+  tous résolus en rejoignant `trade_legs.position_deal_id` (corrigé dans
+  le script avant de le laisser sur le VPS pour réemploi futur).
+- **Plafond de cluster PAR CLUSTER (vs 224,77€ qui était une somme tous
+  clusters confondus)**, snapshot du 08/10 : indices 9,44€, fx_majors_jpy
+  38,76€, crypto 29,44€, gold 10,02€ — **aucun cluster au-dessus du
+  plafond de 50€** actuellement. Concentration vendeuse BTCUSD (H2+H4)/
+  ETHUSD (H2) confirmée (3 positions short, aucune longue) mais sous le
+  plafond.
+- **Conclusion étape 1 : aucun écart actionnable aujourd'hui, aucun
+  script de réconciliation correctif à préparer** (le nettoyage du
+  07/10 est resté stable, rien à refermer). Repris à l'étape 2 (A1/A2).
