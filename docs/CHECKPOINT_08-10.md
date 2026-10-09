@@ -142,3 +142,24 @@ Mandat de reprise du 08/10/2026 clos (rapport final
   `docs/CHECKLIST_10-10_UNIQUE.md` étapes 2 à 9 pour la suite exacte.
 - Étape 6 (décision 7 H5) : TERMINÉE — défaut appliqué, voir
   `docs/DECISIONS.md` (une ligne, ci-dessous).
+
+---
+
+## Tentative de redéploiement du 09/10/2026 — STOP avant redémarrage
+
+Pré-contrôles (étape 0, lecture seule) : tous passés SAUF un —
+`verify_broker_readonly.py` a trouvé une position H3/ETHUSD
+(0,234 lot, âge 10,8h) ouverte au broker et absente de la base
+(ni `trades`, ni `trade_legs`). Précondition « aucune position
+ouverte non réconciliée » non remplie → **redémarrage, surveillance
+60 min et activations (financement/shadows/crons) NON effectués**.
+Détail complet dans `docs/DECISIONS.md` (entrée du 09/10/2026).
+
+**À faire avant toute nouvelle tentative** : investiguer/réconcilier
+manuellement la position H3/ETHUSD orpheline (voir commande de lecture
+`scripts/verify_broker_readonly.py` sur le VPS), puis relancer la
+séquence `docs/CHECKLIST_10-10_UNIQUE.md` à partir de l'étape 1.
+Note subsidiaire : `docs/CHECKLIST_10-10_UNIQUE.md` étape 8 est
+légèrement obsolète — le patch E2 est déjà intégré dans `c0b2dad`,
+seul le switch `system_state.e2_enabled` + le cron restent à faire,
+le `git apply` échouera (déjà appliqué).

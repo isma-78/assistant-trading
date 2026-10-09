@@ -228,28 +228,31 @@ sinon anomalie grave — voir retour arrière).
 
 ---
 
-## Étape 8 — E2 ON (seulement si toutes les conditions ci-dessus sont validées)
+## Étape 8 — E2 ON (seulement si toutes les conditions ci-dessus sont validées, et pas avant lundi après l'ouverture du forex, sans anomalie)
 
-**Préalable** : le diff `docs/PATCH_EXECUTOR_E2_PROPOSE.diff` doit être
-APPLIQUÉ à `src/executor.py` (jamais fait par l'agent — seul point
-d'appel autorisé du resserrement de stop) et un test prouvant
-l'impossibilité d'élargir doit passer (`tests/test_stop_tightening_
-retry.py::test_e2_on_stop_widening_blocked_even_if_risk_engine_wrongly_
-approves`, déjà présent et vert).
-
+**Correction du 09/10/2026** : `docs/PATCH_EXECUTOR_E2_PROPOSE.diff` est
+**déjà intégré dans `c0b2dad`** (`_push_stop_to_broker` route déjà via
+`src.execution.stop_tightening_retry.attempt_with_retry`, voir
+`docs/DECISIONS.md` du 08/10/2026 « reprise 2 », étape 3). Il n'y a donc
+**plus de `git apply` à faire** — un `git apply` de ce diff échouerait
+(« patch does not apply », déjà présent). Seul reste à faire :
+l'interrupteur `system_state.e2_enabled` et le cron de mesure, ci-dessous.
+Le test d'impossibilité d'élargir
+(`tests/test_executor_e2_integration.py::...stop_widening_blocked...`)
+est déjà présent et vert dans la suite actuelle — vérifier simplement
+qu'elle est toujours 100% verte avant d'activer :
 ```bash
 cd ~/assistant-trading
-git apply --check docs/PATCH_EXECUTOR_E2_PROPOSE.diff   # doit réussir sans erreur
-git apply docs/PATCH_EXECUTOR_E2_PROPOSE.diff
 venv/bin/python -m pytest -q -p no:cacheprovider
 ```
-Si la suite n'est pas 100% verte après le patch : **STOP, annuler le
-patch** (`git checkout -- src/executor.py`), E2 reste OFF.
+Si la suite n'est pas 100% verte : **STOP**, E2 reste OFF, investiguer
+avant toute activation.
 
-Si verte, redémarrer les exécuteurs pour charger le nouveau code, PUIS
-activer :
+Si verte, activer directement (le code est déjà en place, aucun
+redémarrage n'est nécessaire pour charger quoi que ce soit de nouveau
+ici — seule la lecture de `system_state.e2_enabled` au cycle suivant de
+chaque exécuteur compte) :
 ```bash
-scripts/restart_process.sh all
 venv/bin/python -c "import sqlite3; c=sqlite3.connect('data/assistant_trading.db'); c.execute(\"INSERT INTO system_state (key, value, updated_at) VALUES ('e2_enabled', 'true', datetime('now')) ON CONFLICT(key) DO UPDATE SET value='true', updated_at=datetime('now')\"); c.commit()"
 ```
 

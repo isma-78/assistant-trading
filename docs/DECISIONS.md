@@ -13029,3 +13029,46 @@ session restant. Aucune ligne d'`executor.py` modifiée. Branche
 ## 2026-10-08 (reprise 2) — Étape 6 : décision 7 H5, défaut maintenu
 
 n insuffisant pour trancher (MDE ≈ 2R à n=40, non atteint) — défaut appliqué : MAINTENIR la règle actuelle de l'Hypothèse #5, aucun changement de paramètre.
+
+## 2026-10-09 — Tentative de redéploiement c0b2dad : STOP avant redémarrage, position fantôme H3/ETHUSD non réconciliée
+
+Pré-contrôles (lecture seule) : démo confirmé par code (local + VPS) ;
+diff `src/db.py` e27b626→c0b2dad additif uniquement (3 nouvelles
+tables shadow_*, 1 commentaire modifié) ; 8 process vivants (watchdog) ;
+`docs/PATCH_EXECUTOR_E2_PROPOSE.diff` déjà intégré dans c0b2dad (ne
+s'applique plus tel quel — `docs/CHECKLIST_10-10_UNIQUE.md` étape 8 à
+corriger : seul le switch `system_state.e2_enabled` + cron restent à
+faire, pas de `git apply`). `verify_broker_readonly.py` (9/10 appels) :
+**1 position CRITIQUE détectée** — ETHUSD BUY 0,234 lot, compte H3,
+entrée≈2498,14, âge 10,8h, stop présent, **absente de la base**
+(`trade_legs`/`trades`), distincte des 3 jambes déjà suivies du trade
+16940 (même stop, entrée très proche 2497,94 — logs montrent un signal
+ETHUSD dupliqué sur 2 cycles consécutifs). `reconcile_ghost_positions`/
+`reconcile_untracked_broker_positions` (câblées, A1/A2) n'ont pas encore
+résorbé cette position (nombreux 502/429 transitoires du broker démo
+empêchent beaucoup de cycles de reconciliation d'aller jusqu'au bout).
+Lecture prudente retenue : précondition §6.4 du protocole non remplie
+(position ouverte non réconciliée) → **redémarrage (étape 2/3) NON
+effectué, surveillance 60 min NON lancée, aucune activation**. Pas un
+blocage du harnais — décision de prudence. Note positive : l'absence
+d'horodatage dans les journaux (A7) est déjà corrigée dans c0b2dad
+(`src/log_setup.py`, câblé dans les 8 entrypoints) — non bloquant,
+confirmé par lecture de code.
+
+## 2026-10-09 (reprise) — Étape A : position H3/ETHUSD NON clôturée, doute retenu
+
+Investigation (DB fraîche + 3 appels broker H3, aucun 429/502) :
+dealId `...9f05...` (0,234 lot, stop=2474.237168508598, créé
+2026-10-09T06:36:44.844Z) correspond au trade 16939 (`annule`,
+motif=`autre_echec_placement`, 0 jambe enregistrée, créé 06:36:44.257813Z
+— même seconde) : réponse perdue du tout premier appel de placement,
+scénario exact que `reconcile_untracked_broker_positions` (A1, déjà
+dans c0b2dad, pas encore chargée — e27b626 tourne toujours) est conçue
+pour corriger en ENREGISTRANT un nouveau trade (jamais en fermant, le
+trade frère 16940 a déjà ses 3 jambes). Lecture retenue : doute réel
+sur la pertinence d'une clôture via `nettoyage_broker_08-10.py`
+(détruirait le suivi P&L d'une position réelle, correctement stoppée,
+alors que le correctif déjà testé et prêt à charger fait mieux) →
+**NE PAS clôturer**, consigné, arrêt à l'étape A en attente de
+confirmation d'Ismaël avant toute action broker supplémentaire sur
+cette position.
