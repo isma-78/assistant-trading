@@ -13072,3 +13072,23 @@ alors que le correctif déjà testé et prêt à charger fait mieux) →
 **NE PAS clôturer**, consigné, arrêt à l'étape A en attente de
 confirmation d'Ismaël avant toute action broker supplémentaire sur
 cette position.
+
+## 2026-10-09 (reprise, suite) — Redéploiement c0b2dad effectué, shadows ON, E2 reste OFF jusqu'à lundi
+
+Position H3/ETHUSD : NON clôturée (voir entrée précédente du 09/10/2026),
+réconciliée automatiquement par `reconcile_untracked_broker_positions`
+dans la minute suivant le redémarrage (trade 16948 créé, 0,234 lot,
+risque≈4,99€) — confirme que c'était la bonne lecture. Redémarrage des 6
+exécuteurs sur `c0b2dad` effectué, 60 minutes de surveillance autonome
+(script hors dépôt, 31 cycles, 0 violation) : OK. Financement rattrapé
+(41 transactions depuis le 30/08). Shadow candidates (`*_v3cand`) ON
+depuis 19:36 UTC (crons installés, 0 ordre réel sur 30 min
+d'observation, 3 cycles, seuls des 429 isolés et déjà gérés en
+fail-safe). Shadow couples ON depuis ~20:12 UTC (même preuve : `trades`
+inchangée à 13207, 6 positions virtuelles `hypothesis2_v2_shadow_couples`
+dans `shadow_trades` uniquement). Crons installés dans l'ordre du
+CHECKLIST (rapport hebdo shadow, rapport couples, jalons shadow,
+rafraîchissement hebdo historique, fidélité mensuelle) — **E2 ET son
+cron de mesure restent volontairement absents** : règle non négociable,
+E2 ne sera activé qu'après l'ouverture du forex de lundi (12/10/2026),
+et seulement en l'absence d'anomalie sur le week-end/l'ouverture.
