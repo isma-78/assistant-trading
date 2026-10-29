@@ -44,3 +44,4 @@ db.sqlite
 data/analysis_29-10/*.db
 data/analysis_29-10/hist/
 data/analysis_29-10/hist_maj/
+data/backtest_29-10/B/

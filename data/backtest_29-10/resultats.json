@@ -1,0 +1,2413 @@
+{
+ "mapping": {
+  "H1": [
+   "GBPUSD",
+   "USDJPY"
+  ],
+  "H2": [
+   "GBPUSD",
+   "USDJPY"
+  ],
+  "H3": [
+   "GBPUSD",
+   "USDJPY"
+  ],
+  "H4": [
+   "US30",
+   "EURUSD"
+  ],
+  "H5": [
+   "GBPUSD",
+   "USDJPY"
+  ]
+ },
+ "rho": {
+  "H1": {
+   "BTCUSD|CHFJPY": -0.016,
+   "BTCUSD|ETHUSD": 0.16,
+   "BTCUSD|EURUSD": -0.073,
+   "BTCUSD|GBPUSD": 0.056,
+   "BTCUSD|GOLD": 0.007,
+   "BTCUSD|US100": -0.052,
+   "BTCUSD|US30": 0.047,
+   "BTCUSD|USDJPY": -0.162,
+   "CHFJPY|ETHUSD": -0.015,
+   "CHFJPY|EURUSD": -0.106,
+   "CHFJPY|GBPUSD": -0.115,
+   "CHFJPY|GOLD": 0.129,
+   "CHFJPY|US100": -0.073,
+   "CHFJPY|US30": 0.058,
+   "CHFJPY|USDJPY": 0.045,
+   "ETHUSD|EURUSD": 0.015,
+   "ETHUSD|GBPUSD": 0.111,
+   "ETHUSD|GOLD": -0.06,
+   "ETHUSD|US100": 0.045,
+   "ETHUSD|US30": -0.141,
+   "ETHUSD|USDJPY": -0.016,
+   "EURUSD|GBPUSD": 0.103,
+   "EURUSD|GOLD": -0.017,
+   "EURUSD|US100": -0.053,
+   "EURUSD|US30": -0.059,
+   "EURUSD|USDJPY": -0.061,
+   "GBPUSD|GOLD": -0.13,
+   "GBPUSD|US100": 0.199,
+   "GBPUSD|US30": -0.016,
+   "GBPUSD|USDJPY": -0.027,
+   "GOLD|US100": -0.149,
+   "GOLD|US30": 0.009,
+   "GOLD|USDJPY": -0.028,
+   "US100|US30": 0.144,
+   "US100|USDJPY": 0.04,
+   "US30|USDJPY": -0.096
+  },
+  "H2": {
+   "BTCUSD|ETHUSD": 0.257,
+   "BTCUSD|EURUSD": 0.026,
+   "BTCUSD|GBPUSD": -0.02,
+   "BTCUSD|GOLD": -0.075,
+   "BTCUSD|US100": -0.088,
+   "BTCUSD|US30": 0.073,
+   "BTCUSD|USDJPY": -0.095,
+   "ETHUSD|EURUSD": 0.135,
+   "ETHUSD|GBPUSD": 0.14,
+   "ETHUSD|GOLD": -0.026,
+   "ETHUSD|US100": -0.009,
+   "ETHUSD|US30": 0.13,
+   "ETHUSD|USDJPY": -0.027,
+   "EURUSD|GBPUSD": 0.394,
+   "EURUSD|GOLD": 0.06,
+   "EURUSD|US100": 0.131,
+   "EURUSD|US30": 0.012,
+   "EURUSD|USDJPY": -0.065,
+   "GBPUSD|GOLD": 0.066,
+   "GBPUSD|US100": -0.103,
+   "GBPUSD|US30": -0.064,
+   "GBPUSD|USDJPY": -0.097,
+   "GOLD|US100": 0.153,
+   "GOLD|US30": -0.087,
+   "GOLD|USDJPY": -0.117,
+   "US100|US30": 0.08,
+   "US100|USDJPY": 0.019,
+   "US30|USDJPY": 0.035
+  },
+  "H3": {
+   "BTCUSD|ETHUSD": 0.012,
+   "BTCUSD|EURUSD": 0.088,
+   "BTCUSD|GBPUSD": -0.026,
+   "BTCUSD|GOLD": 0.118,
+   "BTCUSD|US100": -0.059,
+   "BTCUSD|US30": 0.113,
+   "BTCUSD|USDJPY": -0.073,
+   "ETHUSD|EURUSD": 0.068,
+   "ETHUSD|GBPUSD": -0.005,
+   "ETHUSD|GOLD": 0.044,
+   "ETHUSD|US100": -0.059,
+   "ETHUSD|US30": -0.019,
+   "ETHUSD|USDJPY": -0.11,
+   "EURUSD|GBPUSD": 0.115,
+   "EURUSD|GOLD": -0.06,
+   "EURUSD|US100": -0.044,
+   "EURUSD|US30": -0.089,
+   "EURUSD|USDJPY": -0.181,
+   "GBPUSD|GOLD": -0.061,
+   "GBPUSD|US100": 0.019,
+   "GBPUSD|US30": -0.002,
+   "GBPUSD|USDJPY": 0.047,
+   "GOLD|US100": -0.03,
+   "GOLD|US30": 0.03,
+   "GOLD|USDJPY": 0.04,
+   "US100|US30": 0.169,
+   "US100|USDJPY": 0.056,
+   "US30|USDJPY": 0.11
+  },
+  "H4": {
+   "BTCUSD|ETHUSD": 0.149,
+   "BTCUSD|EURUSD": -0.095,
+   "BTCUSD|GBPUSD": -0.079,
+   "BTCUSD|GOLD": 0.02,
+   "BTCUSD|US100": -0.023,
+   "BTCUSD|US30": -0.145,
+   "BTCUSD|USDJPY": 0.039,
+   "ETHUSD|EURUSD": 0.051,
+   "ETHUSD|GBPUSD": -0.102,
+   "ETHUSD|GOLD": -0.071,
+   "ETHUSD|US100": -0.1,
+   "ETHUSD|US30": -0.034,
+   "ETHUSD|USDJPY": 0.119,
+   "EURUSD|GBPUSD": 0.143,
+   "EURUSD|GOLD": 0.044,
+   "EURUSD|US100": -0.113,
+   "EURUSD|US30": -0.054,
+   "EURUSD|USDJPY": -0.02,
+   "GBPUSD|GOLD": -0.072,
+   "GBPUSD|US100": 0.043,
+   "GBPUSD|US30": 0.015,
+   "GBPUSD|USDJPY": -0.086,
+   "GOLD|US100": -0.021,
+   "GOLD|US30": -0.086,
+   "GOLD|USDJPY": -0.004,
+   "US100|US30": 0.18,
+   "US100|USDJPY": 0.069,
+   "US30|USDJPY": 0.104
+  },
+  "H5": {
+   "BTCUSD|ETHUSD": 0.253,
+   "BTCUSD|EURUSD": -0.031,
+   "BTCUSD|GBPUSD": -0.129,
+   "BTCUSD|GOLD": -0.065,
+   "BTCUSD|US100": 0.165,
+   "BTCUSD|US30": -0.022,
+   "BTCUSD|USDJPY": 0.064,
+   "ETHUSD|EURUSD": -0.123,
+   "ETHUSD|GBPUSD": -0.087,
+   "ETHUSD|GOLD": -0.09,
+   "ETHUSD|US100": 0.083,
+   "ETHUSD|US30": -0.132,
+   "ETHUSD|USDJPY": 0.01,
+   "EURUSD|GBPUSD": 0.374,
+   "EURUSD|GOLD": 0.137,
+   "EURUSD|US100": -0.032,
+   "EURUSD|US30": 0.255,
+   "EURUSD|USDJPY": 0.079,
+   "GBPUSD|GOLD": 0.045,
+   "GBPUSD|US100": -0.122,
+   "GBPUSD|US30": 0.148,
+   "GBPUSD|USDJPY": -0.058,
+   "GOLD|US100": -0.051,
+   "GOLD|US30": -0.02,
+   "GOLD|USDJPY": 0.167,
+   "US100|US30": -0.059,
+   "US100|USDJPY": 0.031,
+   "US30|USDJPY": -0.038
+  }
+ },
+ "cluster_cap_forex_test": {
+  "trades": 1751,
+  "bloques": 264
+ },
+ "ecarts_structure": [
+  [
+   "H1",
+   "BTCUSD",
+   "inadapt\u00e9",
+   212,
+   0.020201764392525936,
+   "non concluant",
+   "structure non adapt\u00e9e mais R test positif"
+  ],
+  [
+   "H1",
+   "EURUSD",
+   "inadapt\u00e9",
+   67,
+   0.040201642053091124,
+   "non concluant",
+   "structure non adapt\u00e9e mais R test positif"
+  ],
+  [
+   "H1",
+   "GBPUSD",
+   "adapt\u00e9",
+   114,
+   -0.2804177552459003,
+   "non concluant",
+   "structure adapt\u00e9e mais R test n\u00e9gatif"
+  ],
+  [
+   "H1",
+   "GOLD",
+   "inadapt\u00e9",
+   126,
+   0.2634951017928324,
+   "non concluant",
+   "structure non adapt\u00e9e mais R test positif"
+  ],
+  [
+   "H1",
+   "US30",
+   "inadapt\u00e9",
+   131,
+   0.04425758302349783,
+   "non concluant",
+   "structure non adapt\u00e9e mais R test positif"
+  ],
+  [
+   "H1",
+   "USDJPY",
+   "adapt\u00e9",
+   121,
+   -0.1512974921547032,
+   "non concluant",
+   "structure adapt\u00e9e mais R test n\u00e9gatif"
+  ],
+  [
+   "H2",
+   "GBPUSD",
+   "adapt\u00e9",
+   46,
+   -0.45707268464607376,
+   "non concluant",
+   "structure adapt\u00e9e mais R test n\u00e9gatif"
+  ],
+  [
+   "H2",
+   "GOLD",
+   "inadapt\u00e9",
+   372,
+   0.030069044499903184,
+   "non concluant",
+   "structure non adapt\u00e9e mais R test positif"
+  ],
+  [
+   "H2",
+   "USDJPY",
+   "adapt\u00e9",
+   318,
+   -0.11593845999331973,
+   "non concluant",
+   "structure adapt\u00e9e mais R test n\u00e9gatif"
+  ],
+  [
+   "H3",
+   "GBPUSD",
+   "adapt\u00e9",
+   122,
+   -0.1236640244465911,
+   "non concluant",
+   "structure adapt\u00e9e mais R test n\u00e9gatif"
+  ],
+  [
+   "H3",
+   "GOLD",
+   "inadapt\u00e9",
+   128,
+   0.13003762900743207,
+   "non concluant",
+   "structure non adapt\u00e9e mais R test positif"
+  ],
+  [
+   "H3",
+   "USDJPY",
+   "adapt\u00e9",
+   112,
+   -0.2149416520943117,
+   "non concluant",
+   "structure adapt\u00e9e mais R test n\u00e9gatif"
+  ],
+  [
+   "H4",
+   "ETHUSD",
+   "inadapt\u00e9",
+   136,
+   0.08100945836478257,
+   "non concluant",
+   "structure non adapt\u00e9e mais R test positif"
+  ],
+  [
+   "H4",
+   "GBPUSD",
+   "adapt\u00e9",
+   95,
+   -0.1030211681158316,
+   "non concluant",
+   "structure adapt\u00e9e mais R test n\u00e9gatif"
+  ],
+  [
+   "H4",
+   "US100",
+   "adapt\u00e9",
+   136,
+   -0.04357452258243475,
+   "non concluant",
+   "structure adapt\u00e9e mais R test n\u00e9gatif"
+  ],
+  [
+   "H4",
+   "US30",
+   "adapt\u00e9",
+   126,
+   -0.15493476275068294,
+   "non concluant",
+   "structure adapt\u00e9e mais R test n\u00e9gatif"
+  ],
+  [
+   "H5",
+   "GBPUSD",
+   "adapt\u00e9",
+   76,
+   -0.3756796288683394,
+   "non concluant",
+   "structure adapt\u00e9e mais R test n\u00e9gatif"
+  ],
+  [
+   "H5",
+   "GOLD",
+   "inadapt\u00e9",
+   83,
+   0.20535232589963048,
+   "non concluant",
+   "structure non adapt\u00e9e mais R test positif"
+  ],
+  [
+   "H5",
+   "US100",
+   "inadapt\u00e9",
+   86,
+   0.05696178772774725,
+   "non concluant",
+   "structure non adapt\u00e9e mais R test positif"
+  ]
+ ],
+ "pairs": [
+  {
+   "h": "H1",
+   "asset": "BTCUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 375,
+    "r_train": -0.5097855998407943,
+    "n_test": 32,
+    "r_test": -0.5045179369947314,
+    "ci": [
+     -0.8737266653786463,
+     -0.1353092086108164
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.14403597631346737,
+    "wf": 0,
+    "top3": 0.4629687428858997,
+    "dd": 16.144573983831407,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 616,
+    "orders_unfilled": 209,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 63,
+    "r_train": 0.011814104362379714,
+    "n_test": 212,
+    "r_test": 0.020201764392525936,
+    "ci": [
+     -0.12941469336522596,
+     0.16981822215027784
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 2,
+    "top3": 0.06551564469497678,
+    "dd": 18.41666693831974,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 313,
+    "orders_unfilled": 38,
+    "orders_prechecked_out": 740
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H1",
+   "asset": "CHFJPY",
+   "final": "non concluant",
+   "A": {
+    "n_train": 353,
+    "r_train": -0.24635439963106445,
+    "n_test": 53,
+    "r_test": -0.38090674846195915,
+    "ci": [
+     -0.6579005368712122,
+     -0.10391296005270612
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.13160703788318093,
+    "wf": 0,
+    "top3": 0.262899793990781,
+    "dd": 21.824650995276688,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 453,
+    "orders_unfilled": 47,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 299,
+    "r_train": -0.2466582710308888,
+    "n_test": 92,
+    "r_test": -0.30762102375272377,
+    "ci": [
+     -0.5571093113372372,
+     -0.05813273616821038
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.3002901546700664,
+    "wf": 0,
+    "top3": 0.15042403881319055,
+    "dd": 33.782388951955575,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 428,
+    "orders_unfilled": 37,
+    "orders_prechecked_out": 180
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H1",
+   "asset": "ETHUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 434,
+    "r_train": -0.4312306133003108,
+    "n_test": 81,
+    "r_test": 0.0688131362423533,
+    "ci": [
+     -0.21784185963992947,
+     0.35546813212463607
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.23710503953648907,
+    "dd": 13.48509734405079,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 738,
+    "orders_unfilled": 223,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 56,
+    "r_train": -0.1457917174325058,
+    "n_test": 235,
+    "r_test": -0.15535334392887298,
+    "ci": [
+     -0.2961193974173537,
+     -0.014587290440392253
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.5377301732649563,
+    "wf": 0,
+    "top3": 0.06075160490977467,
+    "dd": 38.19263222053238,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 325,
+    "orders_unfilled": 34,
+    "orders_prechecked_out": 760
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H1",
+   "asset": "EURUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 398,
+    "r_train": -0.1288947015124255,
+    "n_test": 102,
+    "r_test": -0.13916610797743345,
+    "ci": [
+     -0.34514918538281636,
+     0.06681696942794949
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.11072999200085511,
+    "dd": 19.018801221444182,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 536,
+    "orders_unfilled": 36,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 389,
+    "r_train": -0.10079640209214283,
+    "n_test": 67,
+    "r_test": 0.040201642053091124,
+    "ci": [
+     -0.2080601807583698,
+     0.28846346486455204
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.16367652846557637,
+    "dd": 8.255119622730478,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 480,
+    "orders_unfilled": 24,
+    "orders_prechecked_out": 37
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H1",
+   "asset": "GBPUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 394,
+    "r_train": -0.05532108541879633,
+    "n_test": 110,
+    "r_test": -0.20511661225286376,
+    "ci": [
+     -0.39993383461508136,
+     -0.010299389890646132
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.5947381052867359,
+    "wf": 1,
+    "top3": 0.14643669466287468,
+    "dd": 28.682074518582862,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 541,
+    "orders_unfilled": 37,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 384,
+    "r_train": -0.03889085834582121,
+    "n_test": 114,
+    "r_test": -0.2804177552459003,
+    "ci": [
+     -0.4724038377631127,
+     -0.0884316727286879
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.08909776113965673,
+    "wf": 1,
+    "top3": 0.14883471194624767,
+    "dd": 38.595850021914025,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 522,
+    "orders_unfilled": 24,
+    "orders_prechecked_out": 49
+   },
+   "structural": "adapt\u00e9"
+  },
+  {
+   "h": "H1",
+   "asset": "GOLD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 410,
+    "r_train": -0.1563645285725642,
+    "n_test": 111,
+    "r_test": 0.1315658551962358,
+    "ci": [
+     -0.07442184330288487,
+     0.33755355369535645
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.09946002653296676,
+    "dd": 5.402243066225347,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 576,
+    "orders_unfilled": 55,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 383,
+    "r_train": -0.17866390233183418,
+    "n_test": 126,
+    "r_test": 0.2634951017928324,
+    "ci": [
+     0.06589046279665237,
+     0.4610997407890125
+    ],
+    "p_pos_holm": 0.192120992474635,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.077604044886593,
+    "dd": 6.904010549379219,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 555,
+    "orders_unfilled": 46,
+    "orders_prechecked_out": 41
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H1",
+   "asset": "US100",
+   "final": "non concluant",
+   "A": {
+    "n_train": 435,
+    "r_train": 0.022550493739881803,
+    "n_test": 200,
+    "r_test": -0.04105248331032394,
+    "ci": [
+     -0.19474554239368744,
+     0.11264057577303957
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 2,
+    "top3": 0.06811196911672918,
+    "dd": 18.925391314597384,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 680,
+    "orders_unfilled": 45,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 430,
+    "r_train": 0.03327857067061761,
+    "n_test": 203,
+    "r_test": -0.07770104890609135,
+    "ci": [
+     -0.22866965664614403,
+     0.07326755883396131
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 2,
+    "top3": 0.06992097179669693,
+    "dd": 26.704643756879342,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 676,
+    "orders_unfilled": 43,
+    "orders_prechecked_out": 7
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H1",
+   "asset": "US30",
+   "final": "non concluant",
+   "A": {
+    "n_train": 418,
+    "r_train": -0.10927229578523649,
+    "n_test": 117,
+    "r_test": -0.07020167785627454,
+    "ci": [
+     -0.2699768848764662,
+     0.1295735291639171
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.10531239022261434,
+    "dd": 19.29595398988603,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 573,
+    "orders_unfilled": 38,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 413,
+    "r_train": -0.09003643383561799,
+    "n_test": 131,
+    "r_test": 0.04425758302349783,
+    "ci": [
+     -0.15661489792142638,
+     0.24513006396842205
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.09248549919112081,
+    "dd": 14.880599703877444,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 577,
+    "orders_unfilled": 33,
+    "orders_prechecked_out": 11
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H1",
+   "asset": "USDJPY",
+   "final": "non concluant",
+   "A": {
+    "n_train": 418,
+    "r_train": -0.08182141924176972,
+    "n_test": 99,
+    "r_test": -0.17929979149087277,
+    "ci": [
+     -0.4004435201121028,
+     0.04184393713035728
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.1599299779602176,
+    "dd": 19.08480848871233,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 563,
+    "orders_unfilled": 46,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 416,
+    "r_train": -0.05859059370869725,
+    "n_test": 121,
+    "r_test": -0.1512974921547032,
+    "ci": [
+     -0.343078283831556,
+     0.040483299522149574
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.12341537700036394,
+    "dd": 19.633223702251765,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 575,
+    "orders_unfilled": 38,
+    "orders_prechecked_out": 36
+   },
+   "structural": "adapt\u00e9"
+  },
+  {
+   "h": "H2",
+   "asset": "BTCUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 104,
+    "r_train": -1.90111756258491,
+    "n_test": 0,
+    "r_test": null,
+    "ci": [
+     null,
+     null
+    ],
+    "p_pos_holm": null,
+    "p_neg_holm": null,
+    "wf": 1,
+    "top3": null,
+    "dd": 0.0,
+    "verdict": "non concluant",
+    "reasons": [
+     "n_test=0 < 30"
+    ],
+    "orders_placed": 153,
+    "orders_unfilled": 49,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 230,
+    "r_train": -0.030769034045521153,
+    "n_test": 329,
+    "r_test": -0.15654750370362888,
+    "ci": [
+     -0.27109400294926855,
+     -0.042001004457989224
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.14331375154939077,
+    "wf": 1,
+    "top3": 0.049272230252015776,
+    "dd": 52.231064831050944,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 649,
+    "orders_unfilled": 89,
+    "orders_prechecked_out": 2467
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H2",
+   "asset": "ETHUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 30,
+    "r_train": -2.5732005694389666,
+    "n_test": 0,
+    "r_test": null,
+    "ci": [
+     null,
+     null
+    ],
+    "p_pos_holm": null,
+    "p_neg_holm": null,
+    "wf": 0,
+    "top3": null,
+    "dd": 0.0,
+    "verdict": "non concluant",
+    "reasons": [
+     "n_test=0 < 30"
+    ],
+    "orders_placed": 47,
+    "orders_unfilled": 17,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 282,
+    "r_train": -0.09358208275371042,
+    "n_test": 208,
+    "r_test": -0.06512739050598995,
+    "ci": [
+     -0.20897079519457518,
+     0.07871601418259527
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.06458449060893841,
+    "dd": 22.791595817516722,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 592,
+    "orders_unfilled": 101,
+    "orders_prechecked_out": 4108
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H2",
+   "asset": "EURUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 562,
+    "r_train": -0.4497459550139167,
+    "n_test": 14,
+    "r_test": -2.881679035247404,
+    "ci": [
+     -3.2422312185500783,
+     -2.52112685194473
+    ],
+    "p_pos_holm": null,
+    "p_neg_holm": null,
+    "wf": 0,
+    "top3": null,
+    "dd": 40.34350649346366,
+    "verdict": "non concluant",
+    "reasons": [
+     "n_test=14 < 30"
+    ],
+    "orders_placed": 614,
+    "orders_unfilled": 38,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 572,
+    "r_train": -0.13409920762414118,
+    "n_test": 74,
+    "r_test": -0.129654465181343,
+    "ci": [
+     -0.346369599842386,
+     0.08706066947970006
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.17048992876169794,
+    "dd": 11.66806275208346,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 677,
+    "orders_unfilled": 31,
+    "orders_prechecked_out": 785
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H2",
+   "asset": "GBPUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 464,
+    "r_train": -0.5694561496061706,
+    "n_test": 10,
+    "r_test": -4.050238095237026,
+    "ci": [
+     -5.211059417577405,
+     -2.889416772896646
+    ],
+    "p_pos_holm": null,
+    "p_neg_holm": null,
+    "wf": 0,
+    "top3": null,
+    "dd": 40.50238095237026,
+    "verdict": "non concluant",
+    "reasons": [
+     "n_test=10 < 30"
+    ],
+    "orders_placed": 509,
+    "orders_unfilled": 35,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 650,
+    "r_train": -0.11159385763463331,
+    "n_test": 46,
+    "r_test": -0.45707268464607376,
+    "ci": [
+     -0.7104567217379705,
+     -0.2036886475541771
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.014299328487898373,
+    "wf": 0,
+    "top3": 0.477726776843124,
+    "dd": 21.02534349371939,
+    "verdict": "SUPPRIMER",
+    "reasons": [
+     "n\u00e9gatif net, significatif (Holm)"
+    ],
+    "orders_placed": 737,
+    "orders_unfilled": 41,
+    "orders_prechecked_out": 2285
+   },
+   "structural": "adapt\u00e9"
+  },
+  {
+   "h": "H2",
+   "asset": "GOLD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 523,
+    "r_train": -0.21638144414347776,
+    "n_test": 108,
+    "r_test": -1.1319858651307884,
+    "ci": [
+     -1.5897967466675627,
+     -0.674174983594014
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 6.123090039378539e-05,
+    "wf": 0,
+    "top3": 0.4271015951020366,
+    "dd": 124.0904482382424,
+    "verdict": "SUPPRIMER",
+    "reasons": [
+     "n\u00e9gatif net, significatif (Holm)"
+    ],
+    "orders_placed": 677,
+    "orders_unfilled": 46,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 330,
+    "r_train": -0.11180131224619058,
+    "n_test": 372,
+    "r_test": 0.030069044499903184,
+    "ci": [
+     -0.08709367169906701,
+     0.14723176069887337
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.05129159259689659,
+    "dd": 13.712388380707345,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 746,
+    "orders_unfilled": 44,
+    "orders_prechecked_out": 219
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H2",
+   "asset": "US100",
+   "final": "SUPPRIMER",
+   "A": {
+    "n_train": 701,
+    "r_train": -0.210769323451225,
+    "n_test": 59,
+    "r_test": -1.3138349684603736,
+    "ci": [
+     -1.9051108469297662,
+     -0.7225590899909811
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.0006769890253809733,
+    "wf": 0,
+    "top3": 0.7706509362575916,
+    "dd": 77.516263139162,
+    "verdict": "SUPPRIMER",
+    "reasons": [
+     "n\u00e9gatif net, significatif (Holm)"
+    ],
+    "orders_placed": 827,
+    "orders_unfilled": 67,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 521,
+    "r_train": -0.12897210378799062,
+    "n_test": 296,
+    "r_test": -0.2674804959271736,
+    "ci": [
+     -0.3902907149668824,
+     -0.14467027688746478
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.0005047290687902577,
+    "wf": 0,
+    "top3": 0.088768241364768,
+    "dd": 81.06263612729947,
+    "verdict": "SUPPRIMER",
+    "reasons": [
+     "n\u00e9gatif net, significatif (Holm)"
+    ],
+    "orders_placed": 867,
+    "orders_unfilled": 50,
+    "orders_prechecked_out": 197
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H2",
+   "asset": "US30",
+   "final": "non concluant",
+   "A": {
+    "n_train": 434,
+    "r_train": -0.09593317452301334,
+    "n_test": 390,
+    "r_test": -0.2681910099610557,
+    "ci": [
+     -0.38412174082533435,
+     -0.15226027909677708
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.00012663357163497576,
+    "wf": 1,
+    "top3": 0.07639948061840252,
+    "dd": 105.53786702621169,
+    "verdict": "SUPPRIMER",
+    "reasons": [
+     "n\u00e9gatif net, significatif (Holm)"
+    ],
+    "orders_placed": 871,
+    "orders_unfilled": 47,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 432,
+    "r_train": -0.0262105840914383,
+    "n_test": 449,
+    "r_test": -0.09301919441006593,
+    "ci": [
+     -0.19206106855955846,
+     0.00602267973942662
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 2,
+    "top3": 0.056493524363056775,
+    "dd": 53.11247878517467,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 923,
+    "orders_unfilled": 42,
+    "orders_prechecked_out": 111
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H2",
+   "asset": "USDJPY",
+   "final": "non concluant",
+   "A": {
+    "n_train": 607,
+    "r_train": -0.2709351158852177,
+    "n_test": 41,
+    "r_test": -2.816423833083216,
+    "ci": [
+     -3.498590479056186,
+     -2.1342571871102463
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 5.023388547270618e-09,
+    "wf": 0,
+    "top3": 1.0,
+    "dd": 115.47337715641186,
+    "verdict": "SUPPRIMER",
+    "reasons": [
+     "n\u00e9gatif net, significatif (Holm)"
+    ],
+    "orders_placed": 701,
+    "orders_unfilled": 53,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 474,
+    "r_train": -0.11020853832043409,
+    "n_test": 318,
+    "r_test": -0.11593845999331973,
+    "ci": [
+     -0.23636965346462546,
+     0.004492733477986011
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.9755588508843243,
+    "wf": 0,
+    "top3": 0.0800317813395261,
+    "dd": 44.92562807009509,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 839,
+    "orders_unfilled": 47,
+    "orders_prechecked_out": 603
+   },
+   "structural": "adapt\u00e9"
+  },
+  {
+   "h": "H3",
+   "asset": "BTCUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 304,
+    "r_train": -0.5846272717110882,
+    "n_test": 57,
+    "r_test": -0.2072180507796683,
+    "ci": [
+     -0.5201428600755853,
+     0.10570675851624875
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.2897628712539364,
+    "dd": 16.685570353742413,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 498,
+    "orders_unfilled": 137,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 55,
+    "r_train": -0.2479113861954845,
+    "n_test": 136,
+    "r_test": -0.03504325309241839,
+    "ci": [
+     -0.22605893794288762,
+     0.1559724317580508
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.11551739848770128,
+    "dd": 17.341002313872632,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 209,
+    "orders_unfilled": 18,
+    "orders_prechecked_out": 505
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H3",
+   "asset": "ETHUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 301,
+    "r_train": -0.5159488756789122,
+    "n_test": 126,
+    "r_test": -0.166928387919956,
+    "ci": [
+     -0.365114193840961,
+     0.031257418001048975
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.1525335776020199,
+    "dd": 22.378530686532123,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 574,
+    "orders_unfilled": 147,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 53,
+    "r_train": -0.3530983055445248,
+    "n_test": 154,
+    "r_test": -0.10583945721504644,
+    "ci": [
+     -0.2864954480058357,
+     0.07481653357574285
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.1289654670536228,
+    "dd": 21.90600048384029,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 225,
+    "orders_unfilled": 18,
+    "orders_prechecked_out": 489
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H3",
+   "asset": "EURUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 316,
+    "r_train": -0.26382893543177294,
+    "n_test": 86,
+    "r_test": -0.14095733549688905,
+    "ci": [
+     -0.39485894632844426,
+     0.11294427533466617
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.21093190262782704,
+    "dd": 21.66682441522939,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 422,
+    "orders_unfilled": 20,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 321,
+    "r_train": -0.09612773300655697,
+    "n_test": 119,
+    "r_test": -0.17680404468809657,
+    "ci": [
+     -0.3379726740950228,
+     -0.01563541528117035
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.5410488818083256,
+    "wf": 0,
+    "top3": 0.12172455087569341,
+    "dd": 24.078295364457983,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 459,
+    "orders_unfilled": 18,
+    "orders_prechecked_out": 3
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H3",
+   "asset": "GBPUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 325,
+    "r_train": -0.15825341796144324,
+    "n_test": 119,
+    "r_test": -0.08140317352363227,
+    "ci": [
+     -0.28496196298217563,
+     0.12215561593491109
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.09804240056707564,
+    "dd": 18.65301766052218,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 471,
+    "orders_unfilled": 27,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 329,
+    "r_train": -0.13013011120827167,
+    "n_test": 122,
+    "r_test": -0.1236640244465911,
+    "ci": [
+     -0.32141823968435146,
+     0.07409019079116926
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.11768035185194435,
+    "dd": 24.66490037893314,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 472,
+    "orders_unfilled": 21,
+    "orders_prechecked_out": 23
+   },
+   "structural": "adapt\u00e9"
+  },
+  {
+   "h": "H3",
+   "asset": "GOLD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 244,
+    "r_train": -0.07741084470403223,
+    "n_test": 128,
+    "r_test": 0.1525444950834132,
+    "ci": [
+     -0.05523970476173032,
+     0.3603286949285567
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 2,
+    "top3": 0.10019561391678901,
+    "dd": 7.299574023877916,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 405,
+    "orders_unfilled": 33,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 229,
+    "r_train": -0.10276176937198721,
+    "n_test": 128,
+    "r_test": 0.13003762900743207,
+    "ci": [
+     -0.0738228042003379,
+     0.333898062215202
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 2,
+    "top3": 0.10277664730165427,
+    "dd": 7.299574023877916,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 383,
+    "orders_unfilled": 26,
+    "orders_prechecked_out": 25
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H3",
+   "asset": "US100",
+   "final": "non concluant",
+   "A": {
+    "n_train": 302,
+    "r_train": -0.07950586047445042,
+    "n_test": 149,
+    "r_test": -0.09799160836154265,
+    "ci": [
+     -0.27198244412490646,
+     0.07599922740182115
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.10466431386071656,
+    "dd": 24.539661398279012,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 475,
+    "orders_unfilled": 24,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 296,
+    "r_train": -0.06262599788569163,
+    "n_test": 151,
+    "r_test": -0.1159532049747481,
+    "ci": [
+     -0.2888160557776474,
+     0.05690964582815121
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.10457409928857953,
+    "dd": 25.382885540167134,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 469,
+    "orders_unfilled": 22,
+    "orders_prechecked_out": 11
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H3",
+   "asset": "US30",
+   "final": "non concluant",
+   "A": {
+    "n_train": 309,
+    "r_train": -0.10214599688452791,
+    "n_test": 146,
+    "r_test": -0.13262883961582922,
+    "ci": [
+     -0.30490721366141016,
+     0.03964953442975175
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.11222433304592974,
+    "dd": 23.451975731602268,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 476,
+    "orders_unfilled": 21,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 297,
+    "r_train": -0.11357938614832741,
+    "n_test": 154,
+    "r_test": -0.1366973430038468,
+    "ci": [
+     -0.3020145605320018,
+     0.02861987452430817
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.09821228219582206,
+    "dd": 23.92817347802335,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 472,
+    "orders_unfilled": 21,
+    "orders_prechecked_out": 13
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H3",
+   "asset": "USDJPY",
+   "final": "non concluant",
+   "A": {
+    "n_train": 279,
+    "r_train": -0.17813518169433598,
+    "n_test": 109,
+    "r_test": -0.18606469134575615,
+    "ci": [
+     -0.3895283164603192,
+     0.017398933768806912
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.12029661360642019,
+    "dd": 22.62670914879512,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 412,
+    "orders_unfilled": 24,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 275,
+    "r_train": -0.1469670714287155,
+    "n_test": 112,
+    "r_test": -0.2149416520943117,
+    "ci": [
+     -0.40853592135563743,
+     -0.02134738283298601
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.5377301732649563,
+    "wf": 0,
+    "top3": 0.12381282488040385,
+    "dd": 24.727098242519403,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 410,
+    "orders_unfilled": 23,
+    "orders_prechecked_out": 12
+   },
+   "structural": "adapt\u00e9"
+  },
+  {
+   "h": "H4",
+   "asset": "BTCUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 177,
+    "r_train": -0.3832448554409332,
+    "n_test": 117,
+    "r_test": -0.0604282263797881,
+    "ci": [
+     -0.27015310665176706,
+     0.14929665389219085
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.1120250817181304,
+    "dd": 10.38658791775151,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 452,
+    "orders_unfilled": 157,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 114,
+    "r_train": -0.27491306467757537,
+    "n_test": 118,
+    "r_test": -0.07685016657420358,
+    "ci": [
+     -0.2828682455079067,
+     0.12916791235949948
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 0,
+    "top3": 0.0882652760505345,
+    "dd": 12.432263394012015,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 282,
+    "orders_unfilled": 49,
+    "orders_prechecked_out": 247
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H4",
+   "asset": "ETHUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 200,
+    "r_train": -0.37429608054624863,
+    "n_test": 147,
+    "r_test": 0.04269328804990193,
+    "ci": [
+     -0.13764946789739538,
+     0.22303604399719926
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.09128480709521135,
+    "dd": 9.713414171561208,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 511,
+    "orders_unfilled": 164,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 83,
+    "r_train": -0.03170572175209626,
+    "n_test": 136,
+    "r_test": 0.08100945836478257,
+    "ci": [
+     -0.10416411014035706,
+     0.26618302686992223
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 3,
+    "top3": 0.0904147628191981,
+    "dd": 8.895043836275436,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 268,
+    "orders_unfilled": 49,
+    "orders_prechecked_out": 285
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H4",
+   "asset": "EURUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 234,
+    "r_train": -0.04600784278110495,
+    "n_test": 122,
+    "r_test": 0.13810373544153606,
+    "ci": [
+     -0.058308506995336545,
+     0.3345159778784087
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 2,
+    "top3": 0.07905445536003916,
+    "dd": 11.825241513189845,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 377,
+    "orders_unfilled": 21,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 232,
+    "r_train": -0.061055575822634094,
+    "n_test": 109,
+    "r_test": 0.12899296185985015,
+    "ci": [
+     -0.07299306333626038,
+     0.3309789870559607
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.08450077605431434,
+    "dd": 11.114670365002713,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 359,
+    "orders_unfilled": 18,
+    "orders_prechecked_out": 6
+   },
+   "structural": "adapt\u00e9"
+  },
+  {
+   "h": "H4",
+   "asset": "GBPUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 216,
+    "r_train": -0.23461317804162715,
+    "n_test": 99,
+    "r_test": -0.03806034053460583,
+    "ci": [
+     -0.2701572198662197,
+     0.19403653879700805
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.10010659346292952,
+    "dd": 16.830076618380396,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 338,
+    "orders_unfilled": 23,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 203,
+    "r_train": -0.22738204200831524,
+    "n_test": 95,
+    "r_test": -0.1030211681158316,
+    "ci": [
+     -0.33500690328450705,
+     0.12896456705284387
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.11430387018951707,
+    "dd": 21.92552535077694,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 323,
+    "orders_unfilled": 25,
+    "orders_prechecked_out": 15
+   },
+   "structural": "adapt\u00e9"
+  },
+  {
+   "h": "H4",
+   "asset": "GOLD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 196,
+    "r_train": 0.0007049734983895098,
+    "n_test": 108,
+    "r_test": -0.08958563415757383,
+    "ci": [
+     -0.29653713146051425,
+     0.11736586314536661
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.10937195370756916,
+    "dd": 18.605018829654973,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 328,
+    "orders_unfilled": 24,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 184,
+    "r_train": 0.0731117182385213,
+    "n_test": 101,
+    "r_test": -0.0922504656027014,
+    "ci": [
+     -0.3090689044537847,
+     0.12456797324838188
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.11558128473135512,
+    "dd": 19.083684362809965,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 303,
+    "orders_unfilled": 18,
+    "orders_prechecked_out": 22
+   },
+   "structural": "douteux"
+  },
+  {
+   "h": "H4",
+   "asset": "US100",
+   "final": "non concluant",
+   "A": {
+    "n_train": 240,
+    "r_train": 0.005987485929417943,
+    "n_test": 136,
+    "r_test": -0.0953980827536321,
+    "ci": [
+     -0.27428387775636687,
+     0.08348771224910267
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 3,
+    "top3": 0.09379006894888155,
+    "dd": 24.63350383299221,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 396,
+    "orders_unfilled": 19,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 239,
+    "r_train": 0.010891050487383222,
+    "n_test": 136,
+    "r_test": -0.04357452258243475,
+    "ci": [
+     -0.22224438761468554,
+     0.13509534244981605
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 3,
+    "top3": 0.08949672372289762,
+    "dd": 17.580603784093533,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 393,
+    "orders_unfilled": 17,
+    "orders_prechecked_out": 2
+   },
+   "structural": "adapt\u00e9"
+  },
+  {
+   "h": "H4",
+   "asset": "US30",
+   "final": "non concluant",
+   "A": {
+    "n_train": 225,
+    "r_train": -0.018984891665508763,
+    "n_test": 126,
+    "r_test": -0.15493476275068294,
+    "ci": [
+     -0.34058846703197,
+     0.030718941530604116
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.10770156699265312,
+    "dd": 21.654935552921334,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 370,
+    "orders_unfilled": 19,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 225,
+    "r_train": -0.018984891665508763,
+    "n_test": 126,
+    "r_test": -0.15493476275068294,
+    "ci": [
+     -0.34058846703197,
+     0.030718941530604116
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.10770156699265312,
+    "dd": 21.654935552921334,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 368,
+    "orders_unfilled": 17,
+    "orders_prechecked_out": 2
+   },
+   "structural": "adapt\u00e9"
+  },
+  {
+   "h": "H4",
+   "asset": "USDJPY",
+   "final": "non concluant",
+   "A": {
+    "n_train": 242,
+    "r_train": 0.02367056996443444,
+    "n_test": 120,
+    "r_test": -0.03482301821088531,
+    "ci": [
+     -0.22900615735301844,
+     0.1593601209312478
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.09927404614671383,
+    "dd": 8.630253053792122,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 390,
+    "orders_unfilled": 27,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 238,
+    "r_train": 0.042704765333829005,
+    "n_test": 117,
+    "r_test": -0.024161251047702843,
+    "ci": [
+     -0.2226945795613074,
+     0.17437207746590172
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 2,
+    "top3": 0.09947881608036291,
+    "dd": 9.445233225406618,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 381,
+    "orders_unfilled": 25,
+    "orders_prechecked_out": 7
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H5",
+   "asset": "BTCUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 238,
+    "r_train": -0.290833374054242,
+    "n_test": 102,
+    "r_test": -0.08431911934187396,
+    "ci": [
+     -0.8093672512850223,
+     0.6407290126012744
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.4960364740221718,
+    "dd": 39.77284960725738,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 486,
+    "orders_unfilled": 146,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 25,
+    "r_train": 0.22572913761199456,
+    "n_test": 81,
+    "r_test": -0.06545282756127663,
+    "ci": [
+     -0.5320526935382656,
+     0.4011470384157123
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 2,
+    "top3": 0.375476097266873,
+    "dd": 21.63715451154737,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 121,
+    "orders_unfilled": 15,
+    "orders_prechecked_out": 773
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H5",
+   "asset": "ETHUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 237,
+    "r_train": -0.901675389494741,
+    "n_test": 79,
+    "r_test": 0.15570815090404314,
+    "ci": [
+     -0.9445341917419646,
+     1.255950493550051
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.6603997908841576,
+    "dd": 30.89456345555503,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 495,
+    "orders_unfilled": 179,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 16,
+    "r_train": -0.05807328341937398,
+    "n_test": 92,
+    "r_test": -0.11928901705633783,
+    "ci": [
+     -0.5554872316844077,
+     0.316909197571732
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.4527471721049119,
+    "dd": 18.932495369688716,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 129,
+    "orders_unfilled": 21,
+    "orders_prechecked_out": 815
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H5",
+   "asset": "EURUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 176,
+    "r_train": 0.017972837908839513,
+    "n_test": 87,
+    "r_test": 0.23603898647456056,
+    "ci": [
+     -0.5433540075266484,
+     1.0154319804757694
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 3,
+    "top3": 0.5300272605021223,
+    "dd": 16.579130395945256,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 275,
+    "orders_unfilled": 12,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 155,
+    "r_train": 0.08399060080657966,
+    "n_test": 76,
+    "r_test": -0.036790550500423735,
+    "ci": [
+     -0.3173661938206263,
+     0.24378509281977884
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 2,
+    "top3": 0.289450319173,
+    "dd": 9.76527011100537,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 238,
+    "orders_unfilled": 7,
+    "orders_prechecked_out": 6
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H5",
+   "asset": "GBPUSD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 155,
+    "r_train": -0.016300850976772457,
+    "n_test": 87,
+    "r_test": -0.4265884180926082,
+    "ci": [
+     -0.8297981482413632,
+     -0.02337868794385317
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 0.5947381052867359,
+    "wf": 1,
+    "top3": 0.424163787475305,
+    "dd": 40.15503370672853,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 257,
+    "orders_unfilled": 15,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 136,
+    "r_train": -0.0964696106242417,
+    "n_test": 76,
+    "r_test": -0.3756796288683394,
+    "ci": [
+     -0.784486439025819,
+     0.03312718128914022
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 1,
+    "top3": 0.4708933916760643,
+    "dd": 31.235152209671107,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 228,
+    "orders_unfilled": 16,
+    "orders_prechecked_out": 67
+   },
+   "structural": "adapt\u00e9"
+  },
+  {
+   "h": "H5",
+   "asset": "GOLD",
+   "final": "non concluant",
+   "A": {
+    "n_train": 175,
+    "r_train": 0.488520679933129,
+    "n_test": 83,
+    "r_test": 0.38775856562050276,
+    "ci": [
+     -0.446928191505586,
+     1.2224453227465915
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 4,
+    "top3": 0.5012555101309581,
+    "dd": 16.14138141534707,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 284,
+    "orders_unfilled": 26,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 150,
+    "r_train": 0.07469837852264195,
+    "n_test": 83,
+    "r_test": 0.20535232589963048,
+    "ci": [
+     -0.4137992409949741,
+     0.8245038927942351
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 3,
+    "top3": 0.46184690980624493,
+    "dd": 16.446826853938227,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 253,
+    "orders_unfilled": 20,
+    "orders_prechecked_out": 41
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H5",
+   "asset": "US100",
+   "final": "non concluant",
+   "A": {
+    "n_train": 150,
+    "r_train": 0.39241898235726597,
+    "n_test": 88,
+    "r_test": 0.03506902423290061,
+    "ci": [
+     -0.45346550715999284,
+     0.5236035556257941
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 3,
+    "top3": 0.3824266090207913,
+    "dd": 22.30484909762044,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 264,
+    "orders_unfilled": 25,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 140,
+    "r_train": 0.3648820173297652,
+    "n_test": 86,
+    "r_test": 0.05696178772774725,
+    "ci": [
+     -0.440448931739092,
+     0.5543725071945865
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 3,
+    "top3": 0.3857217212420089,
+    "dd": 21.775373260051225,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 248,
+    "orders_unfilled": 21,
+    "orders_prechecked_out": 34
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H5",
+   "asset": "US30",
+   "final": "non concluant",
+   "A": {
+    "n_train": 151,
+    "r_train": -0.06719441113627247,
+    "n_test": 80,
+    "r_test": -0.13993881775689296,
+    "ci": [
+     -0.7771459938295365,
+     0.49726835831575056
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 2,
+    "top3": 0.6741769232753073,
+    "dd": 24.255876018725267,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 249,
+    "orders_unfilled": 18,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 138,
+    "r_train": -0.0665637231246118,
+    "n_test": 80,
+    "r_test": -0.13105276177763134,
+    "ci": [
+     -0.7621169361206607,
+     0.5000114125653979
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 2,
+    "top3": 0.668709341432469,
+    "dd": 24.192692304086478,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 234,
+    "orders_unfilled": 16,
+    "orders_prechecked_out": 27
+   },
+   "structural": "inadapt\u00e9"
+  },
+  {
+   "h": "H5",
+   "asset": "USDJPY",
+   "final": "non concluant",
+   "A": {
+    "n_train": 197,
+    "r_train": 0.5794700287454264,
+    "n_test": 95,
+    "r_test": 0.21505723185025566,
+    "ci": [
+     -0.44118807593727666,
+     0.871302539637788
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 3,
+    "top3": 0.43089348541091127,
+    "dd": 34.9940892671311,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 312,
+    "orders_unfilled": 20,
+    "orders_prechecked_out": 0
+   },
+   "B": {
+    "n_train": 183,
+    "r_train": 0.7324819320791576,
+    "n_test": 93,
+    "r_test": 0.2042054216702171,
+    "ci": [
+     -0.3398196045286796,
+     0.7482304478691137
+    ],
+    "p_pos_holm": 1.0,
+    "p_neg_holm": 1.0,
+    "wf": 3,
+    "top3": 0.33494300999338456,
+    "dd": 21.89591394512641,
+    "verdict": "non concluant",
+    "reasons": [
+     "non significatif apr\u00e8s Holm"
+    ],
+    "orders_placed": 295,
+    "orders_unfilled": 19,
+    "orders_prechecked_out": 10
+   },
+   "structural": "adapt\u00e9"
+  }
+ ]
+}
