@@ -1,0 +1,981 @@
+{
+ "cut_train_test": "2026-10-15T20:23:28",
+ "n_E1_retenus": 189,
+ "exclus": {
+  "fermé non réconcilié (aucun R)": 26,
+  "anomalie technique connue": 101,
+  "sortie sans prix broker": 12,
+  "CHFJPY exclue (pré-enreg. 29/08)": 5,
+  "encore ouvert": 15
+ },
+ "matrice": {
+  "H1|BTCUSD": {
+   "n": 5,
+   "R_moy": -0.23333220046260972,
+   "IC95": [
+    -1.0028327803666808,
+    0.7035810211281317
+   ],
+   "n_train": 2,
+   "R_train": 0.16991432120261035,
+   "n_test": 3,
+   "R_test": -0.5021632149060897,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H1|CHFJPY": {
+   "n": 1,
+   "R_moy": -1.0,
+   "IC95": [
+    null,
+    null
+   ],
+   "n_train": 1,
+   "R_train": -1.0,
+   "n_test": 0,
+   "R_test": null,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H1|ETHUSD": {
+   "n": 2,
+   "R_moy": 0.17106564960477,
+   "IC95": [
+    -1.0,
+    1.34213129920954
+   ],
+   "n_train": 2,
+   "R_train": 0.17106564960477,
+   "n_test": 0,
+   "R_test": null,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H1|EURUSD": {
+   "n": 2,
+   "R_moy": 0.9114147256101695,
+   "IC95": [
+    0.4384775161133648,
+    1.3843519351069742
+   ],
+   "n_train": 1,
+   "R_train": 1.3843519351069742,
+   "n_test": 1,
+   "R_test": 0.4384775161133648,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H1|GOLD": {
+   "n": 6,
+   "R_moy": 0.10439255673740039,
+   "IC95": [
+    -0.5017730496453885,
+    0.7105581631201893
+   ],
+   "n_train": 4,
+   "R_train": -0.09084994371122329,
+   "n_test": 2,
+   "R_test": 0.49487755763464775,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H1|US100": {
+   "n": 7,
+   "R_moy": -0.04227380788566144,
+   "IC95": [
+    -0.7125666952698955,
+    0.6865541750462401
+   ],
+   "n_train": 5,
+   "R_train": 0.13961335564900076,
+   "n_test": 2,
+   "R_test": -0.49699171672231696,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H1|US30": {
+   "n": 4,
+   "R_moy": 0.6259087301683087,
+   "IC95": [
+    -0.4217748285002766,
+    1.4947776906195827
+   ],
+   "n_train": 2,
+   "R_train": 0.33832734762013583,
+   "n_test": 2,
+   "R_test": 0.9134901127164816,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H1|USDJPY": {
+   "n": 1,
+   "R_moy": -1.0,
+   "IC95": [
+    null,
+    null
+   ],
+   "n_train": 1,
+   "R_train": -1.0,
+   "n_test": 0,
+   "R_test": null,
+   "statut_structurel": "adapté",
+   "p_holm_negatif": null,
+   "decision": "CONSERVER - non concluant (n_test=0)"
+  },
+  "H2|BTCUSD": {
+   "n": 5,
+   "R_moy": -0.40170617034736866,
+   "IC95": [
+    -1.0011939320007253,
+    0.19845532536973304
+   ],
+   "n_train": 4,
+   "R_train": -0.25203858642818644,
+   "n_test": 1,
+   "R_test": -1.0003765060240977,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H2|ETHUSD": {
+   "n": 22,
+   "R_moy": -0.03577247976528911,
+   "IC95": [
+    -0.4126680636450791,
+    0.3434375161042526
+   ],
+   "n_train": 6,
+   "R_train": -0.17167236376078795,
+   "n_test": 16,
+   "R_test": 0.015189976733022945,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": 0.5209479052094791,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H2|EURUSD": {
+   "n": 7,
+   "R_moy": -0.1770892373558155,
+   "IC95": [
+    -0.7474035017384055,
+    0.50872537054581
+   ],
+   "n_train": 6,
+   "R_train": -0.039657331536964956,
+   "n_test": 1,
+   "R_test": -1.0016806722689187,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H2|GBPUSD": {
+   "n": 3,
+   "R_moy": -0.4989743589743522,
+   "IC95": [
+    -1.0,
+    0.5030769230769433
+   ],
+   "n_train": 3,
+   "R_train": -0.4989743589743522,
+   "n_test": 0,
+   "R_test": null,
+   "statut_structurel": "adapté",
+   "p_holm_negatif": null,
+   "decision": "CONSERVER - non concluant (n_test=0)"
+  },
+  "H2|GOLD": {
+   "n": 13,
+   "R_moy": -0.013279965874218464,
+   "IC95": [
+    -0.5561242540959153,
+    0.5708746170239128
+   ],
+   "n_train": 10,
+   "R_train": -0.05729129753431618,
+   "n_test": 3,
+   "R_test": 0.1334244729927739,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H2|US100": {
+   "n": 9,
+   "R_moy": 0.8080023665579439,
+   "IC95": [
+    -0.4560307979766546,
+    2.1606916927623963
+   ],
+   "n_train": 8,
+   "R_train": 0.3547847297957882,
+   "n_test": 1,
+   "R_test": 4.43374346065519,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H2|US30": {
+   "n": 18,
+   "R_moy": -0.22616452226995282,
+   "IC95": [
+    -0.6133776499227638,
+    0.15980133639747585
+   ],
+   "n_train": 4,
+   "R_train": -0.023718212126384974,
+   "n_test": 14,
+   "R_test": -0.2840063251681151,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": 0.1531846815318468,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H2|USDJPY": {
+   "n": 6,
+   "R_moy": -0.3539766925371821,
+   "IC95": [
+    -0.834140435835355,
+    0.13976019204716197
+   ],
+   "n_train": 4,
+   "R_train": -0.030359711929257016,
+   "n_test": 2,
+   "R_test": -1.0012106537530325,
+   "statut_structurel": "adapté",
+   "p_holm_negatif": null,
+   "decision": "CONSERVER - non concluant (n_test=2)"
+  },
+  "H3|BTCUSD": {
+   "n": 12,
+   "R_moy": -0.09205790186003915,
+   "IC95": [
+    -0.677246732644865,
+    0.5602880116050696
+   ],
+   "n_train": 6,
+   "R_train": -0.03539472199344038,
+   "n_test": 6,
+   "R_test": -0.14872108172663792,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H3|ETHUSD": {
+   "n": 6,
+   "R_moy": -0.7498507036267686,
+   "IC95": [
+    -1.0006311381867137,
+    -0.24892097269359204
+   ],
+   "n_train": 5,
+   "R_train": -0.6995683890774368,
+   "n_test": 1,
+   "R_test": -1.0012622763734274,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H3|GBPUSD": {
+   "n": 1,
+   "R_moy": -1.0000000000584506,
+   "IC95": [
+    null,
+    null
+   ],
+   "n_train": 1,
+   "R_train": -1.0000000000584506,
+   "n_test": 0,
+   "R_test": null,
+   "statut_structurel": "adapté",
+   "p_holm_negatif": null,
+   "decision": "CONSERVER - non concluant (n_test=0)"
+  },
+  "H3|GOLD": {
+   "n": 6,
+   "R_moy": -0.6392365495244982,
+   "IC95": [
+    -1.0013675011930847,
+    0.08377311372617575
+   ],
+   "n_train": 3,
+   "R_train": -1.0,
+   "n_test": 3,
+   "R_test": -0.2784730990489963,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H3|US100": {
+   "n": 6,
+   "R_moy": 0.6207284686401551,
+   "IC95": [
+    -0.3544789533851693,
+    1.5399080080021819
+   ],
+   "n_train": 2,
+   "R_train": -0.25583064695848,
+   "n_test": 4,
+   "R_test": 1.0590080264394726,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H3|US30": {
+   "n": 5,
+   "R_moy": -0.701613406037154,
+   "IC95": [
+    -1.0009441142153583,
+    -0.10389610389610389
+   ],
+   "n_train": 3,
+   "R_train": -1.0,
+   "n_test": 2,
+   "R_test": -0.2540335150928852,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H4|BTCUSD": {
+   "n": 6,
+   "R_moy": 0.7037060792310608,
+   "IC95": [
+    -0.08893362119765506,
+    1.275147167648479
+   ],
+   "n_train": 4,
+   "R_train": 0.8052646983589264,
+   "n_test": 2,
+   "R_test": 0.5005888409753293,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H4|ETHUSD": {
+   "n": 3,
+   "R_moy": -0.0987017896292935,
+   "IC95": [
+    -1.0,
+    1.7038946311121197
+   ],
+   "n_train": 3,
+   "R_train": -0.0987017896292935,
+   "n_test": 0,
+   "R_test": null,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H4|GOLD": {
+   "n": 6,
+   "R_moy": -0.4999379140147624,
+   "IC95": [
+    -1.000329047891092,
+    0.0005266619025975361
+   ],
+   "n_train": 5,
+   "R_train": -0.39973868113965016,
+   "n_test": 1,
+   "R_test": -1.0009340783903236,
+   "statut_structurel": "douteux",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: douteux)"
+  },
+  "H4|US100": {
+   "n": 5,
+   "R_moy": -0.396429113423283,
+   "IC95": [
+    -1.0011058192745215,
+    0.21159644651631898
+   ],
+   "n_train": 2,
+   "R_train": -0.24061455805288606,
+   "n_test": 3,
+   "R_test": -0.5003054836702143,
+   "statut_structurel": "adapté",
+   "p_holm_negatif": null,
+   "decision": "CONSERVER - non concluant (n_test=3)"
+  },
+  "H4|US30": {
+   "n": 3,
+   "R_moy": -0.5,
+   "IC95": [
+    -1.0,
+    0.5
+   ],
+   "n_train": 3,
+   "R_train": -0.5,
+   "n_test": 0,
+   "R_test": null,
+   "statut_structurel": "adapté",
+   "p_holm_negatif": null,
+   "decision": "CONSERVER - non concluant (n_test=0)"
+  },
+  "H5|BTCUSD": {
+   "n": 4,
+   "R_moy": -0.5940538774457772,
+   "IC95": [
+    -1.002624098686086,
+    -0.18548365620546856
+   ],
+   "n_train": 2,
+   "R_train": -0.18548365620546856,
+   "n_test": 2,
+   "R_test": -1.002624098686086,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H5|ETHUSD": {
+   "n": 5,
+   "R_moy": -0.7680700799755581,
+   "IC95": [
+    -0.9923323367827559,
+    -0.3570076001888336
+   ],
+   "n_train": 4,
+   "R_train": -0.7093305976984415,
+   "n_test": 1,
+   "R_test": -1.0030280090840245,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H5|EURUSD": {
+   "n": 1,
+   "R_moy": -1.0000000000635638,
+   "IC95": [
+    null,
+    null
+   ],
+   "n_train": 1,
+   "R_train": -1.0000000000635638,
+   "n_test": 0,
+   "R_test": null,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H5|GOLD": {
+   "n": 5,
+   "R_moy": 0.03052466383556838,
+   "IC95": [
+    -1.0,
+    1.4889578435590365
+   ],
+   "n_train": 3,
+   "R_train": 0.2153609831028902,
+   "n_test": 2,
+   "R_test": -0.24672981506541436,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H5|US100": {
+   "n": 2,
+   "R_moy": -1.0,
+   "IC95": [
+    -1.0,
+    -1.0
+   ],
+   "n_train": 2,
+   "R_train": -1.0,
+   "n_test": 0,
+   "R_test": null,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  },
+  "H5|US30": {
+   "n": 2,
+   "R_moy": 0.6725802963620201,
+   "IC95": [
+    -1.0080942879695647,
+    2.353254880693605
+   ],
+   "n_train": 1,
+   "R_train": 2.353254880693605,
+   "n_test": 1,
+   "R_test": -1.0080942879695647,
+   "statut_structurel": "inadapté",
+   "p_holm_negatif": null,
+   "decision": "SUPPRIMER (structurel: inadapté)"
+  }
+ },
+ "manques": {
+  "ordres_non_remplis": [
+   [
+    "hypothesis2_v2",
+    "BTCUSD",
+    "autre_echec_placement",
+    2
+   ],
+   [
+    "hypothesis2_v2",
+    "BTCUSD",
+    "limite_refusee",
+    5
+   ],
+   [
+    "hypothesis2_v2",
+    "BTCUSD",
+    "peremption_marche",
+    6
+   ],
+   [
+    "hypothesis2_v2",
+    "CHFJPY",
+    "limite_refusee",
+    2
+   ],
+   [
+    "hypothesis2_v2",
+    "CHFJPY",
+    "peremption_marche",
+    2
+   ],
+   [
+    "hypothesis2_v2",
+    "CHFJPY",
+    "stop_refuse",
+    2
+   ],
+   [
+    "hypothesis2_v2",
+    "ETHUSD",
+    "limite_refusee",
+    35
+   ],
+   [
+    "hypothesis2_v2",
+    "ETHUSD",
+    "peremption_marche",
+    8
+   ],
+   [
+    "hypothesis2_v2",
+    "ETHUSD",
+    "stop_refuse",
+    1
+   ],
+   [
+    "hypothesis2_v2",
+    "EURUSD",
+    "autre_echec_placement",
+    8
+   ],
+   [
+    "hypothesis2_v2",
+    "EURUSD",
+    "limite_refusee",
+    17
+   ],
+   [
+    "hypothesis2_v2",
+    "EURUSD",
+    "peremption_marche",
+    7
+   ],
+   [
+    "hypothesis2_v2",
+    "GBPUSD",
+    "limite_refusee",
+    2
+   ],
+   [
+    "hypothesis2_v2",
+    "GBPUSD",
+    "peremption_marche",
+    2
+   ],
+   [
+    "hypothesis2_v2",
+    "GOLD",
+    "autre_echec_placement",
+    13
+   ],
+   [
+    "hypothesis2_v2",
+    "GOLD",
+    "limite_refusee",
+    3
+   ],
+   [
+    "hypothesis2_v2",
+    "GOLD",
+    "peremption_marche",
+    7
+   ],
+   [
+    "hypothesis2_v2",
+    "GOLD",
+    "stop_refuse",
+    1
+   ],
+   [
+    "hypothesis2_v2",
+    "US100",
+    "autre_echec_placement",
+    24
+   ],
+   [
+    "hypothesis2_v2",
+    "US100",
+    "limite_refusee",
+    8
+   ],
+   [
+    "hypothesis2_v2",
+    "US30",
+    "autre_echec_placement",
+    7
+   ],
+   [
+    "hypothesis2_v2",
+    "US30",
+    "limite_refusee",
+    26
+   ],
+   [
+    "hypothesis2_v2",
+    "US30",
+    "peremption_marche",
+    3
+   ],
+   [
+    "hypothesis2_v2",
+    "USDJPY",
+    "autre_echec_placement",
+    2
+   ],
+   [
+    "hypothesis2_v2",
+    "USDJPY",
+    "peremption_marche",
+    1
+   ],
+   [
+    "hypothesis2_v2",
+    "USDJPY",
+    "stop_refuse",
+    20
+   ],
+   [
+    "hypothesis3_v2",
+    "BTCUSD",
+    "autre_echec_placement",
+    3
+   ],
+   [
+    "hypothesis3_v2",
+    "BTCUSD",
+    "limite_refusee",
+    13
+   ],
+   [
+    "hypothesis3_v2",
+    "BTCUSD",
+    "peremption_marche",
+    3
+   ],
+   [
+    "hypothesis3_v2",
+    "ETHUSD",
+    "autre_echec_placement",
+    1
+   ],
+   [
+    "hypothesis3_v2",
+    "ETHUSD",
+    "limite_refusee",
+    6
+   ],
+   [
+    "hypothesis3_v2",
+    "ETHUSD",
+    "peremption_marche",
+    2
+   ],
+   [
+    "hypothesis3_v2",
+    "GOLD",
+    "autre_echec_placement",
+    5
+   ],
+   [
+    "hypothesis3_v2",
+    "GOLD",
+    "limite_refusee",
+    9
+   ],
+   [
+    "hypothesis3_v2",
+    "GOLD",
+    "peremption_marche",
+    1
+   ],
+   [
+    "hypothesis3_v2",
+    "US100",
+    "autre_echec_placement",
+    14
+   ],
+   [
+    "hypothesis3_v2",
+    "US100",
+    "limite_refusee",
+    11
+   ],
+   [
+    "hypothesis3_v2",
+    "US100",
+    "peremption_marche",
+    2
+   ],
+   [
+    "hypothesis3_v2",
+    "US30",
+    "limite_refusee",
+    6
+   ],
+   [
+    "hypothesis4_v2",
+    "BTCUSD",
+    "autre_echec_placement",
+    2
+   ],
+   [
+    "hypothesis4_v2",
+    "ETHUSD",
+    "autre_echec_placement",
+    5
+   ],
+   [
+    "hypothesis4_v2",
+    "EURUSD",
+    "autre_echec_placement",
+    3
+   ],
+   [
+    "hypothesis4_v2",
+    "EURUSD",
+    "stop_refuse",
+    18
+   ],
+   [
+    "hypothesis4_v2",
+    "GOLD",
+    "limite_refusee",
+    9
+   ],
+   [
+    "hypothesis4_v2",
+    "GOLD",
+    "peremption_marche",
+    2
+   ],
+   [
+    "hypothesis4_v2",
+    "US100",
+    "limite_refusee",
+    3
+   ],
+   [
+    "hypothesis4_v2",
+    "US30",
+    "autre_echec_placement",
+    25
+   ],
+   [
+    "hypothesis4_v2",
+    "US30",
+    "peremption_marche",
+    2
+   ],
+   [
+    "hypothesis4_v2",
+    "USDJPY",
+    "peremption_marche",
+    1
+   ],
+   [
+    "hypothesis5_v2",
+    "BTCUSD",
+    "limite_refusee",
+    6
+   ],
+   [
+    "hypothesis5_v2",
+    "ETHUSD",
+    "peremption_marche",
+    4
+   ],
+   [
+    "hypothesis5_v2",
+    "GOLD",
+    "autre_echec_placement",
+    2
+   ],
+   [
+    "hypothesis5_v2",
+    "GOLD",
+    "limite_refusee",
+    1
+   ],
+   [
+    "hypothesis5_v2",
+    "US100",
+    "autre_echec_placement",
+    3
+   ],
+   [
+    "hypothesis5_v2",
+    "US30",
+    "autre_echec_placement",
+    1
+   ],
+   [
+    "hypothesis5_v2",
+    "US30",
+    "limite_refusee",
+    9
+   ],
+   [
+    "hypothesis5_v2",
+    "US30",
+    "peremption_marche",
+    1
+   ],
+   [
+    "hypothesis_v2",
+    "BTCUSD",
+    "autre_echec_placement",
+    1
+   ],
+   [
+    "hypothesis_v2",
+    "CHFJPY",
+    "limite_refusee",
+    4
+   ],
+   [
+    "hypothesis_v2",
+    "EURUSD",
+    "autre_echec_placement",
+    1
+   ],
+   [
+    "hypothesis_v2",
+    "EURUSD",
+    "peremption_marche",
+    1
+   ],
+   [
+    "hypothesis_v2",
+    "GOLD",
+    "autre_echec_placement",
+    9
+   ],
+   [
+    "hypothesis_v2",
+    "GOLD",
+    "limite_refusee",
+    11
+   ],
+   [
+    "hypothesis_v2",
+    "US100",
+    "autre_echec_placement",
+    3
+   ],
+   [
+    "hypothesis_v2",
+    "US100",
+    "limite_refusee",
+    5
+   ],
+   [
+    "hypothesis_v2",
+    "US30",
+    "autre_echec_placement",
+    3
+   ],
+   [
+    "hypothesis_v2",
+    "US30",
+    "limite_refusee",
+    17
+   ]
+  ],
+  "signaux_rejetes_par_cause": [
+   [
+    "hypothesis2_v2",
+    null,
+    2670
+   ],
+   [
+    "hypothesis2_v2",
+    "circuit_breaker_blocked",
+    1629
+   ],
+   [
+    "hypothesis2_v2",
+    "cluster_exposure_cap",
+    7180
+   ],
+   [
+    "hypothesis2_v2",
+    "stop_invalid_side",
+    152
+   ],
+   [
+    "hypothesis3_v2",
+    null,
+    5
+   ],
+   [
+    "hypothesis3_v2",
+    "circuit_breaker_blocked",
+    66
+   ],
+   [
+    "hypothesis3_v2",
+    "cluster_exposure_cap",
+    1653
+   ],
+   [
+    "hypothesis4_v2",
+    "cluster_exposure_cap",
+    1973
+   ],
+   [
+    "hypothesis5_v2",
+    null,
+    9
+   ],
+   [
+    "hypothesis5_v2",
+    "cluster_exposure_cap",
+    1332
+   ],
+   [
+    "hypothesis5_v2",
+    "position_size_step_deviation",
+    22
+   ],
+   [
+    "hypothesis_v2",
+    null,
+    3
+   ],
+   [
+    "hypothesis_v2",
+    "cluster_exposure_cap",
+    2347
+   ]
+  ]
+ }
+}

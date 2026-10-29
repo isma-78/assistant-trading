@@ -43,3 +43,4 @@ db.sqlite
 # Analyse 29/10/2026 : snapshot VPS + bougies (lecture seule, jamais commités)
 data/analysis_29-10/*.db
 data/analysis_29-10/hist/
+data/analysis_29-10/hist_maj/
