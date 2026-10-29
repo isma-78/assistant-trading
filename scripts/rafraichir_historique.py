@@ -54,7 +54,7 @@ from src.hypothesis2_executor import HYPOTHESIS2_ASSETS as H2_ASSETS  # noqa: E4
 from src.hypothesis3_executor import HYPOTHESIS3_ASSETS as H3_ASSETS  # noqa: E402
 from src.hypothesis4_executor import HYPOTHESIS4_ASSETS as H4_ASSETS  # noqa: E402
 from src.hypothesis_params import get_resolution_override  # noqa: E402
-from src.retry import retry_with_backoff  # noqa: E402
+from src.retry import retry_with_backoff, retry_with_exponential_backoff  # noqa: E402
 from src.trend_executor import HYPOTHESIS_ASSETS as H1_ASSETS  # noqa: E402
 
 DEMO_BASE_URL = "https://demo-api-capital.backend-capital.com/api/v1"
@@ -64,9 +64,11 @@ INSTRUMENT_SPECS_PATH = ROOT / "data" / "instrument_specs.json"
 
 RESOLUTION_STEP = {"HOUR": timedelta(hours=1), "HOUR_4": timedelta(hours=4), "DAY": timedelta(days=1)}
 MAX_BARS_PER_REQUEST = 1000
-MIN_PAUSE_SECONDS = 3.0
+MIN_PAUSE_SECONDS = 5.0  # débit : au plus 12 requêtes/min (6 exécuteurs partagent la même IP)
 MAX_CALLS = 200
 OVERLAP_DAYS = 2
+EXECUTOR_PAUSES = 4  # pauses de 60 s si les exécuteurs sont en 429, avant un arrêt avec reprise
+EXECUTOR_PAUSE_SECONDS = 60.0
 SEALED_WINDOW_START = datetime(2023, 1, 1)
 SEALED_WINDOW_END = datetime(2024, 6, 15)  # exclusif : la fenêtre scellée couvre jusqu'au 2024-06-14 inclus
 MIN_ALLOWED_DATE = datetime(2019, 1, 1)
@@ -86,6 +88,14 @@ H2_EXTRA_RESOLUTIONS = ("HOUR_4", "DAY")
 # sur le tick USDJPY plutôt qu'une valeur inventée.
 _CHFJPY_TICK_FALLBACK_FROM = "USDJPY"
 _CHFJPY_EPIC = "CHFJPY"
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """429 ou erreur réseau : retentable avec backoff. Tout autre refus
+    (404 prix introuvables, 4xx de validation) ne l'est jamais."""
+    if isinstance(exc, requests.exceptions.RequestException):
+        return True
+    return isinstance(exc, CapitalApiError) and any(marker in str(exc) for marker in _RATE_LIMIT_MARKERS)
 
 
 class RateLimitAbort(Exception):
@@ -256,9 +266,10 @@ def fetch_window(
             "to": window_end.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         try:
-            resp = retry_with_backoff(
+            resp = retry_with_exponential_backoff(
                 lambda p=params: client.get(f"/prices/{epic}", params=p),
-                exceptions=(CapitalApiError, requests.exceptions.RequestException),
+                is_retryable=_is_transient,
+                sleep_fn=sleep_fn,
             )
         except CapitalApiError as exc:
             text = str(exc)
@@ -315,6 +326,9 @@ def refresh_combination(
             f"{asset}/{resolution} : dernière bougie locale ({last}) antérieure à la fin de la fenêtre scellée"
         )
     step = RESOLUTION_STEP[resolution]
+    if last + 2 * step > now:
+        # Déjà à jour (reprise après un arrêt partiel) : aucun appel réseau.
+        return RefreshResult(asset, resolution, "up_to_date", len(existing), len(existing), 0, "déjà à jour")
     overlap_start = max(last - timedelta(days=OVERLAP_DAYS), MIN_ALLOWED_DATE)
     calls_before = budget.used
 
@@ -389,19 +403,32 @@ def main(
         )
     else:
         client = client_factory(config)
-    client.login()
-    client.switch_account(config.capital_account_id)
+    # Cause de l'échec hebdomadaire depuis le 11/10 : le POST /session lui-même
+    # recevait un 429 (6 exécuteurs sur la même IP) et le script mourait sans
+    # aucune nouvelle tentative.
+    retry_with_exponential_backoff(client.login, is_retryable=_is_transient, sleep_fn=sleep_fn)
+    retry_with_exponential_backoff(
+        lambda: client.switch_account(config.capital_account_id), is_retryable=_is_transient, sleep_fn=sleep_fn,
+    )
 
     budget = CallBudget(MAX_CALLS)
     results: List[RefreshResult] = []
 
     for index, (asset, resolution) in enumerate(combos):
         reason = executors_rate_limited(config.db_path, started_iso)
+        for _ in range(EXECUTOR_PAUSES):
+            if not reason:
+                break
+            print(f"{_utcnow_iso()} PAUSE {EXECUTOR_PAUSE_SECONDS:.0f}s : {reason}")
+            sleep_fn(EXECUTOR_PAUSE_SECONDS)
+            reason = executors_rate_limited(config.db_path, started_iso)
         if reason:
             print(f"{_utcnow_iso()} ARRÊT IMMÉDIAT : {reason}")
             _print_resume(combos[index:])
             return 2
         try:
+            if index > 0:
+                sleep_fn(MIN_PAUSE_SECONDS)  # débit : jamais deux actifs d'affilée sans pause
             result = refresh_combination(client, asset, resolution, now, budget, tick_sizes,
                                           historical_dir=historical_dir, sleep_fn=sleep_fn)
         except RateLimitAbort as exc:

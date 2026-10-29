@@ -68,6 +68,7 @@ from typing import Callable, Dict, List, Optional, Set
 import requests
 
 from src import circuit_breaker_store
+from src.surveillance import is_source_suspended
 from src.capital_client import CapitalApiError, CapitalClient
 from src.db import connection_scope
 from src.envelope_store import load_or_create_envelope
@@ -567,7 +568,13 @@ def run_technical_strategy_loop(
             # 29/10/2026 : `entry_assets` restreint les ENTRÉES seulement ;
             # la gestion (enveloppes, positions ouvertes) couvre toujours
             # tout `assets` (docs/corrections_hypotheses_2026-10-29.md §3).
-            for asset in signal_generation_assets(assets, entry_assets):
+            # Surveillance automatique (29/10/2026) : hypothèse suspendue =>
+            # aucune génération de signal (fail-safe : erreur de lecture =>
+            # suspendu). La gestion des positions ouvertes continue.
+            suspended = is_source_suspended(db_path, source)
+            if suspended:
+                logger.warning("%s : hypothèse suspendue — aucune entrée générée ce cycle", hypothesis_label)
+            for asset in ([] if suspended else signal_generation_assets(assets, entry_assets)):
                 _generate_and_queue_signal(
                     db_path, client, asset,
                     source=source, resolution=resolution, entry_fn=entry_fn,

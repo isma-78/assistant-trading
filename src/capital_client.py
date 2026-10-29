@@ -69,9 +69,20 @@ def _parse_broker_datetime(value: str) -> datetime:
     return parsed
 
 
+def _parse_retry_after(headers) -> Optional[float]:
+    """Valeur numérique (secondes) de l'en-tête Retry-After, ou None."""
+    try:
+        value = float(headers.get("Retry-After"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
 class CapitalApiError(RuntimeError):
     """Erreur de communication avec l'API Capital.com (HTTP, session non
     ouverte, réponse inattendue)."""
+
+    retry_after: Optional[float] = None  # secondes, en-tête Retry-After du 429 s'il existe
 
 
 class CapitalClient:
@@ -180,7 +191,11 @@ class CapitalClient:
             # Bug réel trouvé le 16/08/2026 : un échec silencieux de ce
             # détail a fait perdre du temps de diagnostic pendant le
             # test réel encadré d'executor.py (voir docs/DECISIONS.md).
-            raise CapitalApiError(f"{exc} — corps de la réponse : {resp.text}") from exc
+            error = CapitalApiError(f"{exc} — corps de la réponse : {resp.text}")
+            # En-tête Retry-After (secondes) conservé pour le backoff des
+            # appelants (src/retry.py) ; None s'il est absent ou illisible.
+            error.retry_after = _parse_retry_after(getattr(resp, "headers", None))
+            raise error from exc
 
     @staticmethod
     def _is_invalid_session_error(exc: "CapitalApiError") -> bool:
@@ -336,6 +351,26 @@ class CapitalClient:
         if guaranteed_stop:
             body["guaranteedStop"] = True
             body["stopDistance"] = stop_distance
+        return self._submit_and_confirm("/workingorders", body)
+
+    def place_stop_entry_order(
+        self, epic: str, direction: str, size: float, level: float,
+        guaranteed_stop: bool, stop_distance: Optional[float],
+    ) -> dict:
+        """Place un ordre STOP d'entrée (buy-stop au-dessus du marché,
+        sell-stop en dessous) avec son stop de protection attaché dès la
+        création. Jamais d'ordre STOP sans stop : `stop_distance` > 0 et
+        `guaranteed_stop` obligatoires (ValueError sinon, avant tout appel
+        réseau). Le stop ne se modifie jamais ici ; son éloignement après
+        création reste interdit par `update_position_stop`."""
+        if not guaranteed_stop or stop_distance is None or not (stop_distance > 0):
+            raise ValueError("Ordre STOP refusé : un stop de protection garanti (distance > 0) est obligatoire")
+        if direction not in ("BUY", "SELL"):
+            raise ValueError(f"Ordre STOP refusé : direction inconnue {direction!r}")
+        body = {
+            "epic": epic, "direction": direction, "size": size, "level": level, "type": "STOP",
+            "guaranteedStop": True, "stopDistance": stop_distance,
+        }
         return self._submit_and_confirm("/workingorders", body)
 
     def cancel_working_order(self, deal_id: str) -> dict:

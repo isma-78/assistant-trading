@@ -3116,10 +3116,10 @@ def test_hypothesis_signal_rejected_when_spread_exceeds_ten_percent_of_stop(tmp_
     assert status == "rejete" and trades == 0
 
 
-def test_hypothesis_signal_rejected_when_limit_level_already_marketable(tmp_path):
-    # vente limite à 99.0 alors que bid=100.0 : exécutable immédiatement, le broker refuserait (limit.price)
+def test_hypothesis_signal_rejected_when_level_exactly_on_price(tmp_path):
+    # vente à 100.0 alors que bid=100.0 : ni LIMIT ni STOP valide -> refus (fail-safe)
     result, client, decision, status, trades = _open_with_snapshot(
-        tmp_path, "hypothesis_v2", "short", 99.0, 110.0, 100.0, 100.01,
+        tmp_path, "hypothesis_v2", "short", 100.0, 110.0, 100.0, 100.01,
     )
     assert result is None
     client.place_limit_order.assert_not_called()
@@ -3140,3 +3140,125 @@ def test_station_x_signal_is_not_subject_to_hypothesis_entry_filters(tmp_path):
         tmp_path, "station_x", "long", 99.9, 98.9, 99.8, 100.0,
     )
     assert decision is None or decision["reason"] not in ("spread_trop_large", "niveau_deja_franchi")
+
+
+def _open_stop(tmp_path, sens, entree, stop, bid, offer, place_side_effect=None):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, source="hypothesis5_v2", sens=sens, entree=entree, stop=stop, confiance=1.0)
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {
+        "snapshot": {"bid": bid, "offer": offer, "marketStatus": "TRADEABLE"},
+        "dealingRules": {"minGuaranteedStopDistance": {"value": 0.1, "unit": "POINTS"}},
+    }
+    client.place_stop_entry_order.return_value = {"deal_id": "stop-1", "level": entree}
+    if place_side_effect is not None:
+        client.place_stop_entry_order.side_effect = place_side_effect
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, CapitalManager(initial_balance=500.0), envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+    return db_path, result, client
+
+
+@pytest.fixture
+def _reset_stop_trip():
+    import src.executor as ex
+    ex._stop_entry_orders_tripped = False
+    yield
+    ex._stop_entry_orders_tripped = False
+
+
+def test_buy_stop_above_market_uses_stop_order_with_protective_stop(tmp_path, _reset_stop_trip):
+    db_path, result, client = _open_stop(tmp_path, "long", 100.4, 99.4, 99.99, 100.0)
+    assert result is not None
+    client.place_limit_order.assert_not_called()
+    kwargs = client.place_stop_entry_order.call_args.kwargs
+    assert kwargs["direction"] == "BUY" and kwargs["level"] == 100.4
+    assert kwargs["guaranteed_stop"] is True and kwargs["stop_distance"] > 0
+
+
+def test_sell_stop_below_market_uses_stop_order(tmp_path, _reset_stop_trip):
+    db_path, result, client = _open_stop(tmp_path, "short", 99.6, 100.6, 100.0, 100.01)
+    assert result is not None
+    kwargs = client.place_stop_entry_order.call_args.kwargs
+    assert kwargs["direction"] == "SELL" and kwargs["level"] == 99.6 and kwargs["stop_distance"] > 0
+    client.place_limit_order.assert_not_called()
+
+
+def test_pending_level_still_uses_limit_order(tmp_path, _reset_stop_trip):
+    result, client, decision, status, trades = _open_with_snapshot(
+        tmp_path, "hypothesis5_v2", "short", 105.0, 110.0, 100.0, 100.01,
+    )
+    client.place_stop_entry_order.assert_not_called()
+
+
+def test_stop_order_broker_error_trips_failsafe_and_cancels_trade(tmp_path, _reset_stop_trip):
+    import src.executor as ex
+    from src.capital_client import CapitalApiError
+    db_path, result, client = _open_stop(
+        tmp_path, "long", 100.4, 99.4, 99.99, 100.0, place_side_effect=CapitalApiError("error.boom"),
+    )
+    assert result is None
+    assert ex.stop_entry_orders_allowed() is False
+    conn = get_connection(db_path)
+    try:
+        assert conn.execute("SELECT statut FROM trades").fetchone()["statut"] == "annule"
+    finally:
+        conn.close()
+    db2 = str(tmp_path / "t2.db")
+    init_db(db2)
+    row = _insert_signal(db2, source="hypothesis5_v2", sens="long", entree=100.4, stop=99.4, confiance=1.0)
+    client2 = MagicMock()
+    client2.get_market_snapshot.return_value = {
+        "snapshot": {"bid": 99.99, "offer": 100.0, "marketStatus": "TRADEABLE"},
+        "dealingRules": {"minGuaranteedStopDistance": {"value": 0.1, "unit": "POINTS"}},
+    }
+    assert open_signal(
+        db2, client2, row, make_engine(), WHITELIST, CapitalManager(initial_balance=500.0), envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    ) is None
+    client2.place_stop_entry_order.assert_not_called()
+
+
+def test_stop_order_rate_limit_does_not_trip_failsafe(tmp_path, _reset_stop_trip):
+    import src.executor as ex
+    from src.capital_client import CapitalApiError
+    _open_stop(tmp_path, "long", 100.4, 99.4, 99.99, 100.0, place_side_effect=CapitalApiError("429 Client Error"))
+    assert ex.stop_entry_orders_allowed() is True
+
+
+def test_stop_order_refused_when_no_guaranteed_stop_can_be_attached(tmp_path, _reset_stop_trip):
+    # courtier sans exigence de stop garanti : aucune distance attachable -> pas d'ordre STOP sans stop
+    result, client, decision, status, trades = _open_with_snapshot(
+        tmp_path, "hypothesis5_v2", "long", 100.4, 99.4, 99.99, 100.0,
+    )
+    client.place_stop_entry_order.assert_not_called()
+    assert decision["reason"] == "niveau_deja_franchi" and trades == 0
+
+
+def test_suspended_hypothesis_signal_rejected_by_open_signal(tmp_path):
+    from src import surveillance
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    surveillance.ensure_schema(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO hypothesis_suspensions (hypothesis, source, suspended_at, n_trades, reason) "
+            "VALUES ('H2', 'hypothesis2_v2', '2026-11-20T00:00:00Z', 15, 'test')"
+        )
+    signal_row = _insert_signal(db_path, source="hypothesis2_v2", sens="short", entree=105.0, stop=110.0, confiance=1.0)
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.01, "marketStatus": "TRADEABLE"}}
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, CapitalManager(initial_balance=500.0), envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+    assert result is None
+    client.place_limit_order.assert_not_called()
+    client.place_stop_entry_order.assert_not_called()
+    conn = get_connection(db_path)
+    try:
+        assert conn.execute("SELECT reason FROM risk_decisions").fetchone()["reason"] == "hypothese_suspendue"
+    finally:
+        conn.close()
