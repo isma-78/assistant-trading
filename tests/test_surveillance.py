@@ -228,3 +228,26 @@ def test_state_marks_active_asset_with_enough_trades(tmp_path):
     controle.main(db_path=db, out_dir=str(out))
     text = next(out.glob("etat_*.md")).read_text(encoding="utf-8")
     assert "| H3 | GBPUSD | 16 |" in text and f"| {sv.STATUS_ACTIVE} |" in text
+
+
+def test_current_epoch_is_latest_p_epoch_and_surveillance_counts_only_it(tmp_path):
+    db = _db(tmp_path)
+    with connection_scope(db) as conn:
+        conn.execute("INSERT INTO hypothesis_epochs (source, epoch, started_at, description) VALUES "
+                     "('hypothesis3_v2', 'P2_30-10', '2026-11-05T00:00:00Z', 'x')")
+        conn.execute("INSERT INTO hypothesis_epochs (source, epoch, started_at, description) VALUES "
+                     "('hypothesis3_v2', 'E1', '2026-12-01T00:00:00Z', 'pas une époque P')")
+    assert sv.current_epoch(db) == ("P2_30-10", "2026-11-05T00:00:00Z")
+    assert sv.epoch_start(db) == "2026-11-05T00:00:00Z"
+    assert sv.epoch_start(db, "P1_29-10") == "2026-10-29T19:03:55Z"
+    # 15 mauvais trades en P1 seulement : P2 en cours => non suspendu
+    for i in range(15):
+        _closed(db, "hypothesis3_v2", "GBPUSD", -1.0 - 0.02 * i, ouvert_at="2026-11-01T10:00:00+00:00")
+    verdicts, newly, trades = sv.run_daily_check(db, "2026-11-20T06:30:00+00:00")
+    assert newly == [] and trades == [] and verdicts["H3"].status == sv.STATUS_INCONCLUSIVE
+
+
+def test_current_epoch_none_without_p_epoch(tmp_path):
+    db = str(tmp_path / "t.db")
+    init_db(db)
+    assert sv.current_epoch(db) is None and sv.epoch_start(db) is None
