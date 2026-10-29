@@ -338,6 +338,26 @@ class CapitalClient:
             body["stopDistance"] = stop_distance
         return self._submit_and_confirm("/workingorders", body)
 
+    def place_stop_entry_order(
+        self, epic: str, direction: str, size: float, level: float,
+        guaranteed_stop: bool, stop_distance: Optional[float],
+    ) -> dict:
+        """Place un ordre STOP d'entrée (buy-stop au-dessus du marché,
+        sell-stop en dessous) avec son stop de protection attaché dès la
+        création. Jamais d'ordre STOP sans stop : `stop_distance` > 0 et
+        `guaranteed_stop` obligatoires (ValueError sinon, avant tout appel
+        réseau). Le stop ne se modifie jamais ici ; son éloignement après
+        création reste interdit par `update_position_stop`."""
+        if not guaranteed_stop or stop_distance is None or not (stop_distance > 0):
+            raise ValueError("Ordre STOP refusé : un stop de protection garanti (distance > 0) est obligatoire")
+        if direction not in ("BUY", "SELL"):
+            raise ValueError(f"Ordre STOP refusé : direction inconnue {direction!r}")
+        body = {
+            "epic": epic, "direction": direction, "size": size, "level": level, "type": "STOP",
+            "guaranteedStop": True, "stopDistance": stop_distance,
+        }
+        return self._submit_and_confirm("/workingorders", body)
+
     def cancel_working_order(self, deal_id: str) -> dict:
         """Annule un ordre limite non encore exécuté (péremption §2.8,
         ou signal invalidé entre temps)."""

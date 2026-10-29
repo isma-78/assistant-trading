@@ -55,3 +55,35 @@ def is_limit_level_marketable(direction: str, level: float, bid: Optional[float]
     if direction == "short":
         return bid - level >= 0
     return False
+
+
+ORDER_LIMIT = "LIMIT"
+ORDER_STOP = "STOP"
+
+
+def choose_entry_order_type(direction: str, level: float, bid: Optional[float], ask: Optional[float]) -> Optional[str]:
+    """Type d'ordre d'attente pour entrer au niveau `level`, décidé par code.
+    - niveau côté attente d'un LIMIT (achat sous l'ask, vente au-dessus du
+      bid) -> "LIMIT" ;
+    - niveau STRICTEMENT au-delà du marché (achat au-dessus de l'ask, vente
+      sous le bid) -> "STOP" (buy-stop au-dessus, sell-stop en dessous) ;
+    - niveau exactement sur le prix, direction inconnue ou prix absents ->
+      None (refus, fail-safe : aucun des deux types n'est valide)."""
+    if bid is None or ask is None or direction not in ("long", "short"):
+        return None
+    if not is_limit_level_marketable(direction, level, bid, ask):
+        return ORDER_LIMIT
+    strictly_beyond = level > ask if direction == "long" else level < bid
+    return ORDER_STOP if strictly_beyond else None
+
+
+def stop_protection_rejection(direction: str, level: float, stop_distance: Optional[float]) -> Optional[str]:
+    """Message de rejet si un ordre STOP d'entrée ne peut pas porter un stop
+    de protection valide dès sa création (distance absente, nulle, négative
+    ou non finie). Aucun ordre STOP sans stop. Le stop est toujours placé du
+    côté perdant : achat -> level - distance, vente -> level + distance."""
+    if stop_distance is None or not isinstance(stop_distance, (int, float)) or not (stop_distance > 0)             or stop_distance == float("inf"):
+        return "Rejeté : ordre STOP sans stop de protection valide (distance absente ou non positive)"
+    stop_price = level - stop_distance if direction == "long" else level + stop_distance
+    side_ok = stop_price < level if direction == "long" else stop_price > level
+    return None if side_ok else "Rejeté : stop de protection du mauvais côté de l'entrée"

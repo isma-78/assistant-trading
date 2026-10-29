@@ -74,7 +74,10 @@ from src.circuit_breaker import (
 from src.db import connection_scope
 from src.envelope_store import load_or_create_envelope, load_reserve_total, persist_trade_result
 from src.execution.stop_tightening_retry import attempt_with_retry
-from src.entry_filters import is_limit_level_marketable, spread_filter_rejection
+from src.entry_filters import (
+    ORDER_LIMIT, ORDER_STOP, choose_entry_order_type, is_limit_level_marketable, spread_filter_rejection,
+    stop_protection_rejection,
+)
 from src.go_nogo import GoNoGoStatus
 from src.market_data import Candle, compute_atr, get_candles, get_price_snapshot
 from src.retry import retry_with_backoff
@@ -791,6 +794,25 @@ def _classify_placement_failure(error_text: str) -> str:
     return "autre_echec_placement"
 
 
+# 29/10/2026 (docs/corrections_hypotheses_2026-10-29.md, Suite) : entrées de
+# cassure en ordre STOP natif pour les sources d'hypothèses. Modifiable
+# UNIQUEMENT par config + redéploiement. Coupe-circuit fail-safe : après une
+# erreur broker inattendue sur un ordre STOP, le process n'en envoie plus
+# jusqu'à son redémarrage (retour au refus `niveau_deja_franchi`).
+STOP_ENTRY_ORDERS_ENABLED = True
+_stop_entry_orders_tripped = False
+
+
+def stop_entry_orders_allowed() -> bool:
+    return STOP_ENTRY_ORDERS_ENABLED and not _stop_entry_orders_tripped
+
+
+def _trip_stop_entry_orders(reason: str) -> None:
+    global _stop_entry_orders_tripped
+    _stop_entry_orders_tripped = True
+    logger.error("Ordres STOP d'entrée désactivés pour ce process (fail-safe) : %s", reason)
+
+
 def describe_limit_refusal(direction: str, level: float, bid: Optional[float], ask: Optional[float]) -> dict:
     """A3 : décrit, sans rien décider, la position du niveau limite refusé
     par rapport au marché au moment de l'échec. Un ordre limite d'achat
@@ -908,9 +930,9 @@ LEG_PLACEMENT_DELAY_SECONDS = 0.5
 
 def _place_limit_orders(
     client: CapitalClient, epic: str, direction_api: str, sizes: List[float], level: float,
-    guaranteed_stop: bool, stop_distance: Optional[float],
+    guaranteed_stop: bool, stop_distance: Optional[float], order_type: str = ORDER_LIMIT,
 ) -> List[str]:
-    """Place un ordre limite par taille, même niveau, même stop. Si un ordre
+    """Place un ordre limite (ou STOP d'entrée, `order_type`) par taille, même niveau, même stop. Si un ordre
     échoue après que d'autres ont déjà été placés, ceux-ci sont annulés
     avant de relever l'exception — jamais un trade à moitié placé.
 
@@ -924,10 +946,16 @@ def _place_limit_orders(
         for index, size in enumerate(sizes):
             if index > 0:
                 time.sleep(LEG_PLACEMENT_DELAY_SECONDS)
-            result = client.place_limit_order(
-                epic=epic, direction=direction_api, size=size, level=level,
-                guaranteed_stop=guaranteed_stop, stop_distance=stop_distance,
-            )
+            if order_type == ORDER_STOP:
+                result = client.place_stop_entry_order(
+                    epic=epic, direction=direction_api, size=size, level=level,
+                    guaranteed_stop=guaranteed_stop, stop_distance=stop_distance,
+                )
+            else:
+                result = client.place_limit_order(
+                    epic=epic, direction=direction_api, size=size, level=level,
+                    guaranteed_stop=guaranteed_stop, stop_distance=stop_distance,
+                )
             placed.append(result["deal_id"])
     except CapitalApiError as exc:
         uncancelled = []
@@ -1331,6 +1359,7 @@ def open_signal(
     # Limités aux sources d'hypothèses (H1-H5) : les signaux discrétionnaires
     # Station X fournissent leurs propres niveaux, hors périmètre de l'analyse.
     entry_filter_reason, entry_filter_detail = None, None
+    entry_order_type = ORDER_LIMIT
     is_hypothesis_source = str(signal_row["source"]).startswith("hypothesis")
     spread_detail = (
         spread_filter_rejection(snapshot.bid, snapshot.ask, signal_row["entree_min"], adjustment.stop_price)
@@ -1341,11 +1370,28 @@ def open_signal(
     elif spread_detail is not None:
         entry_filter_reason, entry_filter_detail = "spread_trop_large", spread_detail
     elif is_limit_level_marketable(signal_row["sens"], signal_row["entree_min"], snapshot.bid, snapshot.ask):
-        entry_filter_reason = "niveau_deja_franchi"
-        entry_filter_detail = (
-            f"Rejeté : niveau limite {signal_row['entree_min']} déjà exécutable "
-            f"(bid={snapshot.bid}, ask={snapshot.ask}) — le broker refuserait l'ordre limite (limit.price)"
+        # Niveau déjà franchi pour un LIMIT : ordre STOP natif si le niveau est
+        # strictement au-delà du marché, qu'un stop garanti peut être attaché
+        # dès la création et que le coupe-circuit n'a pas sauté. Sinon refus.
+        stop_rejection = stop_protection_rejection(
+            signal_row["sens"], signal_row["entree_min"],
+            adjustment.stop_distance if adjustment.stop_distance > 0 else None,
         )
+        if (
+            stop_entry_orders_allowed()
+            and choose_entry_order_type(
+                signal_row["sens"], signal_row["entree_min"], snapshot.bid, snapshot.ask,
+            ) == ORDER_STOP
+            and stop_rejection is None
+        ):
+            entry_order_type = ORDER_STOP
+        else:
+            entry_filter_reason = "niveau_deja_franchi"
+            entry_filter_detail = (
+                f"Rejeté : niveau limite {signal_row['entree_min']} déjà exécutable "
+                f"(bid={snapshot.bid}, ask={snapshot.ask}) — le broker refuserait l'ordre limite (limit.price)"
+                + (f" ; ordre STOP impossible : {stop_rejection}" if stop_rejection else "")
+            )
     if entry_filter_reason is not None:
         with connection_scope(db_path) as conn:
             conn.execute(
@@ -1474,8 +1520,13 @@ def open_signal(
             client, epic, direction_api, sizes, signal_row["entree_min"],
             guaranteed_stop=adjustment.stop_distance > 0,
             stop_distance=adjustment.stop_distance if adjustment.stop_distance > 0 else None,
+            order_type=entry_order_type,
         )
     except CapitalApiError as first_exc:
+        if entry_order_type == ORDER_STOP and _classify_placement_failure(str(first_exc)) not in (
+            "rate_limit_429", "stop_refuse",
+        ):
+            _trip_stop_entry_orders(str(first_exc)[-200:])
         # A2 (bilan du 05/10/2026) : un palier déjà placé qui n'a pas pu être
         # annulé est cherché côté broker avant toute autre chose — jamais
         # laissé hors base, jamais doublé par un réessai.
@@ -1566,7 +1617,7 @@ def open_signal(
                     try:
                         retry_order_ids = _place_limit_orders(
                             client, epic, direction_api, retried_sizes, signal_row["entree_min"],
-                            guaranteed_stop=True, stop_distance=boundary_distance,
+                            guaranteed_stop=True, stop_distance=boundary_distance, order_type=entry_order_type,
                         )
                     except CapitalApiError as retry_exc:
                         retry_order_ids = None
