@@ -74,6 +74,7 @@ from src.circuit_breaker import (
 from src.db import connection_scope
 from src.envelope_store import load_or_create_envelope, load_reserve_total, persist_trade_result
 from src.execution.stop_tightening_retry import attempt_with_retry
+from src.surveillance import is_source_suspended
 from src.entry_filters import (
     ORDER_LIMIT, ORDER_STOP, choose_entry_order_type, is_limit_level_marketable, spread_filter_rejection,
     stop_protection_rejection,
@@ -1367,6 +1368,12 @@ def open_signal(
     )
     if not is_hypothesis_source:
         pass
+    elif is_source_suspended(db_path, signal_row["source"]):
+        entry_filter_reason = "hypothese_suspendue"
+        entry_filter_detail = (
+            f"Rejeté : hypothèse {signal_row['source']} suspendue par la surveillance automatique "
+            "(docs/regles_surveillance_2026-10-29.md) — levée uniquement par redéploiement"
+        )
     elif spread_detail is not None:
         entry_filter_reason, entry_filter_detail = "spread_trop_large", spread_detail
     elif is_limit_level_marketable(signal_row["sens"], signal_row["entree_min"], snapshot.bid, snapshot.ask):

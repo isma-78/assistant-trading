@@ -50,3 +50,15 @@ peut suspendre (10 trades minimum par variable ; sous 15, non concluant).
 
 ## Garde-fous
 Aucune variable de stratégie modifiée ; aucun stop élargi ; réel verrouillé.
+
+## Précisions d'implémentation (ajoutées avec le code, avant toute donnée post-P1_29-10)
+- « Réconcilié » : les lignes de `trade_partials` de fraction 0 (palier jamais rempli, aucun
+  prix de sortie possible) sont exclues du contrôle `prix_sortie_reel` ; toute clôture de
+  fraction > 0 doit en porter un, et au moins une clôture exécutée doit exister.
+- Le test est exécuté par `src/surveillance.py` (loi de Student implémentée sans dépendance,
+  vérifiée contre les tables de référence). Hypothèse sous le seuil n : p = 1 dans la famille
+  de Holm (famille toujours de taille 5).
+- Suspension = ligne append-only dans `hypothesis_suspensions` + ligne `logs`
+  (module `surveillance`). Le code ne supprime jamais une ligne ; toute levée est un acte
+  humain explicite (redéploiement documenté), hors de portée du contrôle quotidien.
+- Fail-safe : erreur de lecture de la table => hypothèse traitée comme suspendue.

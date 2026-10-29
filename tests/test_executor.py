@@ -3235,3 +3235,30 @@ def test_stop_order_refused_when_no_guaranteed_stop_can_be_attached(tmp_path, _r
     )
     client.place_stop_entry_order.assert_not_called()
     assert decision["reason"] == "niveau_deja_franchi" and trades == 0
+
+
+def test_suspended_hypothesis_signal_rejected_by_open_signal(tmp_path):
+    from src import surveillance
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    surveillance.ensure_schema(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO hypothesis_suspensions (hypothesis, source, suspended_at, n_trades, reason) "
+            "VALUES ('H2', 'hypothesis2_v2', '2026-11-20T00:00:00Z', 15, 'test')"
+        )
+    signal_row = _insert_signal(db_path, source="hypothesis2_v2", sens="short", entree=105.0, stop=110.0, confiance=1.0)
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.01, "marketStatus": "TRADEABLE"}}
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, CapitalManager(initial_balance=500.0), envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+    assert result is None
+    client.place_limit_order.assert_not_called()
+    client.place_stop_entry_order.assert_not_called()
+    conn = get_connection(db_path)
+    try:
+        assert conn.execute("SELECT reason FROM risk_decisions").fetchone()["reason"] == "hypothese_suspendue"
+    finally:
+        conn.close()
