@@ -865,3 +865,66 @@ def test_refused_trailing_update_keeps_previous_stop():
         ).trades[0].r_multiple_total
 
     assert run(lambda asset, old, new: False) < run(None)
+
+
+# --- 29/10/2026 : mode d'entrée « level_fill » (ordre d'attente au niveau du signal) -----------
+
+def test_level_fill_price_long_limit_stop_and_miss():
+    from src.backtest_engine import level_fill_price
+    bar = _bar("2026-01-01T00:00:00", 100, 102, 98, 101, spread=0.2)  # open_ask 100.1, low_ask 98.1, high_ask 102.1
+    assert level_fill_price("long", 99.0, bar) == 99.0                       # LIMIT : rempli au niveau, jamais mieux
+    assert level_fill_price("long", 100.1, bar) == 100.1                     # niveau == open_ask : LIMIT immédiat
+    assert level_fill_price("long", 101.0, bar) == pytest.approx(101.2)      # STOP : niveau + glissement (spread x 1)
+    assert level_fill_price("long", 101.0, bar, slippage_multiplier=0.0) == 101.0
+    assert level_fill_price("long", 103.0, bar) is None                      # au-dessus de la fourchette
+    assert level_fill_price("long", 98.0, bar) is None                       # sous la fourchette
+
+
+def test_level_fill_price_short_limit_stop_and_miss():
+    from src.backtest_engine import level_fill_price
+    bar = _bar("2026-01-01T00:00:00", 100, 102, 98, 101, spread=0.2)  # open_bid 99.9, high_bid 101.9, low_bid 97.9
+    assert level_fill_price("short", 101.0, bar) == 101.0                    # LIMIT de vente
+    assert level_fill_price("short", 99.0, bar) == pytest.approx(98.8)       # STOP de vente : niveau - glissement
+    assert level_fill_price("short", 103.0, bar) is None
+    assert level_fill_price("short", 97.0, bar) is None
+
+
+def test_level_fill_price_unknown_direction():
+    from src.backtest_engine import level_fill_price
+    with pytest.raises(ValueError):
+        level_fill_price("flat", 100.0, _bar("2026-01-01T00:00:00", 100, 100, 100, 100))
+
+
+def test_replay_level_fill_skips_unfilled_order_and_fills_touched_one():
+    risk_engine, whitelist = _make_risk_engine()
+    # niveau 105 jamais atteint par la bougie suivante (high 101) : aucun trade
+    bars = [_bar(f"2026-01-0{i + 1}T00:00:00", 100, 101, 99, 100) for i in range(4)]
+    signal = _FakeSignal(direction="long", entry_price=105.0, stop_price=95.0)
+    result = replay_hypothesis(
+        "TEST", bars, entry_fn=_trigger_on_call(2, signal), risk_engine=risk_engine, whitelist=whitelist,
+        envelope_initial=1000.0, confidence_threshold=0.0, lookback=5, entry_mode="level_fill",
+    )
+    assert result.trades == []
+    # même scénario, niveau 100.5 touché (STOP d'achat) : trade ouvert à niveau + glissement
+    bars = [
+        _bar("2026-01-01T00:00:00", 100, 100, 100, 100), _bar("2026-01-02T00:00:00", 100, 100, 100, 100),
+        _bar("2026-01-03T00:00:00", 100, 101, 100, 100), _bar("2026-01-04T00:00:00", 100, 100, 80, 85),
+    ]
+    signal = _FakeSignal(direction="long", entry_price=100.5, stop_price=90.0)
+    result = replay_hypothesis(
+        "TEST", bars, entry_fn=_trigger_on_call(2, signal), risk_engine=risk_engine, whitelist=whitelist,
+        envelope_initial=1000.0, confidence_threshold=0.0, lookback=5, entry_mode="level_fill",
+    )
+    assert len(result.trades) == 1
+    assert result.trades[0].entry_price_executed == pytest.approx(100.5 + 0.02)
+
+
+def test_replay_rejects_unknown_entry_mode():
+    risk_engine, whitelist = _make_risk_engine()
+    bars = [_bar(f"2026-01-0{i + 1}T00:00:00", 100, 100, 100, 100) for i in range(4)]
+    signal = _FakeSignal(direction="long", entry_price=100.0, stop_price=90.0)
+    with pytest.raises(ValueError):
+        replay_hypothesis(
+            "TEST", bars, entry_fn=_trigger_on_call(2, signal), risk_engine=risk_engine, whitelist=whitelist,
+            envelope_initial=1000.0, confidence_threshold=0.0, lookback=5, entry_mode="inconnu",
+        )

@@ -144,6 +144,38 @@ def entry_execution_price(direction: str, bar: HistoricalBar) -> float:
     raise ValueError(f"direction inconnue : {direction!r}")
 
 
+ENTRY_MODE_MARKET = "market_next_open"
+ENTRY_MODE_LEVEL_FILL = "level_fill"
+
+
+def level_fill_price(
+    direction: str, level: float, bar: HistoricalBar,
+    slippage_multiplier: float = SLIPPAGE_SPREAD_MULTIPLIER,
+) -> Optional[float]:
+    """Remplissage d'un ordre d'attente au niveau `level` pendant `bar` (29/10/2026,
+    docs/protocole_backtest_2026-10-29.md). Le type est décidé comme en live
+    (`entry_filters.choose_entry_order_type`) par le prix d'ouverture de `bar` :
+    - achat : level <= open_ask => LIMIT (rempli au niveau si low_ask <= level) ;
+      level > open_ask => STOP (rempli si high_ask >= level, au niveau + glissement) ;
+    - vente : miroir sur le bid (LIMIT si level >= open_bid, STOP sinon).
+    Niveau jamais atteint par la fourchette de la bougie => None (ordre non rempli,
+    aucun trade). Le glissement (spread x multiplicateur) ne s'applique qu'au STOP,
+    jamais en faveur : un LIMIT n'est jamais exécuté mieux que son niveau."""
+    if direction == "long":
+        if not (bar.low_ask <= level <= bar.high_ask):
+            return None
+        if level > bar.open_ask:  # STOP d'achat
+            return round(level + bar.spread_open * slippage_multiplier, 8)
+        return round(level, 8)
+    if direction == "short":
+        if not (bar.low_bid <= level <= bar.high_bid):
+            return None
+        if level < bar.open_bid:  # STOP de vente
+            return round(level - bar.spread_open * slippage_multiplier, 8)
+        return round(level, 8)
+    raise ValueError(f"direction inconnue : {direction!r}")
+
+
 def exit_execution_price(
     direction: str, level_price: float, exit_bar_spread: float,
     slippage_multiplier: float = SLIPPAGE_SPREAD_MULTIPLIER,
@@ -340,6 +372,7 @@ def replay_hypothesis(
     confirming_bar_duration_seconds: Optional[float] = None,
     extra_resolution_seconds: Optional[Dict[str, float]] = None,
     stop_update_filter: Optional[Callable[[str, float, float], bool]] = None,
+    entry_mode: str = ENTRY_MODE_MARKET,
 ) -> BacktestResult:
     """Rejoue `entry_fn` sur `own_bars` (ordre chronologique), fenêtre
     glissante stricte de `lookback` bougies (jamais de bougie future),
@@ -517,7 +550,17 @@ def replay_hypothesis(
         if not decision.approved:
             continue
 
-        executed_entry_price = entry_execution_price(signal.direction, execution_bar)
+        if entry_mode == ENTRY_MODE_LEVEL_FILL:
+            # Ordre d'attente au niveau du signal, valable pour la seule bougie suivante.
+            executed_entry_price = level_fill_price(
+                signal.direction, signal.entry_price, execution_bar, slippage_multiplier,
+            )
+            if executed_entry_price is None:
+                continue  # niveau non atteint : ordre périmé, aucun trade
+        elif entry_mode == ENTRY_MODE_MARKET:
+            executed_entry_price = entry_execution_price(signal.direction, execution_bar)
+        else:
+            raise ValueError(f"entry_mode inconnu : {entry_mode!r}")
         entry_date = _parse_date(execution_bar.time_utc)
 
         state = OpenTradeState(
