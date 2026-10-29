@@ -37,3 +37,9 @@ Thumbs.db
 
 # Instantanés locaux de la base de production (lecture seule, jamais commités)
 data/snapshots/
+
+db.sqlite
+
+# Analyse 29/10/2026 : snapshot VPS + bougies (lecture seule, jamais commités)
+data/analysis_29-10/*.db
+data/analysis_29-10/hist/
