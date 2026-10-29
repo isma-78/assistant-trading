@@ -213,3 +213,18 @@ def test_state_marks_assets_of_suspended_hypothesis(tmp_path):
     controle.main(db_path=db, out_dir=str(out))
     text = next(out.glob("etat_*.md")).read_text(encoding="utf-8")
     assert "| H3 | GBPUSD | 15 |" in text and text.count(sv.STATUS_SUSPENDED) >= 2
+
+
+def test_regularized_beta_boundaries():
+    assert sv._regularized_beta(2.0, 3.0, 0.0) == 0.0
+    assert sv._regularized_beta(2.0, 3.0, 1.0) == 1.0
+
+
+def test_state_marks_active_asset_with_enough_trades(tmp_path):
+    db = _db(tmp_path)
+    for i in range(16):
+        _closed(db, "hypothesis3_v2", "GBPUSD", 0.5 if i % 2 else -0.3)
+    out = tmp_path / "out"
+    controle.main(db_path=db, out_dir=str(out))
+    text = next(out.glob("etat_*.md")).read_text(encoding="utf-8")
+    assert "| H3 | GBPUSD | 16 |" in text and f"| {sv.STATUS_ACTIVE} |" in text
