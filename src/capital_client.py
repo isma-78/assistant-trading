@@ -69,9 +69,20 @@ def _parse_broker_datetime(value: str) -> datetime:
     return parsed
 
 
+def _parse_retry_after(headers) -> Optional[float]:
+    """Valeur numérique (secondes) de l'en-tête Retry-After, ou None."""
+    try:
+        value = float(headers.get("Retry-After"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
 class CapitalApiError(RuntimeError):
     """Erreur de communication avec l'API Capital.com (HTTP, session non
     ouverte, réponse inattendue)."""
+
+    retry_after: Optional[float] = None  # secondes, en-tête Retry-After du 429 s'il existe
 
 
 class CapitalClient:
@@ -180,7 +191,11 @@ class CapitalClient:
             # Bug réel trouvé le 16/08/2026 : un échec silencieux de ce
             # détail a fait perdre du temps de diagnostic pendant le
             # test réel encadré d'executor.py (voir docs/DECISIONS.md).
-            raise CapitalApiError(f"{exc} — corps de la réponse : {resp.text}") from exc
+            error = CapitalApiError(f"{exc} — corps de la réponse : {resp.text}")
+            # En-tête Retry-After (secondes) conservé pour le backoff des
+            # appelants (src/retry.py) ; None s'il est absent ou illisible.
+            error.retry_after = _parse_retry_after(getattr(resp, "headers", None))
+            raise error from exc
 
     @staticmethod
     def _is_invalid_session_error(exc: "CapitalApiError") -> bool:

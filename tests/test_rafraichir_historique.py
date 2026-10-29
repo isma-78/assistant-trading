@@ -221,7 +221,8 @@ def test_fetch_window_429_aborts():
     client = FakeClient(error=CapitalApiError("error.too-many.requests"))
     budget = rh.CallBudget(max_calls=10)
     with pytest.raises(rh.RateLimitAbort):
-        rh.fetch_window(client, "GOLD", "HOUR", datetime(2026, 10, 6), datetime(2026, 10, 6, 1), budget)
+        rh.fetch_window(client, "GOLD", "HOUR", datetime(2026, 10, 6), datetime(2026, 10, 6, 1), budget,
+                        sleep_fn=lambda *_: None)
 
 
 def test_fetch_window_not_found_breaks_without_error():
@@ -235,14 +236,15 @@ def test_fetch_window_other_api_error_propagates():
     client = FakeClient(error=CapitalApiError("error.validation.something"))
     budget = rh.CallBudget(max_calls=10)
     with pytest.raises(CapitalApiError):
-        rh.fetch_window(client, "GOLD", "HOUR", datetime(2026, 10, 6), datetime(2026, 10, 6, 1), budget)
+        rh.fetch_window(client, "GOLD", "HOUR", datetime(2026, 10, 6), datetime(2026, 10, 6, 1), budget,
+                        sleep_fn=lambda *_: None)
 
 
 def test_fetch_window_request_exception_propagates():
     client = FakeClient(error=requests.exceptions.ConnectionError("boom"))
     budget = rh.CallBudget(max_calls=10)
     with pytest.raises(requests.exceptions.ConnectionError):
-        rh.fetch_window(client, "GOLD", "HOUR", datetime(2026, 10, 6), datetime(2026, 10, 6, 1), budget)
+        rh.fetch_window(client, "GOLD", "HOUR", datetime(2026, 10, 6), datetime(2026, 10, 6, 1), budget, sleep_fn=lambda *_: None)
 
 
 def test_fetch_window_budget_exhausted():
@@ -311,7 +313,7 @@ def test_refresh_combination_abandoned_on_integrity_failure(tmp_path):
     _write_history(tmp_path, "GOLD", "HOUR", [_candle("2026-10-06T00:00:00", 1.0, 1.01)])
     client = FakeClient(pages=[[_candle("2026-10-06T00:00:00", 1.0, 9.0)]])  # spread très différent
     budget = rh.CallBudget(max_calls=10)
-    result = rh.refresh_combination(client, "GOLD", "HOUR", datetime(2026, 10, 6, 1), budget,
+    result = rh.refresh_combination(client, "GOLD", "HOUR", datetime(2026, 10, 6, 3), budget,
                                      {"GOLD": 0.01}, historical_dir=tmp_path)
     assert result.status == "abandoned_integrity"
     untouched = json.loads((tmp_path / "GOLD_HOUR.json").read_text(encoding="utf-8"))
@@ -361,7 +363,7 @@ def test_main_stops_on_executor_rate_limit(tmp_path):
     for asset, resolution in rh.get_deployed_combinations(db_path):
         _write_history(hist_dir, asset, resolution, [_candle("2026-10-06T00:00:00")])
     client = FakeClient()
-    code = rh.main(config=config, client_factory=lambda cfg: client, historical_dir=hist_dir)
+    code = rh.main(config=config, client_factory=lambda cfg: client, historical_dir=hist_dir, sleep_fn=lambda *_: None)
     assert code == 2
 
 
@@ -374,7 +376,7 @@ def test_main_stops_on_429(tmp_path):
     for asset, resolution in rh.get_deployed_combinations(db_path):
         _write_history(hist_dir, asset, resolution, [_candle("2026-10-06T00:00:00")])
     client = FakeClient(error=CapitalApiError("error.too-many.requests"))
-    code = rh.main(config=config, client_factory=lambda cfg: client, historical_dir=hist_dir)
+    code = rh.main(config=config, client_factory=lambda cfg: client, historical_dir=hist_dir, sleep_fn=lambda *_: None)
     assert code == 2
 
 
@@ -388,5 +390,79 @@ def test_main_stops_on_budget_exhaustion(tmp_path, monkeypatch):
         _write_history(hist_dir, asset, resolution, [_candle("2026-10-06T00:00:00")])
     monkeypatch.setattr(rh, "MAX_CALLS", 0)
     client = FakeClient(pages=[[_candle("2026-10-06T01:00:00")]])
-    code = rh.main(config=config, client_factory=lambda cfg: client, historical_dir=hist_dir)
+    code = rh.main(config=config, client_factory=lambda cfg: client, historical_dir=hist_dir, sleep_fn=lambda *_: None)
     assert code == 3
+
+
+# --- 29/10/2026 : backoff exponentiel + jitter + Retry-After, reprise -----------
+
+def test_exponential_backoff_honors_retry_after_and_jitter():
+    from src.retry import retry_with_exponential_backoff
+    delays = []
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        if calls["n"] < 4:
+            exc = CapitalApiError("429 too-many.requests")
+            exc.retry_after = 30.0 if calls["n"] == 2 else None
+            raise exc
+        return "ok"
+
+    out = retry_with_exponential_backoff(
+        fn, is_retryable=lambda e: isinstance(e, CapitalApiError), base_seconds=2.0, cap_seconds=100.0,
+        rng=lambda: 0.5, sleep_fn=delays.append,
+    )
+    assert out == "ok" and calls["n"] == 4
+    # tentative 1 : 0.5*2 = 1 ; tentative 2 : max(0.5*4=2, Retry-After 30) = 30 ; tentative 3 : 0.5*8 = 4
+    assert delays == [1.0, 30.0, 4.0]
+
+
+def test_exponential_backoff_caps_delay_and_raises_after_max_attempts():
+    from src.retry import retry_with_exponential_backoff
+    delays = []
+
+    def fn():
+        raise CapitalApiError("429")
+
+    with pytest.raises(CapitalApiError):
+        retry_with_exponential_backoff(
+            fn, is_retryable=lambda e: True, max_attempts=4, base_seconds=10.0, cap_seconds=15.0,
+            rng=lambda: 1.0, sleep_fn=delays.append,
+        )
+    assert delays == [10.0, 15.0, 15.0]  # plafonné ; jamais de pause après la dernière tentative
+
+
+def test_exponential_backoff_non_retryable_raises_immediately():
+    from src.retry import retry_with_exponential_backoff
+    delays = []
+    with pytest.raises(ValueError):
+        retry_with_exponential_backoff(lambda: (_ for _ in ()).throw(ValueError("x")),
+                                       is_retryable=lambda e: False, sleep_fn=delays.append)
+    assert delays == []
+
+
+def test_capital_client_exposes_retry_after_header():
+    from unittest.mock import MagicMock
+    import requests as rq
+    from src.capital_client import CapitalClient
+    resp = MagicMock()
+    resp.raise_for_status.side_effect = rq.HTTPError("429")
+    resp.text = "{}"
+    resp.headers = {"Retry-After": "12"}
+    with pytest.raises(CapitalApiError) as info:
+        CapitalClient._raise_for_status(resp)
+    assert info.value.retry_after == 12.0
+    resp.headers = {"Retry-After": "bientôt"}
+    with pytest.raises(CapitalApiError) as info:
+        CapitalClient._raise_for_status(resp)
+    assert info.value.retry_after is None
+
+
+def test_refresh_skips_network_when_already_up_to_date(tmp_path):
+    _write_history(tmp_path, "GOLD", "HOUR", [_candle("2026-10-06T00:00:00")])
+    client = FakeClient(pages=[])
+    budget = rh.CallBudget(max_calls=10)
+    result = rh.refresh_combination(client, "GOLD", "HOUR", datetime(2026, 10, 6, 1, 30), budget,
+                                     {"GOLD": 0.01}, historical_dir=tmp_path)
+    assert result.status == "up_to_date" and result.appels_consommes == 0 and budget.used == 0

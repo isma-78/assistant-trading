@@ -33,8 +33,9 @@ diminue.
 """
 
 import logging
+import random
 import time
-from typing import Callable, Sequence, Tuple, Type, TypeVar
+from typing import Callable, Optional, Sequence, Tuple, Type, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -66,3 +67,38 @@ def retry_with_backoff(
                 attempt + 1, attempts, exc, delay,
             )
             time.sleep(delay)
+
+
+def retry_with_exponential_backoff(
+    fn: Callable[[], T],
+    *,
+    is_retryable: Callable[[BaseException], bool],
+    max_attempts: int = 6,
+    base_seconds: float = 2.0,
+    cap_seconds: float = 120.0,
+    max_retry_after_seconds: float = 600.0,
+    rng: Callable[[], float] = random.random,
+    sleep_fn: Optional[Callable[[float], None]] = None,
+) -> T:
+    """Backoff exponentiel avec jitter complet pour les traitements par lot
+    (rafraîchissement des bougies) — jamais pour un ordre. Avant la
+    tentative n+1, l'attente vaut `rng() * min(cap, base * 2**n)` (jitter
+    complet) ; si l'exception porte un `retry_after` (en-tête Retry-After du
+    429), l'attente n'est JAMAIS inférieure à cette valeur (plafonnée à
+    `max_retry_after_seconds`). Une exception non retentable est relevée
+    aussitôt ; la dernière est relevée telle quelle après `max_attempts`."""
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            if not is_retryable(exc) or attempt == max_attempts - 1:
+                raise
+            delay = rng() * min(cap_seconds, base_seconds * (2 ** attempt))
+            retry_after = getattr(exc, "retry_after", None)
+            if isinstance(retry_after, (int, float)) and retry_after > 0:
+                delay = max(delay, min(float(retry_after), max_retry_after_seconds))
+            logger.warning(
+                "Tentative %d/%d échouée (%s) — nouvel essai dans %.1fs", attempt + 1, max_attempts, exc, delay,
+            )
+            (sleep_fn or time.sleep)(delay)
+    raise AssertionError("inatteignable")  # pragma: no cover
