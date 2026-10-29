@@ -1,0 +1,642 @@
+{
+ "old": {
+  "GOLD": {
+   "n": 23728,
+   "C": 0.06865489362335384,
+   "P": 0.9777896454622771,
+   "V": 0.2808594371441107
+  },
+  "US100": {
+   "n": 23654,
+   "C": 0.040026792051884336,
+   "P": 0.9195601638058533,
+   "V": 0.3237709789912581
+  },
+  "US30": {
+   "n": 23622,
+   "C": 0.0384687627865524,
+   "P": 0.8969832714329329,
+   "V": 0.3653469320529979
+  },
+  "EURUSD": {
+   "n": 24952,
+   "C": 0.047174188787827254,
+   "P": 0.9182283860507223,
+   "V": 0.28232998222856287
+  },
+  "GBPUSD": {
+   "n": 24974,
+   "C": 0.06798374565464899,
+   "P": 0.9580548339728373,
+   "V": 0.3037016057529413
+  },
+  "USDJPY": {
+   "n": 24953,
+   "C": 0.06881980960155439,
+   "P": 0.9819996792685399,
+   "V": 0.3001606953782167
+  },
+  "BTCUSD": {
+   "n": 34846,
+   "C": 0.27624449891230557,
+   "P": 0.946715461312785,
+   "V": 0.27470773086390565
+  },
+  "ETHUSD": {
+   "n": 34843,
+   "C": 0.5583909345089806,
+   "P": 0.9160161475758549,
+   "V": 0.25517682270379566
+  },
+  "CHFJPY": {
+   "n": 24965,
+   "C": 0.17608847889509174,
+   "P": 0.9125450284833615,
+   "V": 0.31228246717998637
+  }
+ },
+ "recent": {
+  "GOLD": {
+   "n": 13726,
+   "C": 0.0253025592641661,
+   "P": 0.9148425004521228,
+   "V": 0.27879046975182814
+  },
+  "US100": {
+   "n": 14071,
+   "C": 0.02580999927240678,
+   "P": 1.0145107158737754,
+   "V": 0.27420216937923453
+  },
+  "US30": {
+   "n": 14060,
+   "C": 0.022108846941965816,
+   "P": 1.0462649987615282,
+   "V": 0.29296617621065435
+  },
+  "EURUSD": {
+   "n": 14424,
+   "C": 0.04955253343604411,
+   "P": 1.0059986242598298,
+   "V": 0.21286783134329781
+  },
+  "GBPUSD": {
+   "n": 14424,
+   "C": 0.08477164162333707,
+   "P": 0.9717170840419624,
+   "V": 0.20395552924081672
+  },
+  "USDJPY": {
+   "n": 14424,
+   "C": 0.04459047401751835,
+   "P": 1.0912663026854967,
+   "V": 0.2062393212162162
+  },
+  "BTCUSD": {
+   "n": 20099,
+   "C": 0.10455042192825724,
+   "P": 0.9817925108811546,
+   "V": 0.26454073464045263
+  },
+  "ETHUSD": {
+   "n": 20087,
+   "C": 0.07769398966001172,
+   "P": 1.0329599933021172,
+   "V": 0.21850029163157356
+  },
+  "CHFJPY": {
+   "n": 14417,
+   "C": 0.1314892795070155,
+   "P": 0.9511285768388146,
+   "V": 0.20237301249861633
+  }
+ },
+ "corr_old": {
+  "GOLD|US100": 0.1013170000318355,
+  "GOLD|US30": 0.06358639380209796,
+  "GOLD|EURUSD": 0.345303906941077,
+  "GOLD|GBPUSD": 0.28612577879310064,
+  "GOLD|USDJPY": -0.3619892314034925,
+  "GOLD|BTCUSD": 0.10842864645768112,
+  "GOLD|ETHUSD": 0.09245573827861593,
+  "GOLD|CHFJPY": -0.011902269236520225,
+  "US100|US30": 0.8381934920152316,
+  "US100|EURUSD": 0.2504141962655415,
+  "US100|GBPUSD": 0.2912206845639884,
+  "US100|USDJPY": 0.02589347856371642,
+  "US100|BTCUSD": 0.2610215695306757,
+  "US100|ETHUSD": 0.2558479592096075,
+  "US100|CHFJPY": 0.1721367071326069,
+  "US30|EURUSD": 0.23682614086188802,
+  "US30|GBPUSD": 0.2953372251181528,
+  "US30|USDJPY": 0.07590840127878634,
+  "US30|BTCUSD": 0.22827636260466824,
+  "US30|ETHUSD": 0.2169912322912364,
+  "US30|CHFJPY": 0.19172450989213508,
+  "EURUSD|GBPUSD": 0.643555495034113,
+  "EURUSD|USDJPY": -0.4201114337941132,
+  "EURUSD|BTCUSD": 0.131507252002264,
+  "EURUSD|ETHUSD": 0.12797865284214396,
+  "EURUSD|CHFJPY": 0.25694094700212317,
+  "GBPUSD|USDJPY": -0.3177518532603323,
+  "GBPUSD|BTCUSD": 0.12776676566246004,
+  "GBPUSD|ETHUSD": 0.12777618358478324,
+  "GBPUSD|CHFJPY": 0.14889349636201546,
+  "USDJPY|BTCUSD": -0.046077719574253224,
+  "USDJPY|ETHUSD": -0.04476026047905043,
+  "USDJPY|CHFJPY": 0.5612944500066788,
+  "BTCUSD|ETHUSD": 0.8399292918440423,
+  "BTCUSD|CHFJPY": 0.0484685775329173,
+  "ETHUSD|CHFJPY": 0.047720011345741255
+ },
+ "corr_recent": {
+  "GOLD|US100": 0.20418583882483274,
+  "GOLD|US30": 0.19149091275092023,
+  "GOLD|EURUSD": 0.335231574544172,
+  "GOLD|GBPUSD": 0.352578599972513,
+  "GOLD|USDJPY": -0.2135923487427277,
+  "GOLD|BTCUSD": 0.17027021076288296,
+  "GOLD|ETHUSD": 0.15899232578523284,
+  "GOLD|CHFJPY": 0.061756346547685304,
+  "US100|US30": 0.7383933434434102,
+  "US100|EURUSD": 0.09135055938210884,
+  "US100|GBPUSD": 0.2179508173141697,
+  "US100|USDJPY": 0.13448403580246102,
+  "US100|BTCUSD": 0.4460354491180477,
+  "US100|ETHUSD": 0.4392418843874166,
+  "US100|CHFJPY": 0.09567245157611833,
+  "US30|EURUSD": 0.1114216666572706,
+  "US30|GBPUSD": 0.2496011265217577,
+  "US30|USDJPY": 0.09217367887671798,
+  "US30|BTCUSD": 0.3564133199419205,
+  "US30|ETHUSD": 0.35807387978444044,
+  "US30|CHFJPY": 0.08323517263935964,
+  "EURUSD|GBPUSD": 0.7897370850694435,
+  "EURUSD|USDJPY": -0.4982775975147531,
+  "EURUSD|BTCUSD": 0.08997984535532184,
+  "EURUSD|ETHUSD": 0.10025289286209561,
+  "EURUSD|CHFJPY": 0.1390990348478198,
+  "GBPUSD|USDJPY": -0.4254999209769767,
+  "GBPUSD|BTCUSD": 0.15813945445667724,
+  "GBPUSD|ETHUSD": 0.1653200368524905,
+  "GBPUSD|CHFJPY": 0.08535531657045689,
+  "USDJPY|BTCUSD": 0.04897668915411309,
+  "USDJPY|ETHUSD": 0.04646646646372288,
+  "USDJPY|CHFJPY": 0.6089089794865065,
+  "BTCUSD|ETHUSD": 0.8234234114605381,
+  "BTCUSD|CHFJPY": 0.05880987549596475,
+  "ETHUSD|CHFJPY": 0.05550282401952079
+ },
+ "table": {
+  "H1": {
+   "GOLD": {
+    "score_old": 2,
+    "score_recent": 2,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [
+     "P=0.915<0.93"
+    ],
+    "status": "inadapt\u00e9"
+   },
+   "US100": {
+    "score_old": 2,
+    "score_recent": 4,
+    "max": 4,
+    "veto_old": [
+     "P=0.920<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "US30": {
+    "score_old": 2,
+    "score_recent": 4,
+    "max": 4,
+    "veto_old": [
+     "P=0.897<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "EURUSD": {
+    "score_old": 2,
+    "score_recent": 4,
+    "max": 4,
+    "veto_old": [
+     "P=0.918<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "GBPUSD": {
+    "score_old": 2,
+    "score_recent": 1,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [],
+    "status": "adapt\u00e9"
+   },
+   "USDJPY": {
+    "score_old": 2,
+    "score_recent": 4,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [],
+    "status": "adapt\u00e9"
+   },
+   "BTCUSD": {
+    "score_old": 0,
+    "score_recent": 1,
+    "max": 4,
+    "veto_old": [
+     "C=0.276>0.15"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "ETHUSD": {
+    "score_old": 0,
+    "score_recent": 3,
+    "max": 4,
+    "veto_old": [
+     "C=0.558>0.15",
+     "P=0.916<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "CHFJPY": {
+    "score_old": 0,
+    "score_recent": 1,
+    "max": 4,
+    "veto_old": [
+     "C=0.176>0.15",
+     "P=0.913<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   }
+  },
+  "H2": {
+   "GOLD": {
+    "score_old": 2,
+    "score_recent": 2,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [
+     "P=0.915<0.93"
+    ],
+    "status": "inadapt\u00e9"
+   },
+   "US100": {
+    "score_old": 2,
+    "score_recent": 4,
+    "max": 4,
+    "veto_old": [
+     "P=0.920<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "US30": {
+    "score_old": 2,
+    "score_recent": 4,
+    "max": 4,
+    "veto_old": [
+     "P=0.897<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "EURUSD": {
+    "score_old": 2,
+    "score_recent": 4,
+    "max": 4,
+    "veto_old": [
+     "P=0.918<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "GBPUSD": {
+    "score_old": 2,
+    "score_recent": 1,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [],
+    "status": "adapt\u00e9"
+   },
+   "USDJPY": {
+    "score_old": 2,
+    "score_recent": 4,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [],
+    "status": "adapt\u00e9"
+   },
+   "BTCUSD": {
+    "score_old": 0,
+    "score_recent": 1,
+    "max": 4,
+    "veto_old": [
+     "C=0.276>0.15"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "ETHUSD": {
+    "score_old": 0,
+    "score_recent": 3,
+    "max": 4,
+    "veto_old": [
+     "C=0.558>0.15",
+     "P=0.916<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "CHFJPY": {
+    "score_old": 0,
+    "score_recent": 1,
+    "max": 4,
+    "veto_old": [
+     "C=0.176>0.15",
+     "P=0.913<0.93"
+    ],
+    "veto_recent": [],
+    "status": "exclu (pr\u00e9-enregistrement 29/08)"
+   }
+  },
+  "H3": {
+   "GOLD": {
+    "score_old": 2,
+    "score_recent": 2,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [
+     "P=0.915<0.93"
+    ],
+    "status": "inadapt\u00e9"
+   },
+   "US100": {
+    "score_old": 2,
+    "score_recent": 4,
+    "max": 4,
+    "veto_old": [
+     "P=0.920<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "US30": {
+    "score_old": 2,
+    "score_recent": 4,
+    "max": 4,
+    "veto_old": [
+     "P=0.897<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "EURUSD": {
+    "score_old": 2,
+    "score_recent": 4,
+    "max": 4,
+    "veto_old": [
+     "P=0.918<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "GBPUSD": {
+    "score_old": 2,
+    "score_recent": 1,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [],
+    "status": "adapt\u00e9"
+   },
+   "USDJPY": {
+    "score_old": 2,
+    "score_recent": 4,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [],
+    "status": "adapt\u00e9"
+   },
+   "BTCUSD": {
+    "score_old": 0,
+    "score_recent": 1,
+    "max": 4,
+    "veto_old": [
+     "C=0.276>0.1"
+    ],
+    "veto_recent": [
+     "C=0.105>0.1"
+    ],
+    "status": "inadapt\u00e9"
+   },
+   "ETHUSD": {
+    "score_old": 0,
+    "score_recent": 3,
+    "max": 4,
+    "veto_old": [
+     "C=0.558>0.1",
+     "P=0.916<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "CHFJPY": {
+    "score_old": 0,
+    "score_recent": 1,
+    "max": 4,
+    "veto_old": [
+     "C=0.176>0.1",
+     "P=0.913<0.93"
+    ],
+    "veto_recent": [
+     "C=0.131>0.1"
+    ],
+    "status": "exclu (pr\u00e9-enregistrement 29/08)"
+   }
+  },
+  "H4": {
+   "GOLD": {
+    "score_old": 1,
+    "score_recent": 4,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [],
+    "status": "douteux"
+   },
+   "US100": {
+    "score_old": 4,
+    "score_recent": 2,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [],
+    "status": "adapt\u00e9"
+   },
+   "US30": {
+    "score_old": 4,
+    "score_recent": 2,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [],
+    "status": "adapt\u00e9"
+   },
+   "EURUSD": {
+    "score_old": 4,
+    "score_recent": 2,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [],
+    "status": "adapt\u00e9"
+   },
+   "GBPUSD": {
+    "score_old": 2,
+    "score_recent": 0,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [],
+    "status": "adapt\u00e9"
+   },
+   "USDJPY": {
+    "score_old": 1,
+    "score_recent": 2,
+    "max": 4,
+    "veto_old": [],
+    "veto_recent": [
+     "P=1.091>1.07"
+    ],
+    "status": "inadapt\u00e9"
+   },
+   "BTCUSD": {
+    "score_old": 1,
+    "score_recent": 0,
+    "max": 4,
+    "veto_old": [
+     "C=0.276>0.1"
+    ],
+    "veto_recent": [
+     "C=0.105>0.1"
+    ],
+    "status": "inadapt\u00e9"
+   },
+   "ETHUSD": {
+    "score_old": 2,
+    "score_recent": 1,
+    "max": 4,
+    "veto_old": [
+     "C=0.558>0.1"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "CHFJPY": {
+    "score_old": 2,
+    "score_recent": 1,
+    "max": 4,
+    "veto_old": [
+     "C=0.176>0.1"
+    ],
+    "veto_recent": [
+     "C=0.131>0.1"
+    ],
+    "status": "exclu (pr\u00e9-enregistrement 29/08)"
+   }
+  },
+  "H5": {
+   "GOLD": {
+    "score_old": 3,
+    "score_recent": 3,
+    "max": 6,
+    "veto_old": [],
+    "veto_recent": [
+     "P=0.915<0.93"
+    ],
+    "status": "inadapt\u00e9"
+   },
+   "US100": {
+    "score_old": 4,
+    "score_recent": 5,
+    "max": 6,
+    "veto_old": [
+     "P=0.920<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "US30": {
+    "score_old": 4,
+    "score_recent": 5,
+    "max": 6,
+    "veto_old": [
+     "P=0.897<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "EURUSD": {
+    "score_old": 3,
+    "score_recent": 4,
+    "max": 6,
+    "veto_old": [
+     "P=0.918<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "GBPUSD": {
+    "score_old": 4,
+    "score_recent": 1,
+    "max": 6,
+    "veto_old": [],
+    "veto_recent": [],
+    "status": "adapt\u00e9"
+   },
+   "USDJPY": {
+    "score_old": 4,
+    "score_recent": 4,
+    "max": 6,
+    "veto_old": [],
+    "veto_recent": [],
+    "status": "adapt\u00e9"
+   },
+   "BTCUSD": {
+    "score_old": 1,
+    "score_recent": 2,
+    "max": 6,
+    "veto_old": [
+     "C=0.276>0.15"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "ETHUSD": {
+    "score_old": 1,
+    "score_recent": 3,
+    "max": 6,
+    "veto_old": [
+     "C=0.558>0.15",
+     "P=0.916<0.93"
+    ],
+    "veto_recent": [],
+    "status": "inadapt\u00e9"
+   },
+   "CHFJPY": {
+    "score_old": 2,
+    "score_recent": 1,
+    "max": 6,
+    "veto_old": [
+     "C=0.176>0.15",
+     "P=0.913<0.93"
+    ],
+    "veto_recent": [],
+    "status": "exclu (pr\u00e9-enregistrement 29/08)"
+   }
+  }
+ }
+}
