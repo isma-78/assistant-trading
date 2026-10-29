@@ -9,6 +9,7 @@ Usage :
 """
 import json
 import multiprocessing
+import os
 import sys
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import src.hypothesis3_strategy_v2 as h3_v2  # noqa: E402
 import src.hypothesis4_strategy_v2 as h4_v2  # noqa: E402
 import src.hypothesis5_strategy_v2 as h5_v2  # noqa: E402
 from src.asset_whitelist import ASSET_WHITELIST  # noqa: E402
+from src.entry_filters import spread_filter_rejection  # noqa: E402
 from src.backtest_engine import bar_from_raw, replay_hypothesis  # noqa: E402
 from src.risk_engine import RiskCaps, RiskEngine  # noqa: E402
 from src.simulator_fidelity import StopRefusalModel  # noqa: E402
@@ -31,6 +33,27 @@ ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHU
 ENVELOPE = 500.0
 MIN_DATE = "2019-01-01"
 EXTRA_SECONDS = {"HOUR_4": 14400.0, "DAY": 86400.0}
+
+# Amendement n°1 (variante B) : distance minimale du stop garanti, en % du prix d'entrée (minimum effectif
+# observé sur les trades live / marge 1,01 — voir docs/protocole_backtest_2026-10-29.md §9).
+MIN_GUARANTEED_STOP_PCT = {
+    "GOLD": 0.25, "EURUSD": 0.25, "BTCUSD": 0.50, "ETHUSD": 0.50,
+    "US100": 0.10, "US30": 0.10, "GBPUSD": 0.10, "USDJPY": 0.10, "CHFJPY": 0.10,
+}
+GUARANTEED_STOP_SAFETY_MARGIN = 1.01  # = executor.GUARANTEED_STOP_SAFETY_MARGIN
+
+
+def production_precheck(asset, direction, entry, stop, bar):
+    """Pré-contrôles d'entrée de la production : stop élargi au minimum broker (jamais resserré), puis refus
+    si spread/stop > 0,10 (`entry_filters.spread_filter_rejection`, bid/ask d'ouverture de la bougie d'exécution)."""
+    min_distance = entry * MIN_GUARANTEED_STOP_PCT[asset] / 100.0 * GUARANTEED_STOP_SAFETY_MARGIN
+    distance = abs(entry - stop)
+    if distance < min_distance:
+        stop = round(entry - min_distance, 8) if direction == "long" else round(entry + min_distance, 8)
+    if spread_filter_rejection(bar.open_bid, bar.open_ask, entry, stop) is not None:
+        return None
+    return stop
+
 
 HYP = {
     "H1": {"module": h1_v2, "extras": [], "donchian": False},
@@ -52,7 +75,7 @@ def load_bars(asset, resolution):
     return sorted(bars, key=lambda b: b.time_utc)
 
 
-def run_replay(hyp, asset, own_bars=None, extras=None, stop_refusal=True):
+def run_replay(hyp, asset, own_bars=None, extras=None, stop_refusal=True, variant="A"):
     cfg = HYP[hyp]
     engine = RiskEngine(caps=RiskCaps(2.0, 4.0, ENVELOPE), whitelist=ASSET_WHITELIST)
     own_bars = own_bars if own_bars is not None else load_bars(asset, "HOUR")
@@ -60,6 +83,7 @@ def run_replay(hyp, asset, own_bars=None, extras=None, stop_refusal=True):
         "is_donchian_trailing": cfg["donchian"],
         "stop_update_filter": StopRefusalModel() if stop_refusal else None,
         "entry_mode": "level_fill",
+        "entry_precheck": production_precheck if variant == "B" else None,
     }
     if cfg["extras"]:
         extras = extras if extras is not None else {r: load_bars(asset, r) for r in cfg["extras"]}
@@ -70,19 +94,24 @@ def run_replay(hyp, asset, own_bars=None, extras=None, stop_refusal=True):
     return replay_hypothesis(asset, own_bars, cfg["module"].evaluate_entry, engine, ASSET_WHITELIST, ENVELOPE, 0.75, **kwargs)
 
 
+VARIANT = os.environ.get("BT_VARIANT", "A")  # lu aussi par les processus fils (spawn)
+
+
 def _job(args):
     hyp, asset = args
-    result = run_replay(hyp, asset)
+    result = run_replay(hyp, asset, variant=VARIANT)
     payload = {
         "hypothesis": hyp, "asset": asset, "orders_placed": result.orders_placed, "orders_unfilled": result.orders_unfilled,
+        "orders_prechecked_out": result.orders_prechecked_out,
         "trades": [
             {"entry_time": t.entry_time_utc, "exit_time": t.exit_time_utc, "r": t.r_multiple_total,
              "risk_eur": t.risk_amount_eur, "direction": t.direction}
             for t in result.trades
         ],
     }
-    OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / f"trades_{hyp}_{asset}.json").write_text(json.dumps(payload), encoding="utf-8")
+    out_dir = OUT if VARIANT == "A" else OUT / VARIANT
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / f"trades_{hyp}_{asset}.json").write_text(json.dumps(payload), encoding="utf-8")
     return hyp, asset, len(result.trades), result.orders_placed, result.orders_unfilled
 
 
@@ -119,6 +148,8 @@ def cmd_lookahead():
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if "--variant" in sys.argv:
+        os.environ["BT_VARIANT"] = VARIANT = sys.argv[sys.argv.index("--variant") + 1]
     if cmd == "replay":
         jobs_n = int(sys.argv[sys.argv.index("--jobs") + 1]) if "--jobs" in sys.argv else 3
         cmd_replay(jobs_n)

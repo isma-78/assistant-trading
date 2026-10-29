@@ -275,6 +275,7 @@ class BacktestResult:
     final_simulated_reserve: float  # JAMAIS écrit dans reserve_ledger (voir docs/HYPOTHESES.md)
     orders_placed: int = 0    # mode level_fill : ordres d'attente approuvés par decide_entry
     orders_unfilled: int = 0  # dont niveau non atteint par la bougie suivante
+    orders_prechecked_out: int = 0  # refusés par entry_precheck (coût / stop) avant tout ordre
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +376,7 @@ def replay_hypothesis(
     extra_resolution_seconds: Optional[Dict[str, float]] = None,
     stop_update_filter: Optional[Callable[[str, float, float], bool]] = None,
     entry_mode: str = ENTRY_MODE_MARKET,
+    entry_precheck: Optional[Callable[[str, str, float, float, "HistoricalBar"], Optional[float]]] = None,
 ) -> BacktestResult:
     """Rejoue `entry_fn` sur `own_bars` (ordre chronologique), fenêtre
     glissante stricte de `lookback` bougies (jamais de bougie future),
@@ -478,6 +480,7 @@ def replay_hypothesis(
     open_state: Optional[dict] = None  # voir _open_position/_manage_open_position ci-dessous
     orders_placed = 0
     orders_unfilled = 0
+    orders_prechecked_out = 0
 
     n = len(own_bars)
     for t in range(n):
@@ -544,9 +547,19 @@ def replay_hypothesis(
         execution_bar = own_bars[t + 1]
         execution_mid_open = round((execution_bar.open_bid + execution_bar.open_ask) / 2, 8)
 
+        order_stop_price = signal.stop_price
+        if entry_precheck is not None:
+            # Pré-contrôles d'entrée de la production (29/10/2026, amendement n°1 du protocole) :
+            # renvoie le stop à utiliser (élargi au minimum broker si besoin, jamais resserré)
+            # ou None si l'entrée est refusée (coût spread/stop). Le sizing utilise ce stop.
+            order_stop_price = entry_precheck(asset, signal.direction, signal.entry_price, signal.stop_price, execution_bar)
+            if order_stop_price is None:
+                orders_prechecked_out += 1
+                continue
+
         decision = decide_entry(
             asset=asset, direction=signal.direction, entry_price=signal.entry_price,
-            stop_price=signal.stop_price, confidence=getattr(signal, "confidence", 1.0),
+            stop_price=order_stop_price, confidence=getattr(signal, "confidence", 1.0),
             current_price=execution_mid_open, market_status="TRADEABLE",
             risk_engine=risk_engine, whitelist=whitelist, envelope_balance=envelope.balance,
             confidence_threshold=confidence_threshold, go_nogo_ok=True,
@@ -572,7 +585,7 @@ def replay_hypothesis(
         state = OpenTradeState(
             trade_id=-1, deal_id="backtest", asset=asset, source="backtest",
             direction=signal.direction, entry_price=executed_entry_price,
-            initial_stop_price=signal.stop_price, stop_price=signal.stop_price,
+            initial_stop_price=order_stop_price, stop_price=order_stop_price,
             tp1=getattr(signal, "tp1", None), tp2=getattr(signal, "tp2", None),
             tp1_hit=False, tp2_hit=False, remaining_fraction=1.0, guaranteed_stop=False,
             take_profit=getattr(signal, "take_profit", None),
@@ -591,7 +604,7 @@ def replay_hypothesis(
 
     return BacktestResult(
         trades=trades, final_envelope_balance=envelope.balance, final_simulated_reserve=simulated_reserve,
-        orders_placed=orders_placed, orders_unfilled=orders_unfilled,
+        orders_placed=orders_placed, orders_unfilled=orders_unfilled, orders_prechecked_out=orders_prechecked_out,
     )
 
 

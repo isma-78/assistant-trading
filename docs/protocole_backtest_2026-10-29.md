@@ -91,3 +91,19 @@ Famille de Holm : deux familles (une par sens de test), chacune de taille m = no
 ## 8. Application
 Mapping modifié uniquement dans `src/hypothesis_asset_map.py` selon §7 ; époque P2 enregistrée au redémarrage ;
 la surveillance n'utilise que l'époque en cours ; positions ouvertes sur actifs retirés gérées jusqu'à clôture.
+
+## 9. Amendement n°1 (écrit APRÈS lecture de la variante A ; divulgué)
+**Chronologie honnête.** Le protocole ci-dessus (variante **A**) a été exécuté tel quel. En lisant ses résultats,
+H2 montre des R moyens de test de −1 à −4 R avec un R unitaire jusqu'à −10 R et un risque nominal de 0,03 €, ce qui
+signale un artefact : le moteur utilise le stop brut de la stratégie, alors que la PRODUCTION (a) élargit le stop au
+minimum de distance du stop garanti du broker avant de dimensionner (`executor._compute_guaranteed_stop_adjustment`)
+et (b) refuse l'entrée si spread/stop > 0,10 (`entry_filters.spread_filter_rejection`, déployé le 29/10). Ces deux
+règles de production n'étaient pas rejouées : omission de fidélité, pas optimisation. Aucun paramètre de stratégie
+n'est modifié.
+**Variante B** = A + ces deux pré-contrôles d'entrée, via `replay_hypothesis(entry_precheck=...)` :
+distance minimale de stop garanti en % du prix d'entrée, valeurs observées sur les trades live (minimum effectif /
+1,01 de marge) : GOLD 0,25 ; EURUSD 0,25 ; BTCUSD, ETHUSD 0,50 ; US100, US30, GBPUSD, USDJPY, CHFJPY 0,10 ; stop élargi
+SI plus serré (jamais resserré), puis refus si spread d'ouverture / distance de stop > 0,10.
+**Règle de décision finale (fixée avant de lancer B)** : un verdict CONCENTRER ou SUPPRIMER n'est retenu que si les
+variantes A **et** B donnent le même verdict ; sinon « non concluant ». Holm recalculé séparément par variante.
+Limite : le modèle de distance minimale est une approximation (valeur statique, pas la bande dynamique du broker).

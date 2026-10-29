@@ -928,3 +928,25 @@ def test_replay_rejects_unknown_entry_mode():
             "TEST", bars, entry_fn=_trigger_on_call(2, signal), risk_engine=risk_engine, whitelist=whitelist,
             envelope_initial=1000.0, confidence_threshold=0.0, lookback=5, entry_mode="inconnu",
         )
+
+
+def test_replay_entry_precheck_rejects_and_widens_stop():
+    risk_engine, whitelist = _make_risk_engine()
+    bars = [_bar(f"2026-01-0{i + 1}T00:00:00", 100, 100, 100, 100) for i in range(3)] + [
+        _bar("2026-01-04T00:00:00", 100, 100, 70, 75)]
+    signal = _FakeSignal(direction="long", entry_price=100.0, stop_price=99.0)
+    # refus
+    result = replay_hypothesis(
+        "TEST", bars, entry_fn=_trigger_on_call(2, signal), risk_engine=risk_engine, whitelist=whitelist,
+        envelope_initial=1000.0, confidence_threshold=0.0, lookback=5,
+        entry_precheck=lambda asset, d, e, s, b: None,
+    )
+    assert result.trades == [] and result.orders_prechecked_out == 1
+    # élargissement : stop 99 -> 90 ; le trade est dimensionné et clos sur le stop élargi
+    result = replay_hypothesis(
+        "TEST", bars, entry_fn=_trigger_on_call(2, signal), risk_engine=risk_engine, whitelist=whitelist,
+        envelope_initial=1000.0, confidence_threshold=0.0, lookback=5,
+        entry_precheck=lambda asset, d, e, s, b: 90.0,
+    )
+    assert result.orders_prechecked_out == 0 and len(result.trades) == 1
+    assert result.trades[0].stop_price_signal == 90.0
