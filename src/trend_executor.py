@@ -68,6 +68,7 @@ import logging
 
 from src.executor import HYPOTHESIS_SOURCE, HYPOTHESIS_V2_SOURCE
 from src.hypothesis1_strategy_v2 import evaluate_entry
+from src.hypothesis_asset_map import entry_assets_for
 from src.technical_strategy_executor import (
     CANDLE_COUNT,
     _generate_and_queue_signal as _generic_generate_and_queue_signal,
@@ -151,6 +152,7 @@ def run_trend_loop(config, db_path: str, interval_seconds: int = 60, startup_off
         config, db_path,
         source=HYPOTHESIS_V2_SOURCE,
         assets=HYPOTHESIS_ASSETS,
+        entry_assets=entry_assets_for("H1"),
         resolution="HOUR",
         entry_fn=evaluate_entry,
         api_key=config.capital_api_key,

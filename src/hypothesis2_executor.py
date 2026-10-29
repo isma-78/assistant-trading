@@ -41,6 +41,7 @@ import src.hypothesis2_strategy_v2 as _h2_mod
 from src.executor import HYPOTHESIS2_V2_SOURCE
 from src.hypothesis2_strategy_v2 import evaluate_entry
 from src.hypothesis_params import apply_overrides
+from src.hypothesis_asset_map import entry_assets_for
 from src.technical_strategy_executor import run_technical_strategy_loop
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,7 @@ def run_hypothesis2_loop(config, db_path: str, interval_seconds: int = 60, start
         config, db_path,
         source=HYPOTHESIS2_V2_SOURCE,
         assets=HYPOTHESIS2_ASSETS,
+        entry_assets=entry_assets_for("H2"),
         resolution="HOUR",
         entry_fn=evaluate_entry,
         api_key=config.capital_api_key_hypothesis2,

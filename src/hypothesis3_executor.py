@@ -43,6 +43,7 @@ from src.executor import HYPOTHESIS3_SOURCE, HYPOTHESIS3_V2_SOURCE
 from src.hypothesis3_strategy_v2 import evaluate_entry
 from src.hypothesis_params import apply_overrides, get_resolution_override
 from src.spread_analysis import compute_expensive_hours_by_asset
+from src.hypothesis_asset_map import entry_assets_for
 from src.technical_strategy_executor import run_technical_strategy_loop
 
 HYPOTHESIS3_ASSETS = ["GOLD", "US100", "US30", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD", "CHFJPY"]
@@ -90,6 +91,7 @@ def run_hypothesis3_loop(config, db_path: str, interval_seconds: int = 60, start
         config, db_path,
         source=HYPOTHESIS3_V2_SOURCE,
         assets=HYPOTHESIS3_ASSETS,
+        entry_assets=entry_assets_for("H3"),
         resolution=resolution,
         entry_fn=evaluate_entry,
         api_key=config.capital_api_key_hypothesis3,

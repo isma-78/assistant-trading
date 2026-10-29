@@ -74,6 +74,7 @@ from src.circuit_breaker import (
 from src.db import connection_scope
 from src.envelope_store import load_or_create_envelope, load_reserve_total, persist_trade_result
 from src.execution.stop_tightening_retry import attempt_with_retry
+from src.entry_filters import is_limit_level_marketable, spread_filter_rejection
 from src.go_nogo import GoNoGoStatus
 from src.market_data import Candle, compute_atr, get_candles, get_price_snapshot
 from src.retry import retry_with_backoff
@@ -1323,6 +1324,38 @@ def open_signal(
     adjustment = _compute_guaranteed_stop_adjustment(
         client, epic, signal_row["sens"], signal_row["entree_min"], signal_row["stop_loss"],
     )
+
+    # 29/10/2026 (docs/corrections_hypotheses_2026-10-29.md §4) : filtres
+    # d'entrée déterministes, avant sizing. Ils refusent seulement ; aucun
+    # stop ni taille n'est modifié.
+    # Limités aux sources d'hypothèses (H1-H5) : les signaux discrétionnaires
+    # Station X fournissent leurs propres niveaux, hors périmètre de l'analyse.
+    entry_filter_reason, entry_filter_detail = None, None
+    is_hypothesis_source = str(signal_row["source"]).startswith("hypothesis")
+    spread_detail = (
+        spread_filter_rejection(snapshot.bid, snapshot.ask, signal_row["entree_min"], adjustment.stop_price)
+        if is_hypothesis_source else None
+    )
+    if not is_hypothesis_source:
+        pass
+    elif spread_detail is not None:
+        entry_filter_reason, entry_filter_detail = "spread_trop_large", spread_detail
+    elif is_limit_level_marketable(signal_row["sens"], signal_row["entree_min"], snapshot.bid, snapshot.ask):
+        entry_filter_reason = "niveau_deja_franchi"
+        entry_filter_detail = (
+            f"Rejeté : niveau limite {signal_row['entree_min']} déjà exécutable "
+            f"(bid={snapshot.bid}, ask={snapshot.ask}) — le broker refuserait l'ordre limite (limit.price)"
+        )
+    if entry_filter_reason is not None:
+        with connection_scope(db_path) as conn:
+            conn.execute(
+                "INSERT INTO risk_decisions (signal_id, decided_at, approved, reason, detail, units, risk_amount_eur) "
+                "VALUES (?, ?, 0, ?, ?, NULL, NULL)",
+                (signal_row["id"], now, entry_filter_reason, entry_filter_detail),
+            )
+            conn.execute("UPDATE signals SET statut = 'rejete' WHERE id = ?", (signal_row["id"],))
+        logger.info("Signal %s rejeté : %s", signal_row["id"], entry_filter_detail)
+        return None
 
     decision = decide_entry(
         asset=asset, direction=signal_row["sens"], entry_price=signal_row["entree_min"],

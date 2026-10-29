@@ -618,7 +618,7 @@ def test_open_signal_trade_row_visible_to_guard_before_broker_call_resolves(tmp_
 
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
-    signal_row = _insert_signal(db_path, confiance=1.0, source="hypothesis3")
+    signal_row = _insert_signal(db_path, entree=100.1, confiance=1.0, source="hypothesis3")
 
     seen_active = {}
 
@@ -627,7 +627,7 @@ def test_open_signal_trade_row_visible_to_guard_before_broker_call_resolves(tmp_
         return {"deal_id": "deal-xyz", "level": 100.0}
 
     client = MagicMock()
-    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.05, "marketStatus": "TRADEABLE"}}
     client.place_limit_order.side_effect = _place_limit_order
 
     envelope_manager = CapitalManager(initial_balance=500.0)
@@ -1049,7 +1049,7 @@ def test_open_signal_records_regime_type_and_exit_type_per_source(tmp_path):
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
     client = MagicMock()
-    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.05, "marketStatus": "TRADEABLE"}}
     client.place_limit_order.return_value = {"deal_id": "deal-abc", "level": 100.0}
     envelope_manager = CapitalManager(initial_balance=500.0)
 
@@ -1061,7 +1061,7 @@ def test_open_signal_records_regime_type_and_exit_type_per_source(tmp_path):
         ("station_x", None, "tp_partiel"),                 # Station X : pas de régime, tp_partiel d'origine
     ]
     for i, (source, expected_regime, expected_exit) in enumerate(cases):
-        signal_row = _insert_signal(db_path, source=source, telegram_msg_id=100 + i)
+        signal_row = _insert_signal(db_path, entree=100.1, source=source, telegram_msg_id=100 + i)
         open_signal(
             db_path, client, signal_row, make_engine(), WHITELIST, envelope_manager, envelope_id=1,
             confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
@@ -2840,10 +2840,10 @@ def test_open_signal_not_blocked_in_demo_even_with_negative_backtest_data(tmp_pa
     init_db(db_path)
     load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
     _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", PHASE_A_MIN_TRADES_BACKTEST, r_multiple=-0.5)
-    signal_row = _insert_signal(db_path, source="hypothesis5", confiance=1.0)
+    signal_row = _insert_signal(db_path, entree=100.1, source="hypothesis5", confiance=1.0)
 
     client = MagicMock()
-    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.05, "marketStatus": "TRADEABLE"}}
     client.place_limit_order.return_value = {"deal_id": "deal-new", "level": 100.0}
     envelope_manager = CapitalManager(initial_balance=500.0)
     result = open_signal(
@@ -2906,10 +2906,10 @@ def test_open_signal_not_blocked_when_backtest_data_insufficient(tmp_path):
     # comportement inchangé (approuvé normalement).
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
-    signal_row = _insert_signal(db_path, source="hypothesis5", confiance=1.0)
+    signal_row = _insert_signal(db_path, entree=100.1, source="hypothesis5", confiance=1.0)
 
     client = MagicMock()
-    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.05, "marketStatus": "TRADEABLE"}}
     client.place_limit_order.return_value = {"deal_id": "deal-new", "level": 100.0}
 
     envelope_manager = CapitalManager(initial_balance=500.0)
@@ -2925,10 +2925,10 @@ def test_open_signal_not_blocked_when_backtest_expectancy_positive(tmp_path):
     init_db(db_path)
     load_or_create_envelope(db_path, "GOLD", "demo", 500.0, source="hypothesis5_backtest")
     _insert_closed_backtest_trades(db_path, "GOLD", "hypothesis5_backtest", PHASE_A_MIN_TRADES_BACKTEST, r_multiple=0.5)
-    signal_row = _insert_signal(db_path, source="hypothesis5", confiance=1.0)
+    signal_row = _insert_signal(db_path, entree=100.1, source="hypothesis5", confiance=1.0)
 
     client = MagicMock()
-    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.2, "marketStatus": "TRADEABLE"}}
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": 100.0, "offer": 100.05, "marketStatus": "TRADEABLE"}}
     client.place_limit_order.return_value = {"deal_id": "deal-new", "level": 100.0}
 
     envelope_manager = CapitalManager(initial_balance=500.0)
@@ -3080,3 +3080,63 @@ def test_force_close_all_open_trades_cancels_pending_orders(tmp_path):
 
     assert closed == 0
     client.cancel_working_order.assert_called_once_with("order-pending")
+
+
+# ---- 29/10/2026 : filtres d'entrée (docs/corrections_hypotheses_2026-10-29.md §4) ----
+
+def _open_with_snapshot(tmp_path, source, sens, entree, stop, bid, offer):
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    signal_row = _insert_signal(db_path, source=source, sens=sens, entree=entree, stop=stop, confiance=1.0)
+    client = MagicMock()
+    client.get_market_snapshot.return_value = {"snapshot": {"bid": bid, "offer": offer, "marketStatus": "TRADEABLE"}}
+    client.place_limit_order.return_value = {"deal_id": "deal-xyz", "level": entree}
+    result = open_signal(
+        db_path, client, signal_row, make_engine(), WHITELIST, CapitalManager(initial_balance=500.0), envelope_id=1,
+        confidence_threshold=0.75, go_nogo_status=GoNoGoStatus(allowed=True, reason="ok"),
+    )
+    conn = get_connection(db_path)
+    try:
+        decision = conn.execute("SELECT * FROM risk_decisions WHERE signal_id = ? ORDER BY id DESC", (signal_row["id"],)).fetchone()
+        status = conn.execute("SELECT statut FROM signals WHERE id = ?", (signal_row["id"],)).fetchone()["statut"]
+        trades = conn.execute("SELECT COUNT(*) AS n FROM trades").fetchone()["n"]
+    finally:
+        conn.close()
+    return result, client, decision, status, trades
+
+
+def test_hypothesis_signal_rejected_when_spread_exceeds_ten_percent_of_stop(tmp_path):
+    # long à 100, stop 99 (distance 1.0), spread 0.2 = 0.2 R > 0.10
+    result, client, decision, status, trades = _open_with_snapshot(
+        tmp_path, "hypothesis2_v2", "long", 99.9, 98.9, 99.8, 100.0,
+    )
+    assert result is None
+    client.place_limit_order.assert_not_called()
+    assert decision["reason"] == "spread_trop_large" and decision["approved"] == 0
+    assert status == "rejete" and trades == 0
+
+
+def test_hypothesis_signal_rejected_when_limit_level_already_marketable(tmp_path):
+    # vente limite à 99.0 alors que bid=100.0 : exécutable immédiatement, le broker refuserait (limit.price)
+    result, client, decision, status, trades = _open_with_snapshot(
+        tmp_path, "hypothesis_v2", "short", 99.0, 110.0, 100.0, 100.01,
+    )
+    assert result is None
+    client.place_limit_order.assert_not_called()
+    assert decision["reason"] == "niveau_deja_franchi"
+    assert status == "rejete" and trades == 0
+
+
+def test_hypothesis_signal_passes_filters_when_spread_small_and_level_waiting(tmp_path):
+    result, client, decision, status, trades = _open_with_snapshot(
+        tmp_path, "hypothesis2_v2", "short", 105.0, 110.0, 100.0, 100.01,
+    )
+    assert decision["reason"] not in ("spread_trop_large", "niveau_deja_franchi")
+
+
+def test_station_x_signal_is_not_subject_to_hypothesis_entry_filters(tmp_path):
+    # même géométrie que le rejet spread ci-dessus, mais source Station X : filtre non appliqué
+    result, client, decision, status, trades = _open_with_snapshot(
+        tmp_path, "station_x", "long", 99.9, 98.9, 99.8, 100.0,
+    )
+    assert decision is None or decision["reason"] not in ("spread_trop_large", "niveau_deja_franchi")

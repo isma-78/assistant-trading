@@ -328,6 +328,15 @@ def _generate_and_queue_signal(
     )
 
 
+def signal_generation_assets(assets: List[str], entry_assets: Optional[List[str]]) -> List[str]:
+    """Actifs sur lesquels GÉNÉRER des signaux d'entrée. `entry_assets=None`
+    => tous (comportement historique) ; sinon l'intersection, dans l'ordre de
+    `entry_assets`. La gestion des positions couvre toujours `assets`."""
+    if entry_assets is None:
+        return list(assets)
+    return [a for a in entry_assets if a in assets]
+
+
 def _should_refresh_regime_context(last_refresh_hour: Optional[int], hour_utc: int) -> bool:
     """Fonction pure, extraite pour être testable indépendamment de la
     boucle infinie. True : au tout premier appel (`last_refresh_hour is
@@ -362,6 +371,7 @@ def run_technical_strategy_loop(
     extra_resolutions: Optional[List[str]] = None,
     legacy_sources: Optional[List[str]] = None,
     expensive_hours_by_asset: Optional[Dict[str, Set[int]]] = None,
+    entry_assets: Optional[List[str]] = None,
 ) -> None:
     """Boucle continue générique d'une stratégie technique complémentaire
     (§2.11). Un seul point de variation par appelant : `source`,
@@ -554,7 +564,10 @@ def run_technical_strategy_loop(
                 last_regime_refresh_hour = now.hour
                 logger.info("%s : contexte de régime rafraîchi -> %s", hypothesis_label, regime_context)
 
-            for asset in assets:
+            # 29/10/2026 : `entry_assets` restreint les ENTRÉES seulement ;
+            # la gestion (enveloppes, positions ouvertes) couvre toujours
+            # tout `assets` (docs/corrections_hypotheses_2026-10-29.md §3).
+            for asset in signal_generation_assets(assets, entry_assets):
                 _generate_and_queue_signal(
                     db_path, client, asset,
                     source=source, resolution=resolution, entry_fn=entry_fn,
