@@ -28,3 +28,15 @@ def test_main_uses_given_timestamp(tmp_path, capsys):
     init_db(db)
     assert mod.main(["x", db, "2026-10-29T21:00:00Z"]) == 0
     assert "2026-10-29T21:00:00Z" in capsys.readouterr().out
+
+
+def test_register_custom_label_p2_does_not_touch_p1(tmp_path):
+    import sqlite3
+    from src.db import init_db
+    db = str(tmp_path / "t.db")
+    init_db(db)
+    assert mod.register(db, "2026-10-29T19:03:55Z") == 5
+    assert mod.register(db, "2026-10-30T09:00:00Z", "P2_30-10", "p2") == 5
+    assert mod.register(db, "2026-10-30T09:00:00Z", "P2_30-10", "p2") == 0
+    rows = sqlite3.connect(db).execute("SELECT epoch, COUNT(*) FROM hypothesis_epochs GROUP BY epoch ORDER BY epoch").fetchall()
+    assert rows == [("P1_29-10", 5), ("P2_30-10", 5)]

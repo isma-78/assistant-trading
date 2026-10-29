@@ -20,8 +20,10 @@ def main(db_path: str = None, out_dir: str = "data/surveillance") -> int:
     now = datetime.now(timezone.utc)
     verdicts, newly, trades = surveillance.run_daily_check(db_path, now.isoformat())
     entry_assets = {h: entry_assets_for(h) for h in surveillance.HYPOTHESIS_SOURCES}
+    current = surveillance.current_epoch(db_path)
     text = surveillance.format_state(
-        verdicts, trades, now.strftime("%Y-%m-%d"), surveillance.epoch_start(db_path), entry_assets,
+        verdicts, trades, now.strftime("%Y-%m-%d"), current[1] if current else None, entry_assets,
+        epoch_label=current[0] if current else "aucune",
     )
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     path = Path(out_dir) / f"etat_{now.strftime('%Y-%m-%d')}.md"

@@ -239,8 +239,24 @@ def ensure_schema(db_path: str) -> None:
         conn.executescript(SCHEMA)
 
 
-def epoch_start(db_path: str, epoch: str = EPOCH) -> Optional[str]:
-    """Début de l'époque (le plus ancien des enregistrements). None si absente."""
+def current_epoch(db_path: str) -> Optional[Tuple[str, str]]:
+    """Époque en cours = la plus récente (started_at) des époques « P<n>_... »
+    (P1_29-10, P2_..., etc.). Les règles de surveillance ne comptent QUE les
+    trades de cette époque (29/10/2026 : l'époque P2 remplace P1 pour toute
+    décision de suspension). None si aucune."""
+    with connection_scope(db_path) as conn:
+        row = conn.execute(
+            "SELECT epoch, MIN(started_at) AS s FROM hypothesis_epochs WHERE epoch GLOB 'P[0-9]*_*' "
+            "GROUP BY epoch ORDER BY s DESC LIMIT 1"
+        ).fetchone()
+    return (row["epoch"], row["s"]) if row is not None and row["epoch"] is not None else None
+
+
+def epoch_start(db_path: str, epoch: Optional[str] = None) -> Optional[str]:
+    """Début de l'époque donnée, ou de l'époque en cours si `epoch` est omis."""
+    if epoch is None:
+        current = current_epoch(db_path)
+        return current[1] if current else None
     with connection_scope(db_path) as conn:
         row = conn.execute("SELECT MIN(started_at) AS s FROM hypothesis_epochs WHERE epoch = ?", (epoch,)).fetchone()
     return row["s"] if row is not None else None
@@ -295,7 +311,7 @@ def run_daily_check(db_path: str, now_iso: str) -> Tuple[Dict[str, HypothesisVer
     ensure_schema(db_path)
     started_at = epoch_start(db_path)
     if started_at is None:
-        logger.warning("Surveillance : époque %s absente — aucune évaluation", EPOCH)
+        logger.warning("Surveillance : aucune époque P<n> enregistrée — aucune évaluation")
         return evaluate_hypotheses({}), [], []
     trades = fetch_post_epoch_trades(db_path, started_at)
     r_by_hypothesis: Dict[str, List[float]] = {h: [] for h in HYPOTHESIS_SOURCES}
@@ -326,7 +342,8 @@ def run_daily_check(db_path: str, now_iso: str) -> Tuple[Dict[str, HypothesisVer
 
 
 def format_state(verdicts: Dict[str, HypothesisVerdict], trades: Sequence[dict], date_label: str,
-                 started_at: Optional[str], entry_assets: Dict[str, Sequence[str]]) -> str:
+                 started_at: Optional[str], entry_assets: Dict[str, Sequence[str]],
+                 epoch_label: str = EPOCH) -> str:
     """État quotidien lisible : par hypothèse puis par hypothèse × actif."""
     def fmt(x: Optional[float]) -> str:
         return "—" if x is None else f"{x:+.3f}"
@@ -334,7 +351,7 @@ def format_state(verdicts: Dict[str, HypothesisVerdict], trades: Sequence[dict],
     lines = [
         f"# État de surveillance — {date_label}",
         "",
-        f"Époque {EPOCH} (début {started_at or 'absent'}). Trades réconciliés postérieurs uniquement. "
+        f"Époque {epoch_label} (début {started_at or 'absent'}). Trades réconciliés postérieurs uniquement. "
         f"Règle : n >= {MIN_TRADES_FOR_RULE} et borne haute de l'IC de Student < 0 après Holm (5 hypothèses).",
         "",
         "## Par hypothèse",
