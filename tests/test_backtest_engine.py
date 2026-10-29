@@ -904,7 +904,7 @@ def test_replay_level_fill_skips_unfilled_order_and_fills_touched_one():
         "TEST", bars, entry_fn=_trigger_on_call(2, signal), risk_engine=risk_engine, whitelist=whitelist,
         envelope_initial=1000.0, confidence_threshold=0.0, lookback=5, entry_mode="level_fill",
     )
-    assert result.trades == []
+    assert result.trades == [] and result.orders_placed == 1 and result.orders_unfilled == 1
     # même scénario, niveau 100.5 touché (STOP d'achat) : trade ouvert à niveau + glissement
     bars = [
         _bar("2026-01-01T00:00:00", 100, 100, 100, 100), _bar("2026-01-02T00:00:00", 100, 100, 100, 100),
@@ -915,7 +915,7 @@ def test_replay_level_fill_skips_unfilled_order_and_fills_touched_one():
         "TEST", bars, entry_fn=_trigger_on_call(2, signal), risk_engine=risk_engine, whitelist=whitelist,
         envelope_initial=1000.0, confidence_threshold=0.0, lookback=5, entry_mode="level_fill",
     )
-    assert len(result.trades) == 1
+    assert len(result.trades) == 1 and result.orders_placed == 1 and result.orders_unfilled == 0
     assert result.trades[0].entry_price_executed == pytest.approx(100.5 + 0.02)
 
 

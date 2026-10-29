@@ -273,6 +273,8 @@ class BacktestResult:
     trades: List[BacktestTrade]
     final_envelope_balance: float
     final_simulated_reserve: float  # JAMAIS écrit dans reserve_ledger (voir docs/HYPOTHESES.md)
+    orders_placed: int = 0    # mode level_fill : ordres d'attente approuvés par decide_entry
+    orders_unfilled: int = 0  # dont niveau non atteint par la bougie suivante
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +476,8 @@ def replay_hypothesis(
     last_regime_refresh_hour: Optional[int] = None
 
     open_state: Optional[dict] = None  # voir _open_position/_manage_open_position ci-dessous
+    orders_placed = 0
+    orders_unfilled = 0
 
     n = len(own_bars)
     for t in range(n):
@@ -555,7 +559,9 @@ def replay_hypothesis(
             executed_entry_price = level_fill_price(
                 signal.direction, signal.entry_price, execution_bar, slippage_multiplier,
             )
+            orders_placed += 1
             if executed_entry_price is None:
+                orders_unfilled += 1
                 continue  # niveau non atteint : ordre périmé, aucun trade
         elif entry_mode == ENTRY_MODE_MARKET:
             executed_entry_price = entry_execution_price(signal.direction, execution_bar)
@@ -583,7 +589,10 @@ def replay_hypothesis(
             "ask_at_signal": bar.close_ask,
         }
 
-    return BacktestResult(trades=trades, final_envelope_balance=envelope.balance, final_simulated_reserve=simulated_reserve)
+    return BacktestResult(
+        trades=trades, final_envelope_balance=envelope.balance, final_simulated_reserve=simulated_reserve,
+        orders_placed=orders_placed, orders_unfilled=orders_unfilled,
+    )
 
 
 def _bar_hour(time_utc: str) -> Optional[int]:
