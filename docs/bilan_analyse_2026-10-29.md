@@ -4,7 +4,7 @@ Sources : base VPS (copie lecture seule, 29/10 18:40 UTC), bougies horaires VPS,
 
 ## Jeu de données
 418 trades vivants (hors backtest) → **259 exploitables** (51 v1, 19 v2 pré-E1, **189 en ère E1/E2**). Écartés, jamais utilisés : 101 anomalie technique connue, 26 fermés non réconciliés (aucun R), 15 encore ouverts, 12 sorties sans prix broker, 5 CHFJPY exclue de H2-H5. Seule l'ère E1 (stop garanti, 3 jambes 50/30/20) sert aux statistiques : **−0,123 R/trade, −23,3 R, IC 95 % [−0,28 ; +0,04]** — non significatif.
-Limite : MAE/MFE et ATR ne sont calculables que là où des bougies existent (66/189 et 79/189 ; l'actualisation hebdomadaire des bougies échoue en 429 depuis le 11/10).
+Limite : MAE/MFE et ATR ne sont calculables que là où des bougies existent (66/189 et 79/189 dans `out/` ; l'actualisation des bougies échouait en 429 depuis le 11/10 — corrigée et rattrapée le 29/10 soir : MAE/MFE 189/189 dans `out_maj/`, voir `corrections_hypotheses_2026-10-29.md` §6.3).
 
 ## Causes des gains (74 « tendance conforme », 8 chance, aucun « timing »)
 Le gain vient surtout d'une sortie par trailing ou d'un TP1 atteint, c.-à-d. d'un mouvement soutenu dans le sens du signal. Coût moyen médian à l'entrée très bas (0,025 R). Les gains marginaux (<0,3 R, 8 cas) sont de la chance.
