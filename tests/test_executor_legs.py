@@ -605,3 +605,64 @@ def test_reconcile_without_envelopes_keeps_historical_ghost_behaviour(tmp_path):
 
     client.get.assert_not_called()
     assert _rows(db_path, "SELECT statut FROM trades")[0]["statut"] == GHOST_TRADE_STATUS
+
+
+# --- Non-régression 29/10/2026 : « Les fractions doivent sommer à 1.0 » (trade 17028) ---
+
+def test_runner_filled_after_other_legs_expired_resizes_trade_so_fractions_sum_to_one(tmp_path):
+    from src.executor import _weighted_r_multiple_for_trade, cancel_stale_working_orders
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    client = MagicMock()
+    client.get_market_snapshot.return_value = SNAPSHOT_100
+    client.place_limit_order.side_effect = [{"deal_id": "o1"}, {"deal_id": "o2"}, {"deal_id": "o3"}]
+    _open(db_path, client, _insert_signal(db_path))
+    initial = _rows(db_path, "SELECT taille_initiale FROM trades")[0]["taille_initiale"]
+
+    # tp1 et tp2 périment ; le runner, encore jeune, reste en attente
+    from datetime import datetime, timedelta, timezone
+    old = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S")
+    new = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    client.get_working_orders.return_value = [
+        {"workingOrderData": {"dealId": "o1", "createdDateUTC": old}},
+        {"workingOrderData": {"dealId": "o2", "createdDateUTC": old}},
+        {"workingOrderData": {"dealId": "o3", "createdDateUTC": new}},
+    ]
+    assert cancel_stale_working_orders(db_path, client, max_age_seconds=3600) == 2
+    assert _rows(db_path, "SELECT taille_initiale FROM trades")[0]["taille_initiale"] == initial  # runner encore en attente
+
+    # le runner se remplit ensuite
+    client.get_working_orders.return_value = []
+    client.get_open_positions.return_value = [{"position": {"dealId": "p3", "workingOrderId": "o3", "level": 100.0}}]
+    check_pending_fills(db_path, client)
+
+    runner = _rows(db_path, "SELECT taille FROM trade_legs WHERE palier = 'runner'")[0]["taille"]
+    assert _rows(db_path, "SELECT taille_initiale FROM trades")[0]["taille_initiale"] == pytest.approx(runner)
+
+    # les fractions enregistrées à la clôture (taille de palier / taille_initiale) somment désormais à 1
+    trade_id = _rows(db_path, "SELECT id FROM trades")[0]["id"]
+    with connection_scope(db_path) as conn:
+        for palier, fraction, r in (("tp1", 0.0, 1.0), ("tp2", 0.0, 2.0), ("sl", 1.0, 1.15)):
+            conn.execute(
+                "INSERT INTO trade_partials (trade_id, palier, fraction, prix_sortie, r_atteint, motif, executed_at) "
+                "VALUES (?, ?, ?, 99.0, ?, 'x', '2026-10-15T00:00:00Z')", (trade_id, palier, fraction, r),
+            )
+    assert _weighted_r_multiple_for_trade(db_path, trade_id) == pytest.approx(1.15)
+
+
+def test_inconsistent_partial_fractions_still_fail_safe(tmp_path):
+    """État incohérent (somme ≠ 1) : jamais de R silencieusement faux — l'erreur
+    reste levée, le trade reste 'ouvert' (donc bloque toute nouvelle entrée sur
+    l'actif via le garde-fou anti-doublon)."""
+    from src.executor import _weighted_r_multiple_for_trade
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    trade_id = _insert_open_leg_trade(db_path)
+    with connection_scope(db_path) as conn:
+        conn.execute(
+            "INSERT INTO trade_partials (trade_id, palier, fraction, prix_sortie, r_atteint, motif, executed_at) "
+            "VALUES (?, 'sl', 0.2022, 99.0, 1.1, 'x', '2026-10-15T00:00:00Z')", (trade_id,),
+        )
+    with pytest.raises(ValueError, match="sommer"):
+        _weighted_r_multiple_for_trade(db_path, trade_id)
+    assert _rows(db_path, "SELECT statut FROM trades WHERE id = ?", (trade_id,))[0]["statut"] == "ouvert"

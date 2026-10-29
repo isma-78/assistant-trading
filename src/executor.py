@@ -1824,6 +1824,7 @@ def _check_pending_leg_fills(
         if source_filter is not None:
             pending_legs = [row for row in pending_legs if source_filter(row["source"])]
         touched = set()
+        filled_trade_ids = set()
         for leg in pending_legs:
             if leg["order_deal_id"] in working_order_ids:
                 continue
@@ -1841,6 +1842,20 @@ def _check_pending_leg_fills(
             )
             if leg["trade_statut"] == "en_attente":
                 touched.add(leg["trade_id"])
+            filled_trade_ids.add(leg["trade_id"])
+
+        # Cause racine de l'erreur « Les fractions doivent sommer à 1.0 »
+        # (trade 17028, 29/10/2026) : si des paliers sont périmés AVANT que le
+        # dernier palier en attente soit rempli, `_settle_unfilled_legs`
+        # (appelée à la péremption) s'arrête sur « un palier encore en
+        # attente » et n'est jamais rappelée au remplissage — `taille_initiale`
+        # reste la taille prévue, les fractions des paliers réellement
+        # ouverts ne somment plus à 1. Rappelée ICI, après chaque
+        # remplissage : sans effet tant qu'un palier est en attente, ramène
+        # sinon le trade à la taille réellement ouverte (risque jamais
+        # augmenté).
+        for trade_id in filled_trade_ids:
+            _settle_unfilled_legs(conn, trade_id)
 
         for trade_id in touched:
             trade_row = conn.execute("SELECT * FROM trades WHERE id = ?", (trade_id,)).fetchone()
